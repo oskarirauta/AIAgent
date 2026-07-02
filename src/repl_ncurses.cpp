@@ -114,28 +114,6 @@ void NcursesRepl::add_message(const std::string& role, const std::string& text) 
     logger::info["ncurses"] << "add_message this=" << this << " role=" << role << " text=[" << text << "] history_size=" << _history.size() << std::endl;
 }
 
-static std::vector<std::string> wrap(const std::string& text, size_t width) {
-    std::vector<std::string> lines;
-    std::string current;
-    for ( char c : text ) {
-        if ( c == '\n' ) {
-            lines.push_back(current);
-            current.clear();
-        } else {
-            current += c;
-            if ( current.size() >= width ) {
-                lines.push_back(current);
-                current.clear();
-            }
-        }
-    }
-    if ( !current.empty())
-        lines.push_back(current);
-    if ( lines.empty())
-        lines.push_back("");
-    return lines;
-}
-
 static std::string box_hline(int cols) {
     // Unicode box-drawing light horizontal: U+2500 (e2 94 80)
     std::string s;
@@ -174,6 +152,43 @@ static int utf8_display_width(const std::string& s, size_t byte_count) {
         i += char_len;
     }
     return width;
+}
+
+// Wrap text into lines that are at most max_width *display columns* wide,
+// respecting UTF-8 multi-byte characters and wide glyphs.
+static std::vector<std::string> wrap(const std::string& text, int max_width) {
+    std::vector<std::string> lines;
+    std::string current;
+    int current_width = 0;
+    size_t i = 0;
+    while ( i < text.size()) {
+        if ( text[i] == '\n' ) {
+            lines.push_back(current);
+            current.clear();
+            current_width = 0;
+            ++i;
+            continue;
+        }
+        int char_len = std::mblen(text.c_str() + i, text.size() - i);
+        if ( char_len <= 0 ) {
+            ++i;
+            continue;
+        }
+        int char_width = utf8_display_width(text.substr(i, char_len), char_len);
+        if ( current_width + char_width > max_width && !current.empty()) {
+            lines.push_back(current);
+            current.clear();
+            current_width = 0;
+        }
+        current += text.substr(i, char_len);
+        current_width += char_width;
+        i += char_len;
+    }
+    if ( !current.empty())
+        lines.push_back(current);
+    if ( lines.empty())
+        lines.push_back("");
+    return lines;
 }
 
 void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, Language lang) {
