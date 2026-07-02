@@ -2,6 +2,7 @@
 
 #include <curl/curl.h>
 #include <cstring>
+#include <functional>
 #include <stdexcept>
 #include "throws.hpp"
 #include "logger.hpp"

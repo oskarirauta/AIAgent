@@ -3,7 +3,11 @@ all: world
 CXX?=g++
 CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include
 LDFLAGS?=-L/usr/lib
-LIBS?=-lcurl -lncurses
+
+# Prefer pkg-config for curl/ncurses when available, fallback to plain flags.
+CURL_LIBS := $(shell pkg-config --libs libcurl 2>/dev/null || echo -lcurl)
+NCURSES_LIBS := $(shell pkg-config --libs ncursesw 2>/dev/null || pkg-config --libs ncurses 2>/dev/null || echo -lncurses)
+LIBS?=$(CURL_LIBS) $(NCURSES_LIBS)
 
 OBJS:= \
 	objs/main.o \

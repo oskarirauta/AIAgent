@@ -9,7 +9,7 @@ public:
     Anthropic(const Config& cfg) : Provider(cfg) {}
 
     std::string name() const override { return "anthropic"; }
-    std::string endpoint() const override { return _config.api_url; }
+    std::string endpoint() const override { return build_endpoint("/v1/messages"); }
     std::string auth_header() const override { return "x-api-key"; }
     std::string auth_value() const override { return _config.api_key; }
     bool supports_streaming() const override { return true; }

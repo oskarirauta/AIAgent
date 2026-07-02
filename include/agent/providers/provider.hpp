@@ -40,6 +40,15 @@ public:
 protected:
     Provider(const Config& cfg) : _config(cfg) {}
     Config _config;
+
+    std::string build_endpoint(const std::string& path) const {
+        std::string url = _config.api_url;
+        while (!url.empty() && url.back() == '/')
+            url.pop_back();
+        if (url.size() >= path.size() && url.compare(url.size() - path.size(), path.size(), path) == 0)
+            return url;
+        return url + path;
+    }
 };
 
 std::unique_ptr<Provider> create(const Config& cfg);

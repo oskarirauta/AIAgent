@@ -9,7 +9,7 @@ public:
     Ollama(const Config& cfg) : Provider(cfg) {}
 
     std::string name() const override { return "ollama"; }
-    std::string endpoint() const override { return _config.api_url; }
+    std::string endpoint() const override { return build_endpoint("/api/chat"); }
     bool supports_streaming() const override { return true; }
     std::string parse_stream(const std::string& chunk, std::string& buffer, bool& done) override;
 

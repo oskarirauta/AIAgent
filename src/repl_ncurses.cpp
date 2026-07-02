@@ -68,7 +68,7 @@ void NcursesRepl::draw() {
 
     attron(A_BOLD);
     if ( has_colors()) attron(COLOR_PAIR(1));
-    mvprintw(0, 0, "AI Agent — type 'exit' or press ESC to quit");
+    mvprintw(0, 0, "AI Agent - type 'exit' or press ESC to quit");
     if ( has_colors()) attroff(COLOR_PAIR(1));
     attroff(A_BOLD);
     mvprintw(1, 0, std::string(_cols, '-').c_str());

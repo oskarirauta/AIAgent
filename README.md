@@ -56,7 +56,7 @@ Create `~/.config/ai-agent/config`:
 ```text
 provider: openai
 model: gpt-4o-mini
-api_url: https://api.openai.com/v1/chat/completions
+api_url: https://api.openai.com/v1
 api_key: sk-your-key-here
 log_level: info
 system_prompt: "You are a helpful Linux CLI assistant."
@@ -84,13 +84,13 @@ All values can be overridden with command-line options.
 ./agent "explain this code"
 
 # Use Ollama
-./agent --provider ollama --model llama3.1 --api-url http://localhost:11434/api/chat
+./agent --provider ollama --model llama3.1 --api-url http://localhost:11434
 
 # Use Anthropic
 ./agent --provider anthropic --api-key $ANTHROPIC_API_KEY --model claude-3-5-sonnet-20240620
 
 # Use Moonshot / Kimi
-./agent --provider moonshot --api-key $MOONSHOT_API_KEY --model kimi-k2
+./agent --provider moonshot --api-url https://api.moonshot.ai/v1 --api-key $MOONSHOT_API_KEY --model kimi-k2
 
 # Override config values
 ./agent --provider openai --api-key $OPENAI_API_KEY --model gpt-4o "write a bash script"
