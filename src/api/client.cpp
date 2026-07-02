@@ -26,6 +26,10 @@ Client::~Client() {
 }
 
 std::string Client::post(const std::string& url, const std::string& api_key, const std::string& body) {
+    return post(url, "Authorization", api_key.empty() ? "" : "Bearer " + api_key, body);
+}
+
+std::string Client::post(const std::string& url, const std::string& auth_header, const std::string& auth_value, const std::string& body) {
 
     CURL* c = static_cast<CURL*>(curl);
     std::string response;
@@ -34,8 +38,8 @@ std::string Client::post(const std::string& url, const std::string& api_key, con
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
 
-    if ( !api_key.empty()) {
-        std::string auth = "Authorization: Bearer " + api_key;
+    if ( !auth_header.empty() && !auth_value.empty()) {
+        std::string auth = auth_header + ": " + auth_value;
         headers = curl_slist_append(headers, auth.c_str());
     }
 

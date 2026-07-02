@@ -17,6 +17,8 @@ OBJS:= \
 	objs/provider.o \
 	objs/openai.o \
 	objs/ollama.o \
+	objs/anthropic.o \
+	objs/moonshot.o \
 	objs/tools_registry.o \
 	objs/tools_read_file.o \
 	objs/tools_write_file.o \
@@ -67,6 +69,10 @@ objs/provider.o: src/providers/provider.cpp
 objs/openai.o: src/providers/openai.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/ollama.o: src/providers/ollama.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/anthropic.o: src/providers/anthropic.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/moonshot.o: src/providers/moonshot.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/tools_registry.o: src/tools/registry.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;

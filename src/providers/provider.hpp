@@ -27,6 +27,8 @@ public:
 
     virtual std::string name() const = 0;
     virtual std::string endpoint() const = 0;
+    virtual std::string auth_header() const { return "Authorization"; }
+    virtual std::string auth_value() const { return _config.api_key.empty() ? "" : "Bearer " + _config.api_key; }
     virtual JSON build_request(const Conversation& conv, const JSON& tools_schema) = 0;
     virtual Response parse_response(const JSON& response) = 0;
     virtual JSON make_tool_result(const std::string& tool_call_id, const std::string& result) = 0;

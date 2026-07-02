@@ -75,13 +75,14 @@ int main(int argc, char **argv) {
 
     set_log_level(config.log_level);
 
-    if ( config.provider != "openai" && config.provider != "ollama" ) {
-        logger::error << "unsupported provider: " << config.provider << ". use 'openai' or 'ollama'." << std::endl;
+    if ( config.provider != "openai" && config.provider != "ollama" &&
+         config.provider != "anthropic" && config.provider != "moonshot" ) {
+        logger::error << "unsupported provider: " << config.provider << ". use openai, ollama, anthropic or moonshot." << std::endl;
         return 1;
     }
 
-    if ( config.api_key.empty() && config.provider == "openai" ) {
-        logger::warning << "no api-key configured for openai provider" << std::endl;
+    if ( config.api_key.empty() && config.provider != "ollama" ) {
+        logger::warning << "no api-key configured for " << config.provider << " provider" << std::endl;
     }
 
     std::string prompt;

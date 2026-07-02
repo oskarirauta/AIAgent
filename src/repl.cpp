@@ -35,7 +35,7 @@ std::string Repl::process_turn(const std::string& prompt) {
         JSON request = _provider->build_request(_conversation, tools);
         std::string body = request.dump_minified();
 
-        std::string response_str = _client.post(_provider->endpoint(), _config.api_key, body);
+        std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), body);
         JSON response = JSON::parse(response_str);
         providers::Response resp = _provider->parse_response(response);
 
