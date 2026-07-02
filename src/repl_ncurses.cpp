@@ -3,6 +3,7 @@
 #include <ncurses.h>
 #include <cctype>
 #include <clocale>
+#include <cwchar>
 #include <algorithm>
 #include <filesystem>
 #include "common.hpp"
@@ -77,6 +78,8 @@ void NcursesRepl::setup() {
 
 void NcursesRepl::teardown() {
     if ( _running ) {
+        clear();
+        refresh();
         endwin();
         _running = false;
     }
@@ -89,6 +92,7 @@ void NcursesRepl::teardown() {
 
 void NcursesRepl::add_message(const std::string& role, const std::string& text) {
     _history.push_back(role + ":" + text);
+    logger::info["ncurses"] << "add_message role=" << role << " text=[" << text << "] history_size=" << _history.size() << std::endl;
 }
 
 static std::vector<std::string> wrap(const std::string& text, size_t width) {
@@ -132,6 +136,27 @@ static size_t utf8_fit(const std::string& s, size_t max_bytes) {
     return pos;
 }
 
+// Return the number of terminal columns occupied by the first byte_count bytes.
+static int utf8_display_width(const std::string& s, size_t byte_count) {
+    int width = 0;
+    size_t i = 0;
+    while ( i < byte_count && i < s.size()) {
+        int char_len = std::mblen(s.c_str() + i, s.size() - i);
+        if ( char_len <= 0 ) {
+            ++i;
+            continue;
+        }
+        wchar_t wc = 0;
+        std::mbstate_t state = {};
+        std::mbrtowc(&wc, s.c_str() + i, char_len, &state);
+        int w = wcwidth(wc);
+        if ( w > 0 )
+            width += w;
+        i += char_len;
+    }
+    return width;
+}
+
 void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, Language lang) {
     int x = 1;
     const int max_x = _cols - 2;
@@ -159,7 +184,7 @@ void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, 
                 mvaddstr(row, x, span.text.substr(0, utf8_fit(span.text, remaining)).c_str());
             if ( span.bold ) attroff(A_BOLD);
             if ( span.color_pair != 0 && has_colors()) attroff(COLOR_PAIR(span.color_pair));
-            x += (int)span.text.size();
+            x += utf8_display_width(span.text, span.text.size());
         }
     }
 
@@ -336,7 +361,7 @@ void NcursesRepl::draw() {
     mvaddstr(prompt_row, 3, visible_input.c_str());
 
     // fake cursor (hardware cursor is hidden)
-    int cursor_x = 3 + std::min(_cursor, visible_len);
+    int cursor_x = 3 + utf8_display_width(_input, std::min(_cursor, visible_len));
     if ( cursor_x < _cols - 2 )
         mvaddstr(prompt_row, cursor_x, "[_]");
     else if ( cursor_x < _cols - 1 )
@@ -385,11 +410,22 @@ void NcursesRepl::draw() {
         available = 1;
 
     auto lines = build_lines(_cols - 2);
+    logger::info["ncurses"] << "draw lines=" << lines.size() << " available=" << available << " conv_end=" << conv_end << " rows=" << _rows << std::endl;
     int y = 2;
     size_t start = lines.size() > (size_t)available ? lines.size() - available : 0;
     for ( size_t i = start; i < lines.size() && y <= conv_end; i++, y++ ) {
         const auto& [text, is_prompt, lang] = lines[i];
         render_line(y, text, is_prompt, lang);
+    }
+
+    // Show the thinking indicator right under the active conversation.
+    if ( _state == State::processing && y <= conv_end ) {
+        auto elapsed = std::chrono::steady_clock::now() - _animation_start;
+        int seconds = static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
+        std::string thinking = " [...] AI is thinking... (" + std::to_string(seconds) + "s) ";
+        if ( (int)thinking.size() > _cols - 2 )
+            thinking = thinking.substr(0, _cols - 5) + "...";
+        mvaddstr(y, 1, thinking.c_str());
     }
 
     refresh();
