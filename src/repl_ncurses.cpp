@@ -3,6 +3,7 @@
 #include <ncurses.h>
 #include <cctype>
 #include <algorithm>
+#include <filesystem>
 #include "common.hpp"
 #include "logger.hpp"
 #include "agent/config.hpp"
@@ -26,8 +27,15 @@ NcursesRepl::~NcursesRepl() {
 
 void NcursesRepl::setup() {
     // Redirect all logger output to a file so it does not corrupt the ncurses screen.
-    std::string log_path = _config.home_dir + "/agent.log";
+    std::string log_dir = _config.home_dir;
+    std::string log_path = log_dir + "/agent.log";
+    if ( !std::filesystem::exists(log_dir))
+        std::filesystem::create_directories(log_dir);
     _log_file = std::make_unique<std::ofstream>(log_path, std::ios::app);
+    if ( !_log_file || !_log_file->is_open()) {
+        log_path = "/tmp/agent.log";
+        _log_file = std::make_unique<std::ofstream>(log_path, std::ios::app);
+    }
     if ( _log_file && _log_file->is_open()) {
         logger::stream[logger::std_out] = _log_file.get();
         logger::stream[logger::std_err] = _log_file.get();
@@ -102,6 +110,16 @@ static std::string box_hline(int cols) {
     return s;
 }
 
+// Return the largest byte count <= max_bytes that does not split a UTF-8 character.
+static size_t utf8_fit(const std::string& s, size_t max_bytes) {
+    if ( max_bytes >= s.size())
+        return s.size();
+    size_t pos = max_bytes;
+    while ( pos > 0 && (static_cast<unsigned char>(s[pos]) & 0xC0) == 0x80 )
+        --pos;
+    return pos;
+}
+
 void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, Language lang) {
     int x = 1;
     const int max_x = _cols - 2;
@@ -115,7 +133,7 @@ void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, 
         if ( has_colors()) attron(COLOR_PAIR(_highlighter.color_for_fence()));
         int remaining = max_x - x + 1;
         if ( remaining > 0 )
-            mvaddnstr(row, x, text.c_str(), remaining);
+            mvaddnstr(row, x, text.c_str(), static_cast<int>(utf8_fit(text, remaining)));
         if ( has_colors()) attroff(COLOR_PAIR(_highlighter.color_for_fence()));
     } else {
         auto spans = _highlighter.highlight(text, lang);
@@ -126,7 +144,7 @@ void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, 
             if ( span.bold ) attron(A_BOLD);
             int remaining = max_x - x + 1;
             if ( remaining > 0 )
-                mvaddnstr(row, x, span.text.c_str(), remaining);
+                mvaddnstr(row, x, span.text.c_str(), static_cast<int>(utf8_fit(span.text, remaining)));
             if ( span.bold ) attroff(A_BOLD);
             if ( span.color_pair != 0 && has_colors()) attroff(COLOR_PAIR(span.color_pair));
             x += (int)span.text.size();
@@ -280,7 +298,7 @@ void NcursesRepl::draw() {
     // prompt with side padding
     mvaddstr(prompt_row, 1, "> ");
     int input_width = std::max(0, _cols - 5);
-    int visible_len = std::min(input_width, (int)_input.size());
+    int visible_len = static_cast<int>(utf8_fit(_input, std::min(input_width, (int)_input.size())));
     mvaddnstr(prompt_row, 3, _input.c_str(), visible_len);
     move(prompt_row, 3 + std::min(_cursor, visible_len));
 
@@ -335,11 +353,16 @@ void NcursesRepl::process_ui_queue() {
         std::lock_guard<std::mutex> lock(_queue_mutex);
         updates.swap(_ui_queue);
     }
+    bool needs_draw = !updates.empty();
     while ( !updates.empty()) {
         updates.front()();
         updates.pop();
     }
-    draw();
+    // Keep the "AI is thinking" animation alive even when no other updates arrive.
+    if ( _state == State::processing )
+        needs_draw = true;
+    if ( needs_draw )
+        draw();
 }
 
 void NcursesRepl::submit(const std::string& line) {
