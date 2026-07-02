@@ -18,6 +18,7 @@ Philosophy: **Support enough — not everything.**
 - Single-prompt mode and interactive REPL (ncurses UI with line editing and history)
 - Graceful shutdown on SIGINT / SIGTERM
 - Long-term memory from `home_dir/memories/`
+- Persistent conversation history in `home_dir/conversations/default.json`
 - Config file for default settings
 - Debug logging levels
 
