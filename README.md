@@ -86,6 +86,15 @@ src/
   tools/                # Built-in tools (read, write, run, list, grep)
 ```
 
+## Development
+
+This project uses Git. Make changes in focused commits and keep the README up to date when adding features or changing behavior.
+
+```bash
+make clean && make
+./agent --help
+```
+
 ## License
 
 MIT
