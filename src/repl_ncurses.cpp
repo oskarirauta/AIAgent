@@ -94,6 +94,9 @@ void NcursesRepl::teardown() {
         clear();
         refresh();
         endwin();
+        // After endwin() the terminal may still show the last alternate-screen
+        // frame. Emit a full clear + home escape sequence to leave a clean shell.
+        std::cout << "\033[2J\033[H\033[3J" << std::flush;
         _running = false;
     }
     if ( _log_file && _log_file->is_open()) {
@@ -105,7 +108,7 @@ void NcursesRepl::teardown() {
 
 void NcursesRepl::add_message(const std::string& role, const std::string& text) {
     _history.push_back(role + ":" + text);
-    logger::info["ncurses"] << "add_message role=" << role << " text=[" << text << "] history_size=" << _history.size() << std::endl;
+    logger::info["ncurses"] << "add_message this=" << this << " role=" << role << " text=[" << text << "] history_size=" << _history.size() << std::endl;
 }
 
 static std::vector<std::string> wrap(const std::string& text, size_t width) {
@@ -261,7 +264,8 @@ std::vector<std::tuple<std::string, bool, Language>> NcursesRepl::build_lines(in
 
 void NcursesRepl::draw() {
     {
-        std::string dbg = "draw _history.size=" + std::to_string(_history.size());
+        std::string dbg = "draw this=" + std::to_string(reinterpret_cast<uintptr_t>(this)) +
+                          " _history.size=" + std::to_string(_history.size());
         for ( size_t i = 0; i < _history.size(); ++i )
             dbg += " [" + std::to_string(i) + "]=" + _history[i];
         logger::info["ncurses"] << dbg << std::endl;
