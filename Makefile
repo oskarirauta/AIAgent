@@ -24,12 +24,14 @@ COMMON_DIR:=common
 LOGGER_DIR:=logger
 THROWS_DIR:=throws
 JSON_DIR:=json
+SIGNAL_DIR:=signal
 
 include $(USAGECPP_DIR)/Makefile.inc
 include $(COMMON_DIR)/Makefile.inc
 include $(LOGGER_DIR)/Makefile.inc
 include $(THROWS_DIR)/Makefile.inc
 include $(JSON_DIR)/Makefile.inc
+include $(SIGNAL_DIR)/Makefile.inc
 
 LDFLAGS += -lcurl
 
@@ -66,7 +68,7 @@ objs/tools_list_directory.o: src/tools/list_directory.cpp
 objs/tools_grep.o: src/tools/grep.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 
-agent: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(OBJS)
+agent: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@;
 
 .PHONY: clean
