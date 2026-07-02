@@ -142,9 +142,14 @@ void Repl::run_plain() {
 
 void Repl::run_tty() {
 
-    if ( _config.confirm_tools ) {
-        // Ncurses mode cannot easily prompt for confirmation inline, so decline destructive tools.
-        _registry.set_confirm_callback([](const std::string&) { return false; });
+    if ( _config.tools_enabled ) {
+        if ( _config.confirm_tools ) {
+            // Ncurses mode cannot easily prompt for confirmation inline, so decline destructive tools.
+            _registry.set_confirm_callback([](const std::string&) { return false; });
+        } else {
+            // Auto mode was explicitly requested via --yes-tools / --auto-tools.
+            _registry.set_confirm_callback([](const std::string&) { return true; });
+        }
     }
 
     NcursesRepl ncurses(

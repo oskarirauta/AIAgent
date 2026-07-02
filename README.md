@@ -67,7 +67,6 @@ log_level: info
 system_prompt: "You are a helpful Linux CLI assistant."
 home_dir: "~/.local/share/ai-agent"
 tools_enabled: true
-confirm_tools: true
 ```
 
 You can create long-term memory files in `~/.local/share/ai-agent/memories/`:

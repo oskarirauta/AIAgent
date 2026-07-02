@@ -88,7 +88,8 @@ void Config::load(const std::string& path) {
         else if ( key == "system_prompt" ) system_prompt = value;
         else if ( key == "home_dir" ) home_dir = value;
         else if ( key == "tools_enabled" ) tools_enabled = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
-        else if ( key == "confirm_tools" ) confirm_tools = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
+        // confirm_tools is intentionally not loaded from config file; it must be
+        // requested explicitly on the command line every session for safety.
     }
 
     if ( home_dir.empty())
