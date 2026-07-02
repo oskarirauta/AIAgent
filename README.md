@@ -14,7 +14,7 @@ Philosophy: **Support enough — not everything.**
   - `run_command`
   - `list_directory`
   - `grep`
-- Single-prompt mode and interactive REPL
+- Single-prompt mode and interactive REPL (ncurses UI with line editing and history)
 - Config file for default settings
 - Debug logging levels
 
@@ -23,6 +23,7 @@ Philosophy: **Support enough — not everything.**
 Requirements:
 - C++17 compiler
 - libcurl development files
+- libncurses development files
 - Make
 
 ```bash
