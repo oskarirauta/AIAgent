@@ -90,12 +90,12 @@ objs/test_suite.o: src/test_suite.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 
 agent: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(OBJS)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(LIBS) $^ -o $@;
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@ $(LIBS);
 
 TEST_OBJS:= $(filter-out objs/main.o,$(OBJS)) objs/test_suite.o
 
 test: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(TEST_OBJS)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(LIBS) $^ -o test_runner;
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o test_runner $(LIBS);
 	./test_runner
 
 .PHONY: clean
