@@ -22,6 +22,10 @@ void Registry::add(std::unique_ptr<Tool> tool) {
     _tools[tool->name()] = std::move(tool);
 }
 
+void Registry::set_confirm_callback(confirm_cb_t cb) {
+    _confirm_cb = std::move(cb);
+}
+
 JSON Registry::schema() const {
     JSON arr = JSON::Array{};
     for ( const auto& [name, tool] : _tools ) {
@@ -42,6 +46,14 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
     auto it = _tools.find(name);
     if ( it == _tools.end())
         throws << "unknown tool: " << name << std::endl;
+
+    if ( it->second->requires_confirmation()) {
+        std::string action = name + " " + args.dump_minified();
+        if ( _confirm_cb && !_confirm_cb(action)) {
+            logger::info["tool"] << "user declined " << name << std::endl;
+            return "user declined to run " + name;
+        }
+    }
 
     logger::info["tool"] << "executing " << name << std::endl;
     return it->second->execute(args);

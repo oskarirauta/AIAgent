@@ -23,6 +23,11 @@ Philosophy: **Support enough — not everything.**
 - Persistent conversation history in `home_dir/conversations/default.json`
 - Config file for default settings
 - Debug logging levels
+- Tool calls can be disabled or require interactive confirmation
+
+## Security note
+
+The agent can execute shell commands (`run_command`) and write files (`write_file`) when tool calling is enabled. By default these destructive tools ask for confirmation in plain REPL mode, and are declined in the ncurses REPL. Use `--no-tools` to disable tools entirely, or `--yes-tools` to auto-approve them (use with care).
 
 ## Build
 
@@ -61,6 +66,8 @@ api_key: sk-your-key-here
 log_level: info
 system_prompt: "You are a helpful Linux CLI assistant."
 home_dir: "~/.local/share/ai-agent"
+tools_enabled: true
+confirm_tools: true
 ```
 
 You can create long-term memory files in `~/.local/share/ai-agent/memories/`:
@@ -100,6 +107,12 @@ All values can be overridden with command-line options.
 
 # Debug logging
 ./agent --log-level debug "hello"
+
+# Safer mode: disable tool calls entirely
+./agent --no-tools "hello"
+
+# Auto-approve destructive tools (run_command, write_file)
+./agent --yes-tools "deploy the app"
 ```
 
 ## Project layout

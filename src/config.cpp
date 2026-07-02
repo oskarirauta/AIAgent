@@ -87,6 +87,8 @@ void Config::load(const std::string& path) {
         else if ( key == "log_level" ) log_level = value;
         else if ( key == "system_prompt" ) system_prompt = value;
         else if ( key == "home_dir" ) home_dir = value;
+        else if ( key == "tools_enabled" ) tools_enabled = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
+        else if ( key == "confirm_tools" ) confirm_tools = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
     }
 
     if ( home_dir.empty())
@@ -109,6 +111,10 @@ void Config::apply_cli(const usage_t& usage) {
         system_prompt = usage["system_prompt"].stringValue();
     if ( usage["home_dir"] )
         home_dir = usage["home_dir"].stringValue();
+    if ( usage["no_tools"] )
+        tools_enabled = false;
+    if ( usage["yes_tools"] )
+        confirm_tools = false;
 }
 
 void Config::ensure_home_dir() {

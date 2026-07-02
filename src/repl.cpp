@@ -15,7 +15,10 @@ namespace agent {
 Repl::Repl(const Config& config)
     : _config(config), _provider(providers::create(config)) {
 
-    _registry.register_defaults();
+    if ( config.tools_enabled )
+        _registry.register_defaults();
+    else
+        logger::info["agent"] << "tools disabled" << std::endl;
 
     std::string system = config.system_prompt;
     std::string memories = load_memories(config.home_dir);
@@ -100,6 +103,17 @@ void Repl::run_plain() {
 
     std::cout << "AI Agent ready. Type 'exit' or 'quit' to leave.\n" << std::endl;
 
+    if ( _config.confirm_tools ) {
+        _registry.set_confirm_callback([](const std::string& action) -> bool {
+            std::cout << "\nAllow tool: " << action << " [y/N]? " << std::flush;
+            std::string answer;
+            if ( !std::getline(std::cin, answer))
+                return false;
+            std::string a = common::to_lower(common::trim_ws(answer));
+            return a == "y" || a == "yes";
+        });
+    }
+
     std::string line;
     while ( agent::running.load(std::memory_order_relaxed)) {
         std::cout << "> " << std::flush;
@@ -127,6 +141,11 @@ void Repl::run_plain() {
 }
 
 void Repl::run_tty() {
+
+    if ( _config.confirm_tools ) {
+        // Ncurses mode cannot easily prompt for confirmation inline, so decline destructive tools.
+        _registry.set_confirm_callback([](const std::string&) { return false; });
+    }
 
     NcursesRepl ncurses([this](const std::string& prompt, std::function<void(const std::string&)> stream_cb) -> std::string {
         try {

@@ -15,6 +15,8 @@ public:
     std::string log_level = "info";
     std::string system_prompt = "You are a helpful Linux CLI assistant.";
     std::string home_dir;
+    bool tools_enabled = true;
+    bool confirm_tools = true;
 
     void load(const std::string& path);
     void apply_cli(const usage_t& usage);

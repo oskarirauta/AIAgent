@@ -122,6 +122,7 @@ static void test_tools() {
     std::cout << "tools" << std::endl;
     agent::tools::Registry r;
     r.register_defaults();
+    r.set_confirm_callback([](const std::string&) { return true; });
 
     JSON write = JSON::Object{
         { "path", "/tmp/ai_agent_tool_test.txt" },
