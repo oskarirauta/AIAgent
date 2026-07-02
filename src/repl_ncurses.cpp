@@ -4,6 +4,7 @@
 #include <cctype>
 #include <algorithm>
 #include "common.hpp"
+#include "logger.hpp"
 #include "agent/signal_handler.hpp"
 
 namespace agent {
@@ -145,10 +146,13 @@ void NcursesRepl::process_ui_queue() {
 }
 
 void NcursesRepl::submit(const std::string& line) {
+    logger::debug["ncurses"] << "submit start" << std::endl;
     _worker_busy = true;
     _current_reply.clear();
-    if ( _worker.joinable())
+    if ( _worker.joinable()) {
+        logger::debug["ncurses"] << "joining previous worker" << std::endl;
         _worker.join();
+    }
 
     _worker = std::thread([this, line]() {
         try {
@@ -177,6 +181,7 @@ void NcursesRepl::submit(const std::string& line) {
             });
         }
         _worker_busy = false;
+        logger::debug["ncurses"] << "submit worker finished" << std::endl;
         _queue_cv.notify_one();
     });
 }
@@ -211,10 +216,11 @@ void NcursesRepl::run() {
             if ( ch == 27 ) { // ESC
                 break;
             } else if ( ch == '\n' || ch == KEY_ENTER ) {
+                std::string line = common::trim_ws(_input);
+                logger::debug["ncurses"] << "enter line=[" << line << "] worker_busy=" << _worker_busy.load() << std::endl;
                 if ( _worker_busy ) {
                     add_message("error", "please wait for the current response to finish");
                 } else {
-                    std::string line = common::trim_ws(_input);
                     if ( !line.empty()) {
                         add_message("prompt", line);
                         _prompt_history.push_back(line);
@@ -228,6 +234,7 @@ void NcursesRepl::run() {
                 _input.clear();
                 cursor = 0;
             } else if ( ch == KEY_BACKSPACE || ch == 127 || ch == '\b' ) {
+                logger::debug["ncurses"] << "backspace ch=" << ch << " cursor=" << cursor << " input_size=" << _input.size() << std::endl;
                 if ( cursor > 0 ) {
                     // erase one UTF-8 character backwards
                     size_t prev = cursor;
