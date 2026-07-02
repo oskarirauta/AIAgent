@@ -5,6 +5,7 @@
 #include <clocale>
 #include <cstdlib>
 #include <cwchar>
+#include <limits>
 #include <algorithm>
 #include <filesystem>
 #include "common.hpp"
@@ -441,26 +442,30 @@ void NcursesRepl::draw() {
     if ( available < 1 )
         available = 1;
 
+    bool show_thinking = ( _state == State::processing );
+    int history_available = show_thinking ? std::max(1, available - 1) : available;
+
     auto lines = build_lines(_cols - 2);
     logger::info["ncurses"] << "draw lines=" << lines.size() << " available=" << available
+                            << " history_available=" << history_available
                             << " conv_end=" << conv_end << " rows=" << _rows << " cols=" << _cols
                             << " scroll=" << _scroll_offset << std::endl;
     int y = 2;
-    size_t max_start = lines.size() > (size_t)available ? lines.size() - available : 0;
+    size_t max_start = lines.size() > (size_t)history_available ? lines.size() - history_available : 0;
     size_t start = _scroll_offset >= 0 && (size_t)_scroll_offset <= max_start ? max_start - _scroll_offset : 0;
     for ( size_t i = start; i < lines.size() && y <= conv_end; i++, y++ ) {
         const auto& [text, is_prompt, lang] = lines[i];
         render_line(y, text, is_prompt, lang);
     }
 
-    // Show the thinking indicator right under the active conversation.
-    if ( _state == State::processing && y <= conv_end ) {
+    // Show the thinking indicator on the last conversation row while processing.
+    if ( show_thinking ) {
         auto elapsed = std::chrono::steady_clock::now() - _animation_start;
         int seconds = static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
         std::string thinking = " [...] AI is thinking... (" + std::to_string(seconds) + "s) ";
         if ( (int)thinking.size() > _cols - 2 )
             thinking = thinking.substr(0, _cols - 5) + "...";
-        mvaddstr(y, 1, thinking.c_str());
+        mvaddstr(conv_end, 1, thinking.c_str());
     }
 
     refresh();
@@ -699,6 +704,24 @@ void NcursesRepl::run() {
                     _confirm_pending = false;
                 }
                 _confirm_cv.notify_all();
+            } else if ( ch == KEY_SR || ch == KEY_SF || ch == KEY_SEND || ch == KEY_SHOME ||
+                        ch == KEY_SLEFT || ch == KEY_SRIGHT ) {
+                // Terminals may label shifted arrows differently; accept the common ones.
+                if ( ch == KEY_SR || ch == KEY_SLEFT ) {
+                    logger::info["ncurses"] << "scroll up key=" << ch << " _scroll_offset=" << _scroll_offset << std::endl;
+                    _scroll_offset++;
+                } else if ( ch == KEY_SF || ch == KEY_SRIGHT ) {
+                    logger::info["ncurses"] << "scroll down key=" << ch << " _scroll_offset=" << _scroll_offset << std::endl;
+                    if ( _scroll_offset > 0 )
+                        _scroll_offset--;
+                } else if ( ch == KEY_SEND ) {
+                    logger::info["ncurses"] << "scroll bottom key=" << ch << std::endl;
+                    _scroll_offset = 0;
+                } else if ( ch == KEY_SHOME ) {
+                    logger::info["ncurses"] << "scroll top key=" << ch << std::endl;
+                    // Jump to the top of the backlog; draw() will clamp it.
+                    _scroll_offset = std::numeric_limits<int>::max();
+                }
             } else if ( ch == 27 ) { // ESC may be a lone abort or the start of an escape sequence
                 int seq = read_escape_sequence(ch);
                 if ( seq == 27 ) {
