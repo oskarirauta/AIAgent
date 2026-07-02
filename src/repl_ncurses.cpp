@@ -176,6 +176,7 @@ static int utf8_display_width(const std::string& s, size_t byte_count) {
 }
 
 void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, Language lang) {
+    (void)lang; // diagnostics: bypass syntax highlighting temporarily
     int x = 1;
     const int max_x = _cols - 2;
     if ( is_prompt ) {
@@ -183,32 +184,13 @@ void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, 
         if ( has_colors()) attron(COLOR_PAIR(3));
     }
 
-    if ( !text.empty() && text.size() >= 3 && text.substr(0, 3) == "```" ) {
-        // fence line (opening or closing)
-        if ( has_colors()) attron(COLOR_PAIR(_highlighter.color_for_fence()));
-        int remaining = max_x - x + 1;
-        if ( remaining > 0 )
-            mvaddstr(row, x, text.substr(0, utf8_fit(text, remaining)).c_str());
-        if ( has_colors()) attroff(COLOR_PAIR(_highlighter.color_for_fence()));
-    } else {
-        auto spans = _highlighter.highlight(text, lang);
-        for ( const auto& span : spans ) {
-            if ( x > max_x )
-                break;
-            if ( span.color_pair != 0 && has_colors()) attron(COLOR_PAIR(span.color_pair));
-            if ( span.bold ) attron(A_BOLD);
-            int remaining = max_x - x + 1;
-            if ( remaining > 0 ) {
-                std::string rendered = span.text.substr(0, utf8_fit(span.text, remaining));
-                logger::debug["ncurses"] << "render_line row=" << row << " x=" << x
-                                         << " remaining=" << remaining << " len=" << rendered.size()
-                                         << " text=[" << rendered << "]" << std::endl;
-                mvaddstr(row, x, rendered.c_str());
-            }
-            if ( span.bold ) attroff(A_BOLD);
-            if ( span.color_pair != 0 && has_colors()) attroff(COLOR_PAIR(span.color_pair));
-            x += utf8_display_width(span.text, span.text.size());
-        }
+    int remaining = max_x - x + 1;
+    if ( remaining > 0 ) {
+        std::string rendered = text.substr(0, utf8_fit(text, remaining));
+        logger::info["ncurses"] << "render_line row=" << row << " x=" << x
+                                << " remaining=" << remaining << " len=" << rendered.size()
+                                << " prompt=" << is_prompt << " text=[" << rendered << "]" << std::endl;
+        mvaddstr(row, x, rendered.c_str());
     }
 
     if ( is_prompt ) {
