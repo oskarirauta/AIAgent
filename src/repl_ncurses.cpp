@@ -187,7 +187,7 @@ void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, 
 
     if ( is_prompt ) {
         attron(A_BOLD);
-        if ( has_colors()) attron(COLOR_PAIR(3));
+        if ( has_colors()) attron(COLOR_PAIR(2));
     } else if ( !text.empty() && text.size() >= 3 && text.substr(0, 3) == "```" ) {
         // Keep code-fence lines visually distinct even without full highlighting.
         if ( has_colors()) attron(COLOR_PAIR(_highlighter.color_for_fence()));
@@ -196,7 +196,7 @@ void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, 
     mvaddstr(row, x, rendered.c_str());
 
     if ( is_prompt ) {
-        if ( has_colors()) attroff(COLOR_PAIR(3));
+        if ( has_colors()) attroff(COLOR_PAIR(2));
         attroff(A_BOLD);
     } else if ( !text.empty() && text.size() >= 3 && text.substr(0, 3) == "```" ) {
         if ( has_colors()) attroff(COLOR_PAIR(_highlighter.color_for_fence()));
