@@ -8,6 +8,7 @@ OBJS:= \
 	objs/config.o \
 	objs/conversation.o \
 	objs/repl.o \
+	objs/repl_ncurses.o \
 	objs/api_client.o \
 	objs/provider.o \
 	objs/openai.o \
@@ -33,7 +34,7 @@ include $(THROWS_DIR)/Makefile.inc
 include $(JSON_DIR)/Makefile.inc
 include $(SIGNAL_DIR)/Makefile.inc
 
-LDFLAGS += -lcurl
+LDFLAGS += -lcurl -lncurses
 
 world: agent
 
@@ -46,6 +47,8 @@ objs/config.o: src/config.cpp
 objs/conversation.o: src/conversation.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/repl.o: src/repl.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/repl_ncurses.o: src/repl_ncurses.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/api_client.o: src/api/client.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;

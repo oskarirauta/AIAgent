@@ -16,9 +16,11 @@ public:
 
     void run();
     void run_once(const std::string& prompt);
+    std::string process_turn(const std::string& prompt);
 
 private:
-    void process_turn();
+    void run_tty();
+    void run_plain();
 
     Config _config;
     api::Client _client;
