@@ -90,7 +90,8 @@ static std::string box_hline(int cols) {
 }
 
 void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, Language lang) {
-    int x = 0;
+    int x = 1;
+    const int max_x = _cols - 2;
     if ( is_prompt ) {
         attron(A_BOLD);
         if ( has_colors()) attron(COLOR_PAIR(3));
@@ -99,16 +100,18 @@ void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, 
     if ( !text.empty() && text.size() >= 3 && text.substr(0, 3) == "```" ) {
         // fence line (opening or closing)
         if ( has_colors()) attron(COLOR_PAIR(_highlighter.color_for_fence()));
-        mvaddnstr(row, x, text.c_str(), _cols);
+        int remaining = max_x - x + 1;
+        if ( remaining > 0 )
+            mvaddnstr(row, x, text.c_str(), remaining);
         if ( has_colors()) attroff(COLOR_PAIR(_highlighter.color_for_fence()));
     } else {
         auto spans = _highlighter.highlight(text, lang);
         for ( const auto& span : spans ) {
-            if ( x >= _cols )
+            if ( x > max_x )
                 break;
             if ( span.color_pair != 0 && has_colors()) attron(COLOR_PAIR(span.color_pair));
             if ( span.bold ) attron(A_BOLD);
-            int remaining = _cols - x;
+            int remaining = max_x - x + 1;
             if ( remaining > 0 )
                 mvaddnstr(row, x, span.text.c_str(), remaining);
             if ( span.bold ) attroff(A_BOLD);
@@ -181,10 +184,10 @@ void NcursesRepl::draw() {
 
     attron(A_BOLD);
     if ( has_colors()) attron(COLOR_PAIR(1));
-    mvprintw(0, 0, "AI Agent - ESC aborts AI, Ctrl-C quits");
+    mvprintw(0, 1, "AI Agent - ESC aborts AI, Ctrl-C quits");
     if ( has_colors()) attroff(COLOR_PAIR(1));
     attroff(A_BOLD);
-    mvaddstr(1, 0, box_hline(_cols).c_str());
+    mvaddstr(1, 1, box_hline(_cols - 2).c_str());
 
     // bottom layout (from bottom up):
     // _rows-1 : status bottom (left messages, right context usage)
@@ -207,9 +210,9 @@ void NcursesRepl::draw() {
     std::string settings = " " + _config.provider + " | " + _config.model +
                            " | tools:" + (_config.tools_enabled ? "on" : "off") +
                            " | confirm:" + (_config.confirm_tools ? "on" : "off") + " ";
-    if ( (int)settings.size() > _cols )
-        settings = settings.substr(0, _cols - 3) + "...";
-    mvaddstr(status_top_row, 0, settings.c_str());
+    if ( (int)settings.size() > _cols - 2 )
+        settings = settings.substr(0, _cols - 5) + "...";
+    mvaddstr(status_top_row, 1, settings.c_str());
 
     // status bottom: left messages + right context
     int sig_count = agent::sigint_count.load(std::memory_order_relaxed);
@@ -229,27 +232,29 @@ void NcursesRepl::draw() {
     std::string right_ctx = " ctx: " + std::to_string(_conversation.messages().size()) +
                             " msgs / " + std::to_string(total_chars) + " chars ";
 
-    if ( (int)left_msg.size() > _cols )
-        left_msg = left_msg.substr(0, _cols);
-    mvaddstr(status_bottom_row, 0, left_msg.c_str());
+    if ( (int)left_msg.size() > _cols - 2 )
+        left_msg = left_msg.substr(0, _cols - 2);
+    mvaddstr(status_bottom_row, 1, left_msg.c_str());
 
-    int ctx_x = _cols - (int)right_ctx.size();
-    if ( ctx_x < (int)left_msg.size() + 2 )
-        ctx_x = (int)left_msg.size() + 2;
-    if ( ctx_x + (int)right_ctx.size() > _cols )
-        right_ctx = right_ctx.substr(0, _cols - ctx_x);
-    if ( ctx_x < _cols )
+    int ctx_x = _cols - 1 - (int)right_ctx.size();
+    if ( ctx_x < (int)left_msg.size() + 3 )
+        ctx_x = (int)left_msg.size() + 3;
+    if ( ctx_x + (int)right_ctx.size() > _cols - 1 )
+        right_ctx = right_ctx.substr(0, _cols - 1 - ctx_x);
+    if ( ctx_x + (int)right_ctx.size() <= _cols - 1 )
         mvaddstr(status_bottom_row, ctx_x, right_ctx.c_str());
 
-    mvaddstr(status_bottom_row - 1, 0, box_hline(_cols).c_str());
+    mvaddstr(status_bottom_row - 1, 1, box_hline(_cols - 2).c_str());
 
     // prompt with side padding
     mvaddstr(prompt_row, 1, "> ");
-    mvaddstr(prompt_row, 3, _input.c_str());
-    move(prompt_row, 3 + _cursor);
+    int input_width = std::max(0, _cols - 5);
+    int visible_len = std::min(input_width, (int)_input.size());
+    mvaddnstr(prompt_row, 3, _input.c_str(), visible_len);
+    move(prompt_row, 3 + std::min(_cursor, visible_len));
 
     // separator above prompt
-    mvaddstr(prompt_sep_top, 0, box_hline(_cols).c_str());
+    mvaddstr(prompt_sep_top, 1, box_hline(_cols - 2).c_str());
 
     // pending queue (if any)
     bool has_pending = false;
@@ -271,7 +276,7 @@ void NcursesRepl::draw() {
     if ( has_pending ) {
         const int queue_text_row = _rows - 6;
         const int queue_sep_top = _rows - 7;
-        mvaddstr(queue_sep_top, 0, box_hline(_cols).c_str());
+        mvaddstr(queue_sep_top, 1, box_hline(_cols - 2).c_str());
         if ( (int)pending_text.size() > _cols - 2 )
             pending_text = pending_text.substr(0, _cols - 5) + "...";
         mvaddstr(queue_text_row, 1, pending_text.c_str());
