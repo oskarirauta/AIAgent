@@ -89,6 +89,7 @@ void NcursesRepl::setup() {
 }
 
 void NcursesRepl::teardown() {
+    logger::info["ncurses"] << "teardown called" << std::endl;
     g_active_repl = nullptr;
     if ( _running ) {
         clear();
@@ -596,6 +597,11 @@ void NcursesRepl::run() {
     while ( _running && agent::running.load(std::memory_order_relaxed)) {
         int ch = getch();
         bool local_change = (ch != ERR);
+
+        if ( ch == ERR && agent::sigint_count.load(std::memory_order_relaxed) >= 2 ) {
+            _running = false;
+            break;
+        }
 
         if ( ch != ERR ) {
             logger::debug["ncurses"] << "key ch=" << ch << std::endl;
