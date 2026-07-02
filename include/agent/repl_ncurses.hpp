@@ -3,7 +3,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <fstream>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -59,6 +61,7 @@ private:
     std::chrono::steady_clock::time_point _animation_start = std::chrono::steady_clock::now();
     std::atomic<bool> _abort_current{false};
     SyntaxHighlighter _highlighter{4}; // color pairs 4-9 reserved for syntax highlighting
+    std::unique_ptr<std::ofstream> _log_file;
     const Config& _config;
     const Conversation& _conversation;
 

@@ -25,6 +25,14 @@ NcursesRepl::~NcursesRepl() {
 }
 
 void NcursesRepl::setup() {
+    // Redirect all logger output to a file so it does not corrupt the ncurses screen.
+    std::string log_path = _config.home_dir + "/agent.log";
+    _log_file = std::make_unique<std::ofstream>(log_path, std::ios::app);
+    if ( _log_file && _log_file->is_open()) {
+        logger::stream[logger::std_out] = _log_file.get();
+        logger::stream[logger::std_err] = _log_file.get();
+    }
+
     initscr();
     raw();
     noecho();
@@ -52,6 +60,11 @@ void NcursesRepl::teardown() {
         endwin();
         _running = false;
     }
+    if ( _log_file && _log_file->is_open()) {
+        _log_file->close();
+    }
+    logger::stream[logger::std_out] = &std::cout;
+    logger::stream[logger::std_err] = &std::cerr;
 }
 
 void NcursesRepl::add_message(const std::string& role, const std::string& text) {
@@ -439,7 +452,7 @@ void NcursesRepl::run() {
 
         if ( ch != ERR ) {
             logger::debug["ncurses"] << "key ch=" << ch << std::endl;
-            if ( ch == 27 ) { // ESC
+            if ( ch == 27 ) { // ESC aborts an active AI request; does not quit
                 if ( _worker_busy.load(std::memory_order_relaxed)) {
                     _abort_current.store(true, std::memory_order_relaxed);
                     {
@@ -448,16 +461,16 @@ void NcursesRepl::run() {
                             _pending_prompts.pop();
                     }
                     add_message("error", "AI request aborted");
-                } else {
-                    break;
                 }
+            } else if ( ch == 3 ) { // Ctrl-C as raw key
+                agent::running.store(false, std::memory_order_relaxed);
             } else if ( ch == '\n' || ch == KEY_ENTER ) {
                 std::string line = common::trim_ws(_input);
                 logger::debug["ncurses"] << "enter line=[" << line << "] worker_busy=" << _worker_busy.load() << std::endl;
                 if ( !line.empty()) {
                     add_message("prompt", line);
                     _prompt_history.push_back(line);
-                    if ( line == "exit" || line == "quit" ) {
+                    if ( line == "/exit" || line == "/quit" ) {
                         break;
                     }
                     submit(line);
