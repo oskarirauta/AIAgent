@@ -13,7 +13,14 @@
 namespace agent {
 
 NcursesRepl::NcursesRepl(callback_t cb, const Config& config, const Conversation& conversation)
-    : _callback(std::move(cb)), _config(config), _conversation(conversation) {}
+    : _callback(std::move(cb)), _config(config), _conversation(conversation) {
+    _suggestions = {
+        "# Kerro lisää",
+        "# Selitä yksinkertaisemmin",
+        "# Mitä seuraavaksi?",
+        "# Kiitos, tämä riittää"
+    };
+}
 
 NcursesRepl::~NcursesRepl() {
     {
@@ -213,94 +220,108 @@ void NcursesRepl::draw() {
     clear();
     getmaxyx(stdscr, _rows, _cols);
 
+    // title row
+    std::string left_title = "AI Agent v0.1.0";
+    std::string right_title = "Press ctrl-c to exit - ESC to interrupt";
     attron(A_BOLD);
     if ( has_colors()) attron(COLOR_PAIR(1));
-    mvprintw(0, 1, "AI Agent - ESC aborts AI, Ctrl-C quits");
+    mvaddstr(0, 1, left_title.c_str());
+    if ( (int)right_title.size() < _cols - 2 )
+        mvaddstr(0, _cols - 1 - (int)right_title.size(), right_title.c_str());
     if ( has_colors()) attroff(COLOR_PAIR(1));
     attroff(A_BOLD);
     mvaddstr(1, 1, box_hline(_cols - 2).c_str());
 
     // bottom layout (from bottom up):
-    // _rows-1 : status bottom (left messages, right context usage)
-    // _rows-2 : status top (settings)
+    // _rows-1 : status bottom (auto mode, cwd, ctx)
+    // _rows-2 : status top (status message / settings)
     // _rows-3 : separator
     // _rows-4 : prompt (with side padding)
     // _rows-5 : separator
-    // if pending queue:
-    //   _rows-6 : queued messages
-    //   _rows-7 : separator
+    // _rows-6 .. _rows-9 : quick-reply suggestions (if terminal is tall enough)
+    // _rows-10 : separator above suggestions
     // conversation ends above that
 
     const int status_bottom_row = _rows - 1;
     const int status_top_row = _rows - 2;
     const int prompt_row = _rows - 4;
     const int prompt_sep_top = _rows - 5;
-    int conv_end = prompt_sep_top - 1;
+    const int max_suggestion_rows = 4;
+    const int min_total_rows = 11; // title+sep + conv + sugg-sep + 1 sugg + prompt-sep + prompt + status-sep + 2 status
+    int suggestion_rows = (_rows >= min_total_rows + max_suggestion_rows - 1) ? max_suggestion_rows
+                        : std::max(0, _rows - min_total_rows + 1);
+    const int suggestion_bottom_row = prompt_sep_top - 1;
+    const int suggestion_top_row = suggestion_bottom_row - suggestion_rows + 1;
+    const int suggestion_sep_top = suggestion_top_row - 1;
+    int conv_end = suggestion_sep_top - 1;
+    if ( suggestion_rows <= 0 )
+        conv_end = prompt_sep_top - 1;
 
-    // status top: settings
-    std::string settings = " " + _config.provider + " | " + _config.model +
-                           " | tools:" + (_config.tools_enabled ? "on" : "off") +
-                           " | confirm:" + (_config.confirm_tools ? "on" : "off") + " ";
-    if ( (int)settings.size() > _cols - 2 )
-        settings = settings.substr(0, _cols - 5) + "...";
-    mvaddstr(status_top_row, 1, settings.c_str());
-
-    // status bottom: left messages + right context
+    // status top: status message (or settings when idle)
     int sig_count = agent::sigint_count.load(std::memory_order_relaxed);
-    std::string left_msg;
-    bool italic = false;
+    std::string top_msg;
+    bool top_italic = false;
     bool confirm_active = false;
     {
         std::lock_guard<std::mutex> lock(_confirm_mutex);
         confirm_active = _confirm_pending;
     }
     if ( confirm_active ) {
-        left_msg = " Allow: " + _confirm_action + " [y/N]? ";
+        top_msg = " Allow: " + _confirm_action + " [y/N]? ";
     } else if ( sig_count >= 1 ) {
-        left_msg = " Press Ctrl-C again to exit ";
+        top_msg = " Press Ctrl-C again to exit ";
     } else if ( _abort_current.load(std::memory_order_relaxed)) {
-        left_msg = " Aborting... ";
+        top_msg = " Aborting... ";
     } else if ( _state == State::processing ) {
-        italic = true;
+        top_italic = true;
         auto elapsed = std::chrono::steady_clock::now() - _animation_start;
-        int frame = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() / 120);
-        const int slot_count = 4;
-        int pos = frame % (slot_count * 2);
-        if ( pos >= slot_count )
-            pos = slot_count * 2 - pos - 1;
-        std::string anim = "[";
-        anim.append(pos, ' ');
-        anim += '.';
-        anim.append(slot_count - pos, ' ');
-        anim += "]";
-        left_msg = " AI is thinking " + anim + " ";
+        int seconds = static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
+        top_msg = " AI is thinking... (" + std::to_string(seconds) + "s) ";
     } else {
-        left_msg = " Ready ";
+        top_msg = " " + _config.provider + " | " + _config.model +
+                  " | tools:" + (_config.tools_enabled ? "on" : "off") + " ";
     }
+    if ( (int)top_msg.size() > _cols - 2 )
+        top_msg = top_msg.substr(0, _cols - 5) + "...";
+    if ( top_italic )
+        attron(A_ITALIC);
+    mvaddstr(status_top_row, 1, top_msg.c_str());
+    if ( top_italic )
+        attroff(A_ITALIC);
+
+    // status bottom: auto mode, working directory, context
+    std::string auto_mode = _config.tools_enabled && !_config.confirm_tools ? "auto mode on" : "auto mode off";
+    std::string cwd;
+    try { cwd = std::filesystem::current_path().string(); } catch ( ... ) { cwd = "?"; }
+    std::string left_status = " " + auto_mode + " ";
+    std::string center_status = " working directory: " + cwd + " ";
 
     size_t total_chars = 0;
     for ( const auto& m : _conversation.messages())
         total_chars += m.content.size();
-    std::string right_ctx = " ctx: " + std::to_string(_conversation.messages().size()) +
-                            " msgs / " + std::to_string(total_chars) + " chars ";
+    std::string right_status = " ctx: " + std::to_string(_conversation.messages().size()) +
+                               " msgs / " + std::to_string(total_chars) + " chars ";
 
-    if ( (int)left_msg.size() > _cols - 2 )
-        left_msg = left_msg.substr(0, _cols - 2);
-    if ( italic )
-        attron(A_ITALIC);
-    mvaddstr(status_bottom_row, 1, left_msg.c_str());
-    if ( italic )
-        attroff(A_ITALIC);
+    mvaddstr(status_bottom_row, 1, left_status.c_str());
 
-    int ctx_x = _cols - 1 - (int)right_ctx.size();
-    if ( ctx_x < (int)left_msg.size() + 3 )
-        ctx_x = (int)left_msg.size() + 3;
-    if ( ctx_x + (int)right_ctx.size() > _cols - 1 )
-        right_ctx = right_ctx.substr(0, _cols - 1 - ctx_x);
-    if ( ctx_x + (int)right_ctx.size() <= _cols - 1 )
-        mvaddstr(status_bottom_row, ctx_x, right_ctx.c_str());
+    int center_x = (_cols - (int)center_status.size()) / 2;
+    if ( center_x < (int)left_status.size() + 2 )
+        center_x = (int)left_status.size() + 2;
+    if ( center_x + (int)center_status.size() > _cols - 1 - (int)right_status.size() )
+        center_status = center_status.substr(0, std::max(0, _cols - 1 - (int)right_status.size() - center_x));
+    if ( center_x + (int)center_status.size() <= _cols - 1 )
+        mvaddstr(status_bottom_row, center_x, center_status.c_str());
 
-    mvaddstr(status_bottom_row - 1, 1, box_hline(_cols - 2).c_str());
+    int ctx_x = _cols - 1 - (int)right_status.size();
+    if ( ctx_x < (int)left_status.size() + 2 )
+        ctx_x = (int)left_status.size() + 2;
+    if ( ctx_x + (int)right_status.size() > _cols - 1 )
+        right_status = right_status.substr(0, _cols - 1 - ctx_x);
+    if ( ctx_x + (int)right_status.size() <= _cols - 1 )
+        mvaddstr(status_bottom_row, ctx_x, right_status.c_str());
+
+    // separator above status top
+    mvaddstr(status_top_row - 1, 1, box_hline(_cols - 2).c_str());
 
     // prompt with side padding
     mvaddstr(prompt_row, 1, "> ");
@@ -312,13 +333,25 @@ void NcursesRepl::draw() {
     // separator above prompt
     mvaddstr(prompt_sep_top, 1, box_hline(_cols - 2).c_str());
 
-    // pending queue (if any)
-    bool has_pending = false;
+    // quick-reply suggestions
+    if ( suggestion_rows > 0 ) {
+        mvaddstr(suggestion_sep_top, 1, box_hline(_cols - 2).c_str());
+        for ( int i = 0; i < suggestion_rows; ++i ) {
+            int row = suggestion_top_row + i;
+            if ( i < (int)_suggestions.size()) {
+                std::string s = " " + _suggestions[i];
+                if ( (int)s.size() > _cols - 2 )
+                    s = s.substr(0, _cols - 5) + "...";
+                mvaddstr(row, 1, s.c_str());
+            }
+        }
+    }
+
+    // pending queue (if any) is shown inside the conversation area briefly
     std::string pending_text;
     {
         std::lock_guard<std::mutex> lock(_queue_mutex);
-        has_pending = !_pending_prompts.empty();
-        if ( has_pending ) {
+        if ( !_pending_prompts.empty()) {
             std::vector<std::string> items;
             auto tmp = _pending_prompts;
             while ( !tmp.empty()) {
@@ -327,16 +360,6 @@ void NcursesRepl::draw() {
             }
             pending_text = "Queued: " + common::join_vector(items, " | ");
         }
-    }
-
-    if ( has_pending ) {
-        const int queue_text_row = _rows - 6;
-        const int queue_sep_top = _rows - 7;
-        mvaddstr(queue_sep_top, 1, box_hline(_cols - 2).c_str());
-        if ( (int)pending_text.size() > _cols - 2 )
-            pending_text = pending_text.substr(0, _cols - 5) + "...";
-        mvaddstr(queue_text_row, 1, pending_text.c_str());
-        conv_end = queue_sep_top - 1;
     }
 
     int available = conv_end - 2 + 1;
@@ -349,6 +372,13 @@ void NcursesRepl::draw() {
     for ( size_t i = start; i < lines.size() && y <= conv_end; i++, y++ ) {
         const auto& [text, is_prompt, lang] = lines[i];
         render_line(y, text, is_prompt, lang);
+    }
+
+    // if there is a pending queue and space, show it as the last conversation line
+    if ( !pending_text.empty() && y <= conv_end ) {
+        if ( (int)pending_text.size() > _cols - 2 )
+            pending_text = pending_text.substr(0, _cols - 5) + "...";
+        mvaddstr(y, 1, pending_text.c_str());
     }
 
     refresh();

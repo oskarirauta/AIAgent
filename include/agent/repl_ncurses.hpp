@@ -52,6 +52,7 @@ private:
     std::string _current_reply;
     std::vector<std::string> _history;        // all displayed lines as "role:text"
     std::vector<std::string> _prompt_history; // only user inputs
+    std::vector<std::string> _suggestions;    // quick-reply suggestions shown above prompt
     size_t _history_index = 0;
     bool _running = false;
     int _rows = 0;
