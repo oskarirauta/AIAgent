@@ -16,6 +16,7 @@ Philosophy: **Support enough — not everything.**
   - `grep`
 - Single-prompt mode and interactive REPL (ncurses UI with line editing and history)
 - Graceful shutdown on SIGINT / SIGTERM
+- Long-term memory from `home_dir/memories/`
 - Config file for default settings
 - Debug logging levels
 
@@ -50,6 +51,15 @@ api_key: sk-your-key-here
 log_level: info
 system_prompt: "You are a helpful Linux CLI assistant."
 home_dir: "~/.local/share/ai-agent"
+```
+
+You can create long-term memory files in `~/.local/share/ai-agent/memories/`:
+
+```text
+~/.local/share/ai-agent/memories/preferences.md
+User prefers concise answers.
+User's name is Kimi.
+```
 ```
 
 All values can be overridden with command-line options.
