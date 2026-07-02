@@ -52,6 +52,7 @@ private:
     bool _running = false;
     int _rows = 0;
     int _cols = 0;
+    int _cursor = 0;
 
     State _state = State::idle;
     std::atomic<bool> _abort_current{false};

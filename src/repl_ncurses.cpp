@@ -246,7 +246,7 @@ void NcursesRepl::draw() {
     // prompt with side padding
     mvaddstr(prompt_row, 1, "> ");
     mvaddstr(prompt_row, 3, _input.c_str());
-    move(prompt_row, 3 + (int)_input.size());
+    move(prompt_row, 3 + _cursor);
 
     // separator above prompt
     mvaddstr(prompt_sep_top, 0, box_hline(_cols).c_str());
@@ -302,7 +302,8 @@ void NcursesRepl::process_ui_queue() {
     while ( !updates.empty()) {
         updates.front()();
         updates.pop();
-        move(_rows - 1, 2 + (int)_input.size());
+        const int prompt_row = _rows - 4;
+        move(prompt_row, 3 + _cursor);
         refresh();
     }
 }
@@ -410,7 +411,7 @@ void NcursesRepl::run() {
 
     setup();
 
-    int cursor = 0;
+    _cursor = 0;
     draw();
 
     while ( _running && agent::running.load(std::memory_order_relaxed)) {
@@ -443,65 +444,66 @@ void NcursesRepl::run() {
                     _history_index = _prompt_history.size();
                 }
                 _input.clear();
-                cursor = 0;
+                _cursor = 0;
             } else if ( ch == KEY_BACKSPACE || ch == 127 || ch == '\b' ) {
-                logger::debug["ncurses"] << "backspace ch=" << ch << " cursor=" << cursor << " input_size=" << _input.size() << std::endl;
-                if ( cursor > 0 ) {
+                logger::debug["ncurses"] << "backspace ch=" << ch << " _cursor=" << _cursor << " input_size=" << _input.size() << std::endl;
+                if ( _cursor > 0 ) {
                     // erase one UTF-8 character backwards
-                    size_t prev = cursor;
+                    size_t prev = _cursor;
                     while ( prev > 0 && (static_cast<unsigned char>(_input[prev - 1]) & 0xC0) == 0x80 )
                         --prev;
-                    _input.erase(prev, cursor - prev);
-                    cursor = static_cast<int>(prev);
+                    _input.erase(prev, _cursor - prev);
+                    _cursor = static_cast<int>(prev);
                 }
             } else if ( ch == KEY_DC ) {
-                if ( cursor < (int)_input.size()) {
-                    size_t next = cursor + 1;
+                if ( _cursor < (int)_input.size()) {
+                    size_t next = _cursor + 1;
                     while ( next < _input.size() && (static_cast<unsigned char>(_input[next]) & 0xC0) == 0x80 )
                         ++next;
-                    _input.erase(cursor, next - cursor);
+                    _input.erase(_cursor, next - _cursor);
                 }
             } else if ( ch == KEY_LEFT ) {
-                if ( cursor > 0 ) {
-                    do { --cursor; } while ( cursor > 0 && (static_cast<unsigned char>(_input[cursor]) & 0xC0) == 0x80 );
+                if ( _cursor > 0 ) {
+                    do { --_cursor; } while ( _cursor > 0 && (static_cast<unsigned char>(_input[_cursor]) & 0xC0) == 0x80 );
                 }
             } else if ( ch == KEY_RIGHT ) {
-                if ( cursor < (int)_input.size()) {
-                    do { ++cursor; } while ( cursor < (int)_input.size() && (static_cast<unsigned char>(_input[cursor]) & 0xC0) == 0x80 );
+                if ( _cursor < (int)_input.size()) {
+                    do { ++_cursor; } while ( _cursor < (int)_input.size() && (static_cast<unsigned char>(_input[_cursor]) & 0xC0) == 0x80 );
                 }
             } else if ( ch == KEY_HOME ) {
-                cursor = 0;
+                _cursor = 0;
             } else if ( ch == KEY_END ) {
-                cursor = (int)_input.size();
+                _cursor = (int)_input.size();
             } else if ( ch == KEY_UP ) {
                 if ( !_prompt_history.empty() && _history_index > 0 ) {
                     _history_index--;
                     _input = _prompt_history[_history_index];
-                    cursor = (int)_input.size();
+                    _cursor = (int)_input.size();
                 }
             } else if ( ch == KEY_DOWN ) {
                 if ( !_prompt_history.empty() && _history_index + 1 < _prompt_history.size()) {
                     _history_index++;
                     _input = _prompt_history[_history_index];
-                    cursor = (int)_input.size();
+                    _cursor = (int)_input.size();
                 } else if ( _history_index < _prompt_history.size()) {
                     _history_index = _prompt_history.size();
                     _input.clear();
-                    cursor = 0;
+                    _cursor = 0;
                 }
             } else if ( ch == KEY_RESIZE ) {
                 // handled by draw()
             } else if ( ch >= 32 && ch < 127 ) { // printable ASCII
-                _input.insert(cursor, 1, static_cast<char>(ch));
-                cursor++;
+                _input.insert(_cursor, 1, static_cast<char>(ch));
+                _cursor++;
             } else if ( ch >= 128 && ch < 256 ) { // UTF-8 multibyte start
                 std::string utf8 = read_utf8_char(ch);
-                _input.insert(cursor, utf8);
-                cursor += (int)utf8.size();
+                _input.insert(_cursor, utf8);
+                _cursor += (int)utf8.size();
             }
 
             draw();
-            move(_rows - 1, 2 + cursor);
+            const int prompt_row = _rows - 4;
+            move(prompt_row, 3 + _cursor);
             refresh();
         }
 
