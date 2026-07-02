@@ -197,8 +197,13 @@ void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, 
             if ( span.color_pair != 0 && has_colors()) attron(COLOR_PAIR(span.color_pair));
             if ( span.bold ) attron(A_BOLD);
             int remaining = max_x - x + 1;
-            if ( remaining > 0 )
-                mvaddstr(row, x, span.text.substr(0, utf8_fit(span.text, remaining)).c_str());
+            if ( remaining > 0 ) {
+                std::string rendered = span.text.substr(0, utf8_fit(span.text, remaining));
+                logger::debug["ncurses"] << "render_line row=" << row << " x=" << x
+                                         << " remaining=" << remaining << " len=" << rendered.size()
+                                         << " text=[" << rendered << "]" << std::endl;
+                mvaddstr(row, x, rendered.c_str());
+            }
             if ( span.bold ) attroff(A_BOLD);
             if ( span.color_pair != 0 && has_colors()) attroff(COLOR_PAIR(span.color_pair));
             x += utf8_display_width(span.text, span.text.size());
@@ -435,7 +440,8 @@ void NcursesRepl::draw() {
         available = 1;
 
     auto lines = build_lines(_cols - 2);
-    logger::info["ncurses"] << "draw lines=" << lines.size() << " available=" << available << " conv_end=" << conv_end << " rows=" << _rows << std::endl;
+    logger::info["ncurses"] << "draw lines=" << lines.size() << " available=" << available
+                            << " conv_end=" << conv_end << " rows=" << _rows << " cols=" << _cols << std::endl;
     int y = 2;
     size_t start = lines.size() > (size_t)available ? lines.size() - available : 0;
     for ( size_t i = start; i < lines.size() && y <= conv_end; i++, y++ ) {
