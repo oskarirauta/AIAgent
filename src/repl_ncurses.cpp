@@ -145,7 +145,7 @@ void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, 
         if ( has_colors()) attron(COLOR_PAIR(_highlighter.color_for_fence()));
         int remaining = max_x - x + 1;
         if ( remaining > 0 )
-            mvaddnstr(row, x, text.c_str(), static_cast<int>(utf8_fit(text, remaining)));
+            mvaddstr(row, x, text.substr(0, utf8_fit(text, remaining)).c_str());
         if ( has_colors()) attroff(COLOR_PAIR(_highlighter.color_for_fence()));
     } else {
         auto spans = _highlighter.highlight(text, lang);
@@ -156,7 +156,7 @@ void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, 
             if ( span.bold ) attron(A_BOLD);
             int remaining = max_x - x + 1;
             if ( remaining > 0 )
-                mvaddnstr(row, x, span.text.c_str(), static_cast<int>(utf8_fit(span.text, remaining)));
+                mvaddstr(row, x, span.text.substr(0, utf8_fit(span.text, remaining)).c_str());
             if ( span.bold ) attroff(A_BOLD);
             if ( span.color_pair != 0 && has_colors()) attroff(COLOR_PAIR(span.color_pair));
             x += (int)span.text.size();
@@ -332,7 +332,8 @@ void NcursesRepl::draw() {
     mvaddstr(prompt_row, 1, "> ");
     int input_width = std::max(0, _cols - 5);
     int visible_len = static_cast<int>(utf8_fit(_input, std::min(input_width, (int)_input.size())));
-    mvaddnstr(prompt_row, 3, _input.c_str(), visible_len);
+    std::string visible_input = _input.substr(0, visible_len);
+    mvaddstr(prompt_row, 3, visible_input.c_str());
 
     // fake cursor (hardware cursor is hidden)
     int cursor_x = 3 + std::min(_cursor, visible_len);
