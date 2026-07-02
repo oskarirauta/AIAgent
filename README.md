@@ -7,7 +7,7 @@ Philosophy: **Support enough — not everything.**
 ## Features
 
 - Chat with LLMs from the command line
-- Supports OpenAI-compatible APIs and Ollama
+- Supports OpenAI, Ollama, Anthropic and Moonshot (Kimi) APIs
 - Built-in tools the model can call:
   - `read_file`
   - `write_file`
@@ -75,6 +75,12 @@ All values can be overridden with command-line options.
 
 # Use Ollama
 ./agent --provider ollama --model llama3.1 --api-url http://localhost:11434/api/chat
+
+# Use Anthropic
+./agent --provider anthropic --api-key $ANTHROPIC_API_KEY --model claude-3-5-sonnet-20240620
+
+# Use Moonshot / Kimi
+./agent --provider moonshot --api-key $MOONSHOT_API_KEY --model kimi-k2
 
 # Override config values
 ./agent --provider openai --api-key $OPENAI_API_KEY --model gpt-4o "write a bash script"
