@@ -445,6 +445,8 @@ void NcursesRepl::draw() {
     bool show_thinking = ( _state == State::processing );
     int history_available = show_thinking ? std::max(1, available - 1) : available;
 
+    clamp_scroll_offset();
+
     auto lines = build_lines(_cols - 2);
     logger::info["ncurses"] << "draw lines=" << lines.size() << " available=" << available
                             << " history_available=" << history_available
@@ -610,6 +612,33 @@ static constexpr int KEYC_SHIFT_HOME = 2004;
 static constexpr int KEYC_SHIFT_LEFT = 2005;
 static constexpr int KEYC_SHIFT_RIGHT = 2006;
 
+void NcursesRepl::clamp_scroll_offset() {
+    // Replicate the layout math from draw() so we know how many history rows fit.
+    const int prompt_sep_top = _rows - 5;
+    const int max_suggestion_rows = 4;
+    const int min_total_rows = 11;
+    int suggestion_rows = (_rows >= min_total_rows + max_suggestion_rows - 1) ? max_suggestion_rows
+                        : std::max(0, _rows - min_total_rows + 1);
+    const int suggestion_sep_top = prompt_sep_top - 1 - suggestion_rows;
+    int conv_end = suggestion_sep_top - 1;
+    if ( suggestion_rows <= 0 )
+        conv_end = prompt_sep_top - 1;
+
+    bool show_thinking = ( _state == State::processing );
+    int available = conv_end - 2 + 1;
+    if ( available < 1 )
+        available = 1;
+    int history_available = show_thinking ? std::max(1, available - 1) : available;
+
+    auto lines = build_lines(_cols - 2);
+    size_t max_start = lines.size() > (size_t)history_available ? lines.size() - history_available : 0;
+
+    if ( _scroll_offset < 0 )
+        _scroll_offset = 0;
+    else if ( (size_t)_scroll_offset > max_start )
+        _scroll_offset = static_cast<int>(max_start);
+}
+
 int NcursesRepl::read_escape_sequence(int first_byte) {
     // first_byte is expected to be ESC (27). If nothing follows, it was a lone ESC.
     int b = getch();
@@ -719,9 +748,9 @@ void NcursesRepl::run() {
                     _scroll_offset = 0;
                 } else if ( ch == KEY_SHOME ) {
                     logger::info["ncurses"] << "scroll top key=" << ch << std::endl;
-                    // Jump to the top of the backlog; draw() will clamp it.
                     _scroll_offset = std::numeric_limits<int>::max();
                 }
+                clamp_scroll_offset();
             } else if ( ch == 27 ) { // ESC may be a lone abort or the start of an escape sequence
                 int seq = read_escape_sequence(ch);
                 if ( seq == 27 ) {
@@ -739,10 +768,12 @@ void NcursesRepl::run() {
                 } else if ( seq == KEYC_SHIFT_UP || seq == KEY_SR || seq == 526 ) {
                     logger::info["ncurses"] << "scroll up _scroll_offset=" << _scroll_offset << std::endl;
                     _scroll_offset++;
+                    clamp_scroll_offset();
                 } else if ( seq == KEYC_SHIFT_DOWN || seq == KEY_SF || seq == 525 ) {
                     logger::info["ncurses"] << "scroll down _scroll_offset=" << _scroll_offset << std::endl;
                     if ( _scroll_offset > 0 )
                         _scroll_offset--;
+                    clamp_scroll_offset();
                 } else if ( seq == KEYC_SHIFT_END || seq == KEY_SEND || seq == 605 ) {
                     logger::info["ncurses"] << "scroll bottom" << std::endl;
                     _scroll_offset = 0;

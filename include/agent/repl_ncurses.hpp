@@ -47,6 +47,7 @@ private:
     void worker_loop();
     static std::string read_utf8_char(int first_byte);
     static int read_escape_sequence(int first_byte);
+    void clamp_scroll_offset();
 
     callback_t _callback;
     std::string _input;
