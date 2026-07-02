@@ -2,6 +2,7 @@ all: world
 
 CXX?=g++
 CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include -I./src
+LDFLAGS?=-L/usr/lib
 
 OBJS:= \
 	objs/main.o \
