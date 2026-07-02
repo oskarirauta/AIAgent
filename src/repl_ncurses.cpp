@@ -730,12 +730,12 @@ void NcursesRepl::run() {
                 }
                 _confirm_cv.notify_all();
             } else if ( ch == KEY_SR || ch == KEY_SF || ch == KEY_SEND || ch == KEY_SHOME ||
-                        ch == KEY_SLEFT || ch == KEY_SRIGHT ) {
+                        ch == KEY_SLEFT || ch == KEY_SRIGHT || ch == KEY_PPAGE || ch == KEY_NPAGE ) {
                 // Terminals may label shifted arrows differently; accept the common ones.
-                if ( ch == KEY_SR || ch == KEY_SLEFT ) {
+                if ( ch == KEY_SR || ch == KEY_SLEFT || ch == KEY_PPAGE ) {
                     logger::info["ncurses"] << "scroll up key=" << ch << " _scroll_offset=" << _scroll_offset << std::endl;
                     _scroll_offset++;
-                } else if ( ch == KEY_SF || ch == KEY_SRIGHT ) {
+                } else if ( ch == KEY_SF || ch == KEY_SRIGHT || ch == KEY_NPAGE ) {
                     logger::info["ncurses"] << "scroll down key=" << ch << " _scroll_offset=" << _scroll_offset << std::endl;
                     if ( _scroll_offset > 0 )
                         _scroll_offset--;
