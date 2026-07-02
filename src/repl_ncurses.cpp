@@ -176,26 +176,30 @@ static int utf8_display_width(const std::string& s, size_t byte_count) {
 }
 
 void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, Language lang) {
-    (void)lang; // diagnostics: bypass syntax highlighting temporarily
+    (void)lang; // syntax highlighting disabled; plain rendering is reliable across terminals
     int x = 1;
     const int max_x = _cols - 2;
+    int remaining = max_x - x + 1;
+    if ( remaining <= 0 )
+        return;
+
+    std::string rendered = text.substr(0, utf8_fit(text, remaining));
+
     if ( is_prompt ) {
         attron(A_BOLD);
         if ( has_colors()) attron(COLOR_PAIR(3));
+    } else if ( !text.empty() && text.size() >= 3 && text.substr(0, 3) == "```" ) {
+        // Keep code-fence lines visually distinct even without full highlighting.
+        if ( has_colors()) attron(COLOR_PAIR(_highlighter.color_for_fence()));
     }
 
-    int remaining = max_x - x + 1;
-    if ( remaining > 0 ) {
-        std::string rendered = text.substr(0, utf8_fit(text, remaining));
-        logger::info["ncurses"] << "render_line row=" << row << " x=" << x
-                                << " remaining=" << remaining << " len=" << rendered.size()
-                                << " prompt=" << is_prompt << " text=[" << rendered << "]" << std::endl;
-        mvaddstr(row, x, rendered.c_str());
-    }
+    mvaddstr(row, x, rendered.c_str());
 
     if ( is_prompt ) {
         if ( has_colors()) attroff(COLOR_PAIR(3));
         attroff(A_BOLD);
+    } else if ( !text.empty() && text.size() >= 3 && text.substr(0, 3) == "```" ) {
+        if ( has_colors()) attroff(COLOR_PAIR(_highlighter.color_for_fence()));
     }
 }
 
