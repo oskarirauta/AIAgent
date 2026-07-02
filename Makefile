@@ -3,11 +3,13 @@ all: world
 CXX?=g++
 CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include -I./src
 LDFLAGS?=-L/usr/lib
+LIBS?=-lcurl -lncurses
 
 OBJS:= \
 	objs/main.o \
 	objs/config.o \
 	objs/conversation.o \
+	objs/memory.o \
 	objs/repl.o \
 	objs/repl_ncurses.o \
 	objs/signal_handler.o \
@@ -38,7 +40,7 @@ include $(JSON_DIR)/Makefile.inc
 include $(SIGNAL_DIR)/Makefile.inc
 include $(PROCESS_DIR)/Makefile.inc
 
-LDFLAGS += -lcurl -lncurses
+#LDFLAGS += -lcurl -lncurses
 
 world: agent
 
@@ -49,6 +51,8 @@ objs/main.o: src/main.cpp
 objs/config.o: src/config.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/conversation.o: src/conversation.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/memory.o: src/memory.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/repl.o: src/repl.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
