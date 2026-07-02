@@ -53,6 +53,7 @@ void NcursesRepl::setup() {
     noecho();
     keypad(stdscr, TRUE);
     timeout(50); // non-blocking input so the UI can update while the worker runs
+    curs_set(0); // hide hardware cursor; we draw a fake one
     if ( has_colors()) {
         start_color();
         init_pair(1, COLOR_GREEN, COLOR_BLACK);   // title
@@ -324,26 +325,18 @@ void NcursesRepl::draw() {
     int input_width = std::max(0, _cols - 5);
     int visible_len = static_cast<int>(utf8_fit(_input, std::min(input_width, (int)_input.size())));
     mvaddnstr(prompt_row, 3, _input.c_str(), visible_len);
-    move(prompt_row, 3 + std::min(_cursor, visible_len));
+
+    // fake cursor (hardware cursor is hidden)
+    int cursor_x = 3 + std::min(_cursor, visible_len);
+    if ( cursor_x < _cols - 2 )
+        mvaddstr(prompt_row, cursor_x, "[_]");
+    else if ( cursor_x < _cols - 1 )
+        mvaddstr(prompt_row, cursor_x, "_");
 
     // separator above prompt
     mvaddstr(prompt_sep_top, 1, box_hline(_cols - 2).c_str());
 
-    // quick-reply suggestions
-    if ( suggestion_rows > 0 ) {
-        mvaddstr(suggestion_sep_top, 1, box_hline(_cols - 2).c_str());
-        for ( int i = 0; i < suggestion_rows; ++i ) {
-            int row = suggestion_top_row + i;
-            if ( i < (int)_suggestions.size()) {
-                std::string s = " " + _suggestions[i];
-                if ( (int)s.size() > _cols - 2 )
-                    s = s.substr(0, _cols - 5) + "...";
-                mvaddstr(row, 1, s.c_str());
-            }
-        }
-    }
-
-    // pending queue (if any) is shown inside the conversation area briefly
+    // suggestion / pending queue box
     std::string pending_text;
     {
         std::lock_guard<std::mutex> lock(_queue_mutex);
@@ -358,6 +351,26 @@ void NcursesRepl::draw() {
         }
     }
 
+    if ( suggestion_rows > 0 ) {
+        mvaddstr(suggestion_sep_top, 1, box_hline(_cols - 2).c_str());
+        if ( !pending_text.empty()) {
+            std::string s = " " + pending_text;
+            if ( (int)s.size() > _cols - 2 )
+                s = s.substr(0, _cols - 5) + "...";
+            mvaddstr(suggestion_top_row, 1, s.c_str());
+        } else {
+            for ( int i = 0; i < suggestion_rows; ++i ) {
+                int row = suggestion_top_row + i;
+                if ( i < (int)_suggestions.size()) {
+                    std::string s = " " + _suggestions[i];
+                    if ( (int)s.size() > _cols - 2 )
+                        s = s.substr(0, _cols - 5) + "...";
+                    mvaddstr(row, 1, s.c_str());
+                }
+            }
+        }
+    }
+
     int available = conv_end - 2 + 1;
     if ( available < 1 )
         available = 1;
@@ -368,13 +381,6 @@ void NcursesRepl::draw() {
     for ( size_t i = start; i < lines.size() && y <= conv_end; i++, y++ ) {
         const auto& [text, is_prompt, lang] = lines[i];
         render_line(y, text, is_prompt, lang);
-    }
-
-    // if there is a pending queue and space, show it as the last conversation line
-    if ( !pending_text.empty() && y <= conv_end ) {
-        if ( (int)pending_text.size() > _cols - 2 )
-            pending_text = pending_text.substr(0, _cols - 5) + "...";
-        mvaddstr(y, 1, pending_text.c_str());
     }
 
     refresh();
@@ -537,7 +543,8 @@ void NcursesRepl::run() {
                 }
                 _confirm_cv.notify_all();
             } else if ( ch == 27 ) { // ESC aborts an active AI request; does not quit
-                if ( _worker_busy.load(std::memory_order_relaxed)) {
+                if ( _worker_busy.load(std::memory_order_relaxed) &&
+                     !_abort_current.load(std::memory_order_relaxed)) {
                     _abort_current.store(true, std::memory_order_relaxed);
                     {
                         std::lock_guard<std::mutex> lock(_queue_mutex);
@@ -619,6 +626,8 @@ void NcursesRepl::run() {
                 std::string utf8 = read_utf8_char(ch);
                 _input.insert(_cursor, utf8);
                 _cursor += (int)utf8.size();
+            } else {
+                logger::info["ncurses"] << "unhandled key ch=" << ch << std::endl;
             }
         }
 
