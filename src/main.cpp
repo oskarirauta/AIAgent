@@ -35,6 +35,7 @@ static usage_t make_usage(int argc, char **argv) {
             { "api_key", { "k", "api-key", "api key / token", usage_t::OPTIONAL }},
             { "log_level", { "l", "log-level", "quiet/error/warning/notice/info/verbose/vverbose/debug", usage_t::OPTIONAL }},
             { "system_prompt", { "s", "system-prompt", "system prompt message", usage_t::OPTIONAL }},
+            { "home_dir", { "d", "home", "agent home directory for memory and data", usage_t::OPTIONAL }},
             { "prompt", { "P", "prompt", "single prompt mode, exit after answer", usage_t::OPTIONAL }}
         }
     };
@@ -67,6 +68,7 @@ int main(int argc, char **argv) {
 
     config.load(config_path);
     config.apply_cli(usage);
+    config.ensure_home_dir();
 
     set_log_level(config.log_level);
 
@@ -90,6 +92,7 @@ int main(int argc, char **argv) {
     }
 
     logger::info["agent"] << "provider: " << config.provider << ", model: " << config.model << std::endl;
+    logger::info["agent"] << "home dir: " << config.home_dir << std::endl;
 
     try {
         agent::Repl repl(config);

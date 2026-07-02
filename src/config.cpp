@@ -3,17 +3,50 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include "common.hpp"
-#include "lowercase_map.hpp"
 #include "logger.hpp"
 
 namespace agent {
+
+static std::string trim(const std::string& s) {
+    return common::trim_ws(s);
+}
+
+static std::string parse_value(const std::string& raw) {
+    std::string s = raw;
+    s = trim(s);
+    if ( s.size() >= 2 && s.front() == '"' && s.back() == '"' ) {
+        s = s.substr(1, s.size() - 2);
+        // unescape simple escapes
+        std::string out;
+        for ( size_t i = 0; i < s.size(); i++ ) {
+            if ( s[i] == '\\' && i + 1 < s.size()) {
+                char next = s[i+1];
+                if ( next == 'n' ) out += '\n';
+                else if ( next == 't' ) out += '\t';
+                else if ( next == 'r' ) out += '\r';
+                else out += next;
+                i++;
+            } else out += s[i];
+        }
+        return out;
+    }
+    return s;
+}
 
 std::string Config::default_path() {
     const char* home = std::getenv("HOME");
     if ( !home || !*home )
         home = "/root";
     return std::string(home) + "/.config/ai-agent/config";
+}
+
+std::string Config::default_home_dir() {
+    const char* home = std::getenv("HOME");
+    if ( !home || !*home )
+        home = "/root";
+    return std::string(home) + "/.local/share/ai-agent";
 }
 
 void Config::load(const std::string& path) {
@@ -28,25 +61,36 @@ void Config::load(const std::string& path) {
 
     logger::verbose["config"] << "loading config from " << path << std::endl;
 
-    try {
-        common::lowercase_map<std::string> cfg = common::parseFile(path, ':');
-
-        if ( cfg.contains("provider"))
-            provider = common::trimmed(cfg["provider"], common::whitespace);
-        if ( cfg.contains("model"))
-            model = common::trimmed(cfg["model"], common::whitespace);
-        if ( cfg.contains("api_url"))
-            api_url = common::trimmed(cfg["api_url"], common::whitespace);
-        if ( cfg.contains("api_key"))
-            api_key = common::trimmed(cfg["api_key"], common::whitespace);
-        if ( cfg.contains("log_level"))
-            log_level = common::trimmed(cfg["log_level"], common::whitespace);
-        if ( cfg.contains("system_prompt"))
-            system_prompt = common::trimmed(cfg["system_prompt"], common::whitespace);
-
-    } catch ( const std::exception& e ) {
-        logger::warning["config"] << "failed to read config: " << e.what() << std::endl;
+    std::ifstream ifd(path, std::ios::in);
+    if ( !ifd.is_open()) {
+        logger::warning["config"] << "failed to open config: " << path << std::endl;
+        return;
     }
+
+    std::string line;
+    while ( std::getline(ifd, line)) {
+        line = trim(line);
+        if ( line.empty() || line.front() == '#' )
+            continue;
+
+        size_t pos = line.find(':');
+        if ( pos == std::string::npos )
+            continue;
+
+        std::string key = trim(line.substr(0, pos));
+        std::string value = parse_value(line.substr(pos + 1));
+
+        if ( key == "provider" ) provider = value;
+        else if ( key == "model" ) model = value;
+        else if ( key == "api_url" ) api_url = value;
+        else if ( key == "api_key" ) api_key = value;
+        else if ( key == "log_level" ) log_level = value;
+        else if ( key == "system_prompt" ) system_prompt = value;
+        else if ( key == "home_dir" ) home_dir = value;
+    }
+
+    if ( home_dir.empty())
+        home_dir = default_home_dir();
 }
 
 void Config::apply_cli(const usage_t& usage) {
@@ -63,6 +107,15 @@ void Config::apply_cli(const usage_t& usage) {
         log_level = usage["log_level"].stringValue();
     if ( usage["system_prompt"] )
         system_prompt = usage["system_prompt"].stringValue();
+    if ( usage["home_dir"] )
+        home_dir = usage["home_dir"].stringValue();
+}
+
+void Config::ensure_home_dir() {
+    if ( home_dir.empty())
+        home_dir = default_home_dir();
+    if ( !std::filesystem::exists(home_dir))
+        std::filesystem::create_directories(home_dir);
 }
 
 } // namespace agent

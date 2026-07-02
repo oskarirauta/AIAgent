@@ -21,7 +21,7 @@ JSON RunCommand::parameters() const {
 }
 
 std::string RunCommand::execute(const JSON& args) {
-    std::string cmd = common::trimmed(args["command"].to_string(), common::whitespace);
+    std::string cmd = common::trim_ws(args["command"].to_string());
     if ( cmd.empty())
         return "error: empty command";
 

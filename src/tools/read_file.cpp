@@ -20,7 +20,7 @@ JSON ReadFile::parameters() const {
 }
 
 std::string ReadFile::execute(const JSON& args) {
-    std::string path = common::trimmed(args["path"].to_string(), common::whitespace);
+    std::string path = common::trim_ws(args["path"].to_string());
 
     std::ifstream ifd(path, std::ios::in);
     if ( !ifd.is_open())

@@ -14,11 +14,14 @@ public:
     std::string api_key;
     std::string log_level = "info";
     std::string system_prompt = "You are a helpful Linux CLI assistant.";
+    std::string home_dir;
 
     void load(const std::string& path);
     void apply_cli(const usage_t& usage);
+    void ensure_home_dir();
 
     static std::string default_path();
+    static std::string default_home_dir();
 };
 
 } // namespace agent

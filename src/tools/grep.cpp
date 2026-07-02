@@ -25,8 +25,8 @@ JSON Grep::parameters() const {
 }
 
 std::string Grep::execute(const JSON& args) {
-    std::string path = common::trimmed(args["path"].to_string(), common::whitespace);
-    std::string pattern = common::trimmed(args["pattern"].to_string(), common::whitespace);
+    std::string path = common::trim_ws(args["path"].to_string());
+    std::string pattern = common::trim_ws(args["pattern"].to_string());
 
     if ( pattern.empty())
         return "error: empty pattern";

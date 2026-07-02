@@ -22,7 +22,7 @@ JSON ListDirectory::parameters() const {
 std::string ListDirectory::execute(const JSON& args) {
     std::string path = ".";
     if ( args.contains("path"))
-        path = common::trimmed(args["path"].to_string(), common::whitespace);
+        path = common::trim_ws(args["path"].to_string());
 
     if ( !std::filesystem::exists(path))
         return std::string("error: path does not exist: ") + path;
