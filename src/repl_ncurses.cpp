@@ -249,7 +249,14 @@ void NcursesRepl::draw() {
     int sig_count = agent::sigint_count.load(std::memory_order_relaxed);
     std::string left_msg;
     bool italic = false;
-    if ( sig_count >= 1 ) {
+    bool confirm_active = false;
+    {
+        std::lock_guard<std::mutex> lock(_confirm_mutex);
+        confirm_active = _confirm_pending;
+    }
+    if ( confirm_active ) {
+        left_msg = " Allow: " + _confirm_action + " [y/N]? ";
+    } else if ( sig_count >= 1 ) {
         left_msg = " Press Ctrl-C again to exit ";
     } else if ( _abort_current.load(std::memory_order_relaxed)) {
         left_msg = " Aborting... ";
@@ -365,6 +372,18 @@ void NcursesRepl::process_ui_queue() {
         draw();
 }
 
+bool NcursesRepl::confirm(const std::string& action) {
+    {
+        std::lock_guard<std::mutex> lock(_confirm_mutex);
+        _confirm_action = action;
+        _confirm_pending = true;
+        _confirm_result = false;
+    }
+    std::unique_lock<std::mutex> lock(_confirm_mutex);
+    _confirm_cv.wait(lock, [this] { return !_confirm_pending; });
+    return _confirm_result;
+}
+
 void NcursesRepl::submit(const std::string& line) {
     logger::debug["ncurses"] << "submit line=[" << line << "]" << std::endl;
     {
@@ -475,7 +494,22 @@ void NcursesRepl::run() {
 
         if ( ch != ERR ) {
             logger::debug["ncurses"] << "key ch=" << ch << std::endl;
-            if ( ch == 27 ) { // ESC aborts an active AI request; does not quit
+            bool confirm_active = false;
+            {
+                std::lock_guard<std::mutex> lock(_confirm_mutex);
+                confirm_active = _confirm_pending;
+            }
+            if ( confirm_active ) {
+                bool result = false;
+                if ( ch == 'y' || ch == 'Y' )
+                    result = true;
+                {
+                    std::lock_guard<std::mutex> lock(_confirm_mutex);
+                    _confirm_result = result;
+                    _confirm_pending = false;
+                }
+                _confirm_cv.notify_all();
+            } else if ( ch == 27 ) { // ESC aborts an active AI request; does not quit
                 if ( _worker_busy.load(std::memory_order_relaxed)) {
                     _abort_current.store(true, std::memory_order_relaxed);
                     {

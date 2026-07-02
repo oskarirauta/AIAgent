@@ -27,6 +27,7 @@ public:
     ~NcursesRepl();
 
     void run();
+    bool confirm(const std::string& action);
 
 private:
     enum class State {
@@ -72,6 +73,13 @@ private:
     std::queue<std::function<void()>> _ui_queue;
     std::queue<std::string> _pending_prompts;
     std::atomic<bool> _worker_busy{false};
+
+    // Inline confirmation dialog state.
+    std::mutex _confirm_mutex;
+    std::condition_variable _confirm_cv;
+    std::string _confirm_action;
+    bool _confirm_pending = false;
+    bool _confirm_result = false;
 };
 
 } // namespace agent

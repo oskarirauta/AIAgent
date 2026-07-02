@@ -125,7 +125,7 @@ void Repl::run_plain() {
         if ( common::trim_ws(line).empty())
             continue;
 
-        if ( line == "exit" || line == "quit" )
+        if ( line == "/exit" || line == "/quit" )
             break;
 
         try {
@@ -144,16 +144,6 @@ void Repl::run_plain() {
 
 void Repl::run_tty() {
 
-    if ( _config.tools_enabled ) {
-        if ( _config.confirm_tools ) {
-            // Ncurses mode cannot easily prompt for confirmation inline, so decline destructive tools.
-            _registry.set_confirm_callback([](const std::string&) { return false; });
-        } else {
-            // Auto mode was explicitly requested via --yes-tools / --auto-tools.
-            _registry.set_confirm_callback([](const std::string&) { return true; });
-        }
-    }
-
     NcursesRepl ncurses(
         [this](const std::string& prompt, std::function<void(const std::string&)> stream_cb) -> std::string {
             try {
@@ -165,6 +155,10 @@ void Repl::run_tty() {
             }
         },
         _config, _conversation);
+
+    if ( _config.tools_enabled && _config.confirm_tools ) {
+        _registry.set_confirm_callback([&ncurses](const std::string& action) { return ncurses.confirm(action); });
+    }
 
     ncurses.run();
 }
