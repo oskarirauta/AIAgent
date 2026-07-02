@@ -8,6 +8,7 @@
 #include "throws.hpp"
 #include "repl_ncurses.hpp"
 #include "signal_handler.hpp"
+#include "memory.hpp"
 
 namespace agent {
 
@@ -15,7 +16,13 @@ Repl::Repl(const Config& config)
     : _config(config), _provider(providers::create(config)) {
 
     _registry.register_defaults();
-    _conversation.set_system(config.system_prompt);
+
+    std::string system = config.system_prompt;
+    std::string memories = load_memories(config.home_dir);
+    if ( !memories.empty())
+        system += memories;
+
+    _conversation.set_system(system);
 }
 
 std::string Repl::process_turn(const std::string& prompt) {
