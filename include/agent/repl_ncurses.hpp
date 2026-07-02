@@ -58,6 +58,7 @@ private:
     int _rows = 0;
     int _cols = 0;
     int _cursor = 0;
+    int _scroll_offset = 0; // conversation scroll: 0 = bottom, >0 = lines up
 
     State _state = State::idle;
     std::chrono::steady_clock::time_point _animation_start = std::chrono::steady_clock::now();

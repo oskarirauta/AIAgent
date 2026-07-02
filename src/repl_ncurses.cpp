@@ -441,9 +441,11 @@ void NcursesRepl::draw() {
 
     auto lines = build_lines(_cols - 2);
     logger::info["ncurses"] << "draw lines=" << lines.size() << " available=" << available
-                            << " conv_end=" << conv_end << " rows=" << _rows << " cols=" << _cols << std::endl;
+                            << " conv_end=" << conv_end << " rows=" << _rows << " cols=" << _cols
+                            << " scroll=" << _scroll_offset << std::endl;
     int y = 2;
-    size_t start = lines.size() > (size_t)available ? lines.size() - available : 0;
+    size_t max_start = lines.size() > (size_t)available ? lines.size() - available : 0;
+    size_t start = _scroll_offset >= 0 && (size_t)_scroll_offset <= max_start ? max_start - _scroll_offset : 0;
     for ( size_t i = start; i < lines.size() && y <= conv_end; i++, y++ ) {
         const auto& [text, is_prompt, lang] = lines[i];
         render_line(y, text, is_prompt, lang);
@@ -657,6 +659,7 @@ void NcursesRepl::run() {
                 }
                 _input.clear();
                 _cursor = 0;
+                _scroll_offset = 0; // new prompt -> jump to bottom of conversation
             } else if ( ch == KEY_BACKSPACE || ch == 127 || ch == '\b' || ch == 8 || ch == 263 ) {
                 logger::info["ncurses"] << "backspace ch=" << ch << " (KEY_BACKSPACE=" << KEY_BACKSPACE << ") _cursor=" << _cursor << " input_size=" << _input.size() << std::endl;
                 if ( _cursor > 0 ) {
@@ -690,6 +693,16 @@ void NcursesRepl::run() {
                 _cursor = 0;
             } else if ( ch == KEY_END ) {
                 _cursor = (int)_input.size();
+            } else if ( ch == KEY_SR || ch == 526 ) { // Shift+Up: scroll conversation up
+                logger::info["ncurses"] << "scroll up _scroll_offset=" << _scroll_offset << std::endl;
+                _scroll_offset++;
+            } else if ( ch == KEY_SF || ch == 525 ) { // Shift+Down: scroll conversation down
+                logger::info["ncurses"] << "scroll down _scroll_offset=" << _scroll_offset << std::endl;
+                if ( _scroll_offset > 0 )
+                    _scroll_offset--;
+            } else if ( ch == KEY_SEND || ch == 605 ) { // Shift+End: jump to bottom of conversation
+                logger::info["ncurses"] << "scroll bottom" << std::endl;
+                _scroll_offset = 0;
             } else if ( ch == KEY_UP ) {
                 if ( !_prompt_history.empty() && _history_index > 0 ) {
                     _history_index--;
