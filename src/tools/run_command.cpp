@@ -1,8 +1,7 @@
 #include "run_command.hpp"
 
-#include <array>
-#include <cstdio>
-#include <memory>
+#include <string>
+#include "process.hpp"
 #include "common.hpp"
 
 namespace agent::tools {
@@ -25,19 +24,25 @@ std::string RunCommand::execute(const JSON& args) {
     if ( cmd.empty())
         return "error: empty command";
 
-    cmd += " 2>&1"; // merge stderr to stdout
+    try {
+        process_t proc("/bin/sh", { "-c", cmd });
+        std::string out = proc[STREAM_OUT];
+        std::string err = proc[STREAM_ERR];
+        int code = proc[STREAM_STATUS];
 
-    std::array<char, 4096> buffer;
-    std::string result;
-
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
-    if ( !pipe )
-        return "error: failed to run command";
-
-    while ( fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr )
-        result += buffer.data();
-
-    return result;
+        std::string result = out;
+        if ( !err.empty()) {
+            if ( !result.empty()) result += "\n";
+            result += "stderr: " + err;
+        }
+        if ( code != 0 ) {
+            if ( !result.empty()) result += "\n";
+            result += "exit code: " + std::to_string(code);
+        }
+        return result;
+    } catch ( const std::exception& e ) {
+        return std::string("error: ") + e.what();
+    }
 }
 
 } // namespace agent::tools
