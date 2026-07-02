@@ -39,6 +39,7 @@ static usage_t make_usage(int argc, char **argv) {
             { "home_dir", { "d", "home", "agent home directory for memory and data", usage_t::OPTIONAL }},
             { "no_tools", { "T", "no-tools", "disable tool calls (safer mode)", usage_t::OPTIONAL }},
             { "yes_tools", { "Y", "yes-tools", "run tools without confirmation", usage_t::OPTIONAL }},
+            { "auto_tools", { "A", "auto-tools", "alias for --yes-tools", usage_t::OPTIONAL }},
             { "prompt", { "P", "prompt", "single prompt mode, exit after answer", usage_t::OPTIONAL }}
         }
     };

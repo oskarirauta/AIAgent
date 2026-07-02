@@ -113,6 +113,9 @@ All values can be overridden with command-line options.
 
 # Auto-approve destructive tools (run_command, write_file)
 ./agent --yes-tools "deploy the app"
+
+# Alias for --yes-tools
+./agent --auto-tools "deploy the app"
 ```
 
 ## Project layout

@@ -113,7 +113,7 @@ void Config::apply_cli(const usage_t& usage) {
         home_dir = usage["home_dir"].stringValue();
     if ( usage["no_tools"] )
         tools_enabled = false;
-    if ( usage["yes_tools"] )
+    if ( usage["yes_tools"] || usage["auto_tools"] )
         confirm_tools = false;
 }
 
