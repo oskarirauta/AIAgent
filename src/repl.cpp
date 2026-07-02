@@ -147,15 +147,17 @@ void Repl::run_tty() {
         _registry.set_confirm_callback([](const std::string&) { return false; });
     }
 
-    NcursesRepl ncurses([this](const std::string& prompt, std::function<void(const std::string&)> stream_cb) -> std::string {
-        try {
-            std::string reply = this->process_turn(prompt, stream_cb);
-            this->save_conversation();
-            return reply;
-        } catch ( const std::exception& e ) {
-            return std::string("error: ") + e.what();
-        }
-    });
+    NcursesRepl ncurses(
+        [this](const std::string& prompt, std::function<void(const std::string&)> stream_cb) -> std::string {
+            try {
+                std::string reply = this->process_turn(prompt, stream_cb);
+                this->save_conversation();
+                return reply;
+            } catch ( const std::exception& e ) {
+                return std::string("error: ") + e.what();
+            }
+        },
+        _config, _conversation);
 
     ncurses.run();
 }

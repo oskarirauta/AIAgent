@@ -13,11 +13,14 @@
 
 namespace agent {
 
+class Config;
+class Conversation;
+
 class NcursesRepl {
 public:
     using callback_t = std::function<std::string(const std::string&, std::function<void(const std::string&)>)>;
 
-    explicit NcursesRepl(callback_t cb);
+    NcursesRepl(callback_t cb, const Config& config, const Conversation& conversation);
     ~NcursesRepl();
 
     void run();
@@ -53,6 +56,8 @@ private:
     State _state = State::idle;
     std::atomic<bool> _abort_current{false};
     SyntaxHighlighter _highlighter{4}; // color pairs 4-9 reserved for syntax highlighting
+    const Config& _config;
+    const Conversation& _conversation;
 
     // Worker thread for the blocking LLM calls.
     std::thread _worker;

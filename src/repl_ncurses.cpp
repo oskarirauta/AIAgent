@@ -5,11 +5,14 @@
 #include <algorithm>
 #include "common.hpp"
 #include "logger.hpp"
+#include "agent/config.hpp"
+#include "agent/conversation.hpp"
 #include "agent/signal_handler.hpp"
 
 namespace agent {
 
-NcursesRepl::NcursesRepl(callback_t cb) : _callback(std::move(cb)) {}
+NcursesRepl::NcursesRepl(callback_t cb, const Config& config, const Conversation& conversation)
+    : _callback(std::move(cb)), _config(config), _conversation(conversation) {}
 
 NcursesRepl::~NcursesRepl() {
     {
@@ -175,31 +178,61 @@ void NcursesRepl::draw() {
     mvprintw(1, 0, std::string(_cols, '-').c_str());
 
     // bottom layout (from bottom up):
-    // _rows-1 : info bar
-    // _rows-2 : separator
-    // _rows-3 : prompt (with side padding)
-    // _rows-4 : separator
+    // _rows-1 : status bottom (left messages, right context usage)
+    // _rows-2 : status top (settings)
+    // _rows-3 : separator
+    // _rows-4 : prompt (with side padding)
+    // _rows-5 : separator
     // if pending queue:
-    //   _rows-5 : queued messages
-    //   _rows-6 : separator
+    //   _rows-6 : queued messages
+    //   _rows-7 : separator
     // conversation ends above that
 
-    const int info_row = _rows - 1;
-    const int prompt_row = _rows - 3;
-    const int prompt_sep_top = _rows - 4;
+    const int status_bottom_row = _rows - 1;
+    const int status_top_row = _rows - 2;
+    const int prompt_row = _rows - 4;
+    const int prompt_sep_top = _rows - 5;
     int conv_end = prompt_sep_top - 1;
 
-    // info bar
-    std::string info;
+    // status top: settings
+    std::string settings = " " + _config.provider + " | " + _config.model +
+                           " | tools:" + (_config.tools_enabled ? "on" : "off") +
+                           " | confirm:" + (_config.confirm_tools ? "on" : "off") + " ";
+    if ( (int)settings.size() > _cols )
+        settings = settings.substr(0, _cols - 3) + "...";
+    mvaddstr(status_top_row, 0, settings.c_str());
+
+    // status bottom: left messages + right context
     int sig_count = agent::sigint_count.load(std::memory_order_relaxed);
+    std::string left_msg;
     if ( sig_count >= 1 )
-        info = " Press Ctrl-C again to exit ";
+        left_msg = " Press Ctrl-C again to exit ";
+    else if ( _abort_current.load(std::memory_order_relaxed))
+        left_msg = " Aborting... ";
+    else if ( _state == State::processing )
+        left_msg = " AI is thinking... ";
     else
-        info = " ESC=abort AI  Ctrl-C=quit ";
-    if ( (int)info.size() > _cols )
-        info = info.substr(0, _cols);
-    mvaddstr(info_row, 0, info.c_str());
-    mvprintw(info_row - 1, 0, std::string(_cols, '-').c_str());
+        left_msg = " Ready ";
+
+    size_t total_chars = 0;
+    for ( const auto& m : _conversation.messages())
+        total_chars += m.content.size();
+    std::string right_ctx = " ctx: " + std::to_string(_conversation.messages().size()) +
+                            " msgs / " + std::to_string(total_chars) + " chars ";
+
+    if ( (int)left_msg.size() > _cols )
+        left_msg = left_msg.substr(0, _cols);
+    mvaddstr(status_bottom_row, 0, left_msg.c_str());
+
+    int ctx_x = _cols - (int)right_ctx.size();
+    if ( ctx_x < (int)left_msg.size() + 2 )
+        ctx_x = (int)left_msg.size() + 2;
+    if ( ctx_x + (int)right_ctx.size() > _cols )
+        right_ctx = right_ctx.substr(0, _cols - ctx_x);
+    if ( ctx_x < _cols )
+        mvaddstr(status_bottom_row, ctx_x, right_ctx.c_str());
+
+    mvprintw(status_bottom_row - 1, 0, std::string(_cols, '-').c_str());
 
     // prompt with side padding
     mvaddstr(prompt_row, 1, "> ");
@@ -227,8 +260,8 @@ void NcursesRepl::draw() {
     }
 
     if ( has_pending ) {
-        const int queue_text_row = _rows - 5;
-        const int queue_sep_top = _rows - 6;
+        const int queue_text_row = _rows - 6;
+        const int queue_sep_top = _rows - 7;
         mvprintw(queue_sep_top, 0, std::string(_cols, '-').c_str());
         if ( (int)pending_text.size() > _cols - 2 )
             pending_text = pending_text.substr(0, _cols - 5) + "...";
@@ -246,15 +279,6 @@ void NcursesRepl::draw() {
     for ( size_t i = start; i < lines.size() && y <= conv_end; i++, y++ ) {
         const auto& [text, is_prompt, lang] = lines[i];
         render_line(y, text, is_prompt, lang);
-    }
-
-    // status line inside conversation area
-    if ( _state == State::processing && y <= conv_end ) {
-        attron(A_BOLD);
-        if ( has_colors()) attron(COLOR_PAIR(2));
-        mvaddstr(y, 1, "AI is thinking...");
-        if ( has_colors()) attroff(COLOR_PAIR(2));
-        attroff(A_BOLD);
     }
 
     refresh();
