@@ -13,3 +13,6 @@
 [submodule "usage"]
 	path = usage
 	url = https://github.com/oskarirauta/usage_cpp.git
+[submodule "signal"]
+	path = signal
+	url = https://github.com/oskarirauta/SIG_cpp.git
