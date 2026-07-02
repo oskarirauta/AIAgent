@@ -86,10 +86,18 @@ objs/tools_list_directory.o: src/tools/list_directory.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/tools_grep.o: src/tools/grep.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/test_suite.o: src/test_suite.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 
 agent: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(LIBS) $^ -o $@;
 
+TEST_OBJS:= $(filter-out objs/main.o,$(OBJS)) objs/test_suite.o
+
+test: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(TEST_OBJS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(LIBS) $^ -o test_runner;
+	./test_runner
+
 .PHONY: clean
 clean:
-	@rm -rf objs agent
+	@rm -rf objs agent test_runner
