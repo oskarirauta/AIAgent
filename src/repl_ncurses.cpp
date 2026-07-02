@@ -626,8 +626,12 @@ void NcursesRepl::run() {
                     size_t prev = _cursor;
                     while ( prev > 0 && (static_cast<unsigned char>(_input[prev - 1]) & 0xC0) == 0x80 )
                         --prev;
+                    logger::info["ncurses"] << "backspace erase start prev=" << prev << " count=" << (_cursor - prev) << std::endl;
                     _input.erase(prev, _cursor - prev);
                     _cursor = static_cast<int>(prev);
+                    logger::info["ncurses"] << "backspace after erase _cursor=" << _cursor << " input_size=" << _input.size() << std::endl;
+                } else {
+                    logger::info["ncurses"] << "backspace skipped because _cursor <= 0" << std::endl;
                 }
             } else if ( ch == KEY_DC ) {
                 if ( _cursor < (int)_input.size()) {
