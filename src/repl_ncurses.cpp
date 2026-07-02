@@ -597,6 +597,75 @@ std::string NcursesRepl::read_utf8_char(int first_byte) {
     return s;
 }
 
+// Internal key codes for escape sequences not covered by ncurses KEY_* macros.
+static constexpr int KEYC_SHIFT_UP = 2001;
+static constexpr int KEYC_SHIFT_DOWN = 2002;
+static constexpr int KEYC_SHIFT_END = 2003;
+static constexpr int KEYC_SHIFT_HOME = 2004;
+static constexpr int KEYC_SHIFT_LEFT = 2005;
+static constexpr int KEYC_SHIFT_RIGHT = 2006;
+
+int NcursesRepl::read_escape_sequence(int first_byte) {
+    // first_byte is expected to be ESC (27). If nothing follows, it was a lone ESC.
+    int b = getch();
+    if ( b == ERR )
+        return first_byte;
+
+    if ( b == 'O' ) {
+        // SS3 sequences, e.g. ESC O A = Up, ESC O a = Shift+Up on some terminals.
+        int c = getch();
+        if ( c == ERR )
+            return first_byte;
+        switch ( c ) {
+            case 'a': return KEYC_SHIFT_UP;
+            case 'b': return KEYC_SHIFT_DOWN;
+            case 'A': return KEY_UP;
+            case 'B': return KEY_DOWN;
+            case 'C': return KEY_RIGHT;
+            case 'D': return KEY_LEFT;
+            case 'H': return KEY_HOME;
+            case 'F': return KEY_END;
+            default:  return first_byte;
+        }
+    }
+
+    if ( b != '[' )
+        return first_byte;
+
+    // CSI sequence. Collect numeric parameters and the final byte.
+    std::string params;
+    while ( true ) {
+        int c = getch();
+        if ( c == ERR )
+            return first_byte;
+        if ( (c >= '0' && c <= '9') || c == ';' || c == '?' )
+            params += static_cast<char>(c);
+        else if ( (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '~' ) {
+            // final byte
+            if ( params == "1;2" || params == "2" ) {
+                if ( c == 'A' ) return KEYC_SHIFT_UP;
+                if ( c == 'B' ) return KEYC_SHIFT_DOWN;
+                if ( c == 'C' ) return KEYC_SHIFT_RIGHT; // not used, but recognised
+                if ( c == 'D' ) return KEYC_SHIFT_LEFT;  // not used, but recognised
+                if ( c == 'F' ) return KEYC_SHIFT_END;
+                if ( c == 'H' ) return KEYC_SHIFT_HOME;  // not used, but recognised
+            }
+            if ( params.empty() ) {
+                if ( c == 'A' ) return KEY_UP;
+                if ( c == 'B' ) return KEY_DOWN;
+                if ( c == 'C' ) return KEY_RIGHT;
+                if ( c == 'D' ) return KEY_LEFT;
+                if ( c == 'H' ) return KEY_HOME;
+                if ( c == 'F' ) return KEY_END;
+            }
+            return first_byte;
+        } else {
+            // unexpected intermediate byte; drop the sequence.
+            return first_byte;
+        }
+    }
+}
+
 void NcursesRepl::run() {
 
     setup();
@@ -630,16 +699,32 @@ void NcursesRepl::run() {
                     _confirm_pending = false;
                 }
                 _confirm_cv.notify_all();
-            } else if ( ch == 27 ) { // ESC aborts an active AI request; does not quit
-                if ( _worker_busy.load(std::memory_order_relaxed) &&
-                     !_abort_current.load(std::memory_order_relaxed)) {
-                    _abort_current.store(true, std::memory_order_relaxed);
-                    {
-                        std::lock_guard<std::mutex> lock(_queue_mutex);
-                        while ( !_pending_prompts.empty())
-                            _pending_prompts.pop();
+            } else if ( ch == 27 ) { // ESC may be a lone abort or the start of an escape sequence
+                int seq = read_escape_sequence(ch);
+                if ( seq == 27 ) {
+                    // Lone ESC aborts an active AI request; does not quit
+                    if ( _worker_busy.load(std::memory_order_relaxed) &&
+                         !_abort_current.load(std::memory_order_relaxed)) {
+                        _abort_current.store(true, std::memory_order_relaxed);
+                        {
+                            std::lock_guard<std::mutex> lock(_queue_mutex);
+                            while ( !_pending_prompts.empty())
+                                _pending_prompts.pop();
+                        }
+                        add_message("error", "AI request aborted");
                     }
-                    add_message("error", "AI request aborted");
+                } else if ( seq == KEYC_SHIFT_UP || seq == KEY_SR || seq == 526 ) {
+                    logger::info["ncurses"] << "scroll up _scroll_offset=" << _scroll_offset << std::endl;
+                    _scroll_offset++;
+                } else if ( seq == KEYC_SHIFT_DOWN || seq == KEY_SF || seq == 525 ) {
+                    logger::info["ncurses"] << "scroll down _scroll_offset=" << _scroll_offset << std::endl;
+                    if ( _scroll_offset > 0 )
+                        _scroll_offset--;
+                } else if ( seq == KEYC_SHIFT_END || seq == KEY_SEND || seq == 605 ) {
+                    logger::info["ncurses"] << "scroll bottom" << std::endl;
+                    _scroll_offset = 0;
+                } else {
+                    logger::debug["ncurses"] << "unhandled escape seq=" << seq << std::endl;
                 }
             } else if ( ch == 3 ) { // Ctrl-C as raw key
                 int count = agent::sigint_count.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -695,16 +780,6 @@ void NcursesRepl::run() {
                 _cursor = 0;
             } else if ( ch == KEY_END ) {
                 _cursor = (int)_input.size();
-            } else if ( ch == KEY_SR || ch == 526 ) { // Shift+Up: scroll conversation up
-                logger::info["ncurses"] << "scroll up _scroll_offset=" << _scroll_offset << std::endl;
-                _scroll_offset++;
-            } else if ( ch == KEY_SF || ch == 525 ) { // Shift+Down: scroll conversation down
-                logger::info["ncurses"] << "scroll down _scroll_offset=" << _scroll_offset << std::endl;
-                if ( _scroll_offset > 0 )
-                    _scroll_offset--;
-            } else if ( ch == KEY_SEND || ch == 605 ) { // Shift+End: jump to bottom of conversation
-                logger::info["ncurses"] << "scroll bottom" << std::endl;
-                _scroll_offset = 0;
             } else if ( ch == KEY_UP ) {
                 if ( !_prompt_history.empty() && _history_index > 0 ) {
                     _history_index--;
@@ -736,6 +811,22 @@ void NcursesRepl::run() {
         }
 
         process_ui_queue(local_change);
+    }
+
+    // If a worker is still running (e.g. the user typed /exit while a request
+    // was in flight), tell it to abort and show a message before joining so the
+    // terminal does not appear frozen during teardown.
+    if ( _worker_busy.load(std::memory_order_relaxed) && _worker.joinable()) {
+        _abort_current.store(true, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(_queue_mutex);
+            while ( !_pending_prompts.empty())
+                _pending_prompts.pop();
+        }
+        clear();
+        std::string msg = "AI Agent is exiting...";
+        mvaddstr(_rows / 2, std::max(1, (_cols - (int)msg.size()) / 2), msg.c_str());
+        refresh();
     }
 
     teardown();

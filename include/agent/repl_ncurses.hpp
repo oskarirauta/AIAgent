@@ -46,6 +46,7 @@ private:
     void ensure_worker();
     void worker_loop();
     static std::string read_utf8_char(int first_byte);
+    static int read_escape_sequence(int first_byte);
 
     callback_t _callback;
     std::string _input;
