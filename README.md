@@ -41,6 +41,12 @@ If `common/tsl`, `common/rva`, `signal` or `process` submodules are empty, initi
 git submodule update --init --recursive
 ```
 
+## Running tests
+
+```bash
+make test
+```
+
 ## Configuration
 
 Create `~/.config/ai-agent/config`:
