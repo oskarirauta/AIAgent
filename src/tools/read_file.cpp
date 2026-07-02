@@ -28,7 +28,14 @@ std::string ReadFile::execute(const JSON& args) {
 
     std::stringstream ss;
     ss << ifd.rdbuf();
-    return ss.str();
+    std::string content = ss.str();
+
+    const size_t max_chars = 10000;
+    if ( content.size() > max_chars ) {
+        content = content.substr(0, max_chars);
+        content += "\n\n[file truncated at " + std::to_string(max_chars) + " characters]";
+    }
+    return content;
 }
 
 } // namespace agent::tools
