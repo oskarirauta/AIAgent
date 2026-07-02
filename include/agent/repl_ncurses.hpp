@@ -21,12 +21,19 @@ public:
     void run();
 
 private:
+    enum class State {
+        idle,
+        processing
+    };
+
     void setup();
     void teardown();
     void draw();
     void add_message(const std::string& role, const std::string& text);
     void process_ui_queue();
     void submit(const std::string& line);
+    void ensure_worker();
+    void worker_loop();
     static std::string read_utf8_char(int first_byte);
 
     callback_t _callback;
@@ -39,11 +46,14 @@ private:
     int _rows = 0;
     int _cols = 0;
 
-    // Worker thread for the blocking LLM call.
+    State _state = State::idle;
+
+    // Worker thread for the blocking LLM calls.
     std::thread _worker;
     std::mutex _queue_mutex;
     std::condition_variable _queue_cv;
     std::queue<std::function<void()>> _ui_queue;
+    std::queue<std::string> _pending_prompts;
     std::atomic<bool> _worker_busy{false};
 };
 

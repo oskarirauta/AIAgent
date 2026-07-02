@@ -12,9 +12,13 @@ namespace agent {
 NcursesRepl::NcursesRepl(callback_t cb) : _callback(std::move(cb)) {}
 
 NcursesRepl::~NcursesRepl() {
-    teardown();
+    {
+        std::lock_guard<std::mutex> lock(_queue_mutex);
+        _running = false;
+    }
     if ( _worker.joinable())
         _worker.join();
+    teardown();
 }
 
 void NcursesRepl::setup() {
@@ -78,7 +82,7 @@ void NcursesRepl::draw() {
     mvprintw(1, 0, std::string(_cols, '-').c_str());
 
     int y = 2;
-    int available = _rows - y - 2;
+    int available = _rows - y - 3; // reserve bottom rows for prompt + status
 
     // collect rendered lines from history + current streaming reply
     std::vector<std::pair<std::string, bool>> rendered; // text, is_prompt
@@ -111,7 +115,7 @@ void NcursesRepl::draw() {
 
     // show last N lines that fit
     size_t start = rendered.size() > (size_t)available ? rendered.size() - available : 0;
-    for ( size_t i = start; i < rendered.size() && y < _rows - 2; i++, y++ ) {
+    for ( size_t i = start; i < rendered.size() && y < _rows - 3; i++, y++ ) {
         if ( rendered[i].second ) {
             attron(A_BOLD);
             if ( has_colors()) attron(COLOR_PAIR(3));
@@ -121,6 +125,15 @@ void NcursesRepl::draw() {
         } else {
             mvprintw(y, 0, rendered[i].first.c_str());
         }
+    }
+
+    // status line
+    if ( _state == State::processing ) {
+        attron(A_BOLD);
+        if ( has_colors()) attron(COLOR_PAIR(2));
+        mvprintw(_rows - 2, 0, "AI is thinking...");
+        if ( has_colors()) attroff(COLOR_PAIR(2));
+        attroff(A_BOLD);
     }
 
     // prompt line
@@ -146,15 +159,52 @@ void NcursesRepl::process_ui_queue() {
 }
 
 void NcursesRepl::submit(const std::string& line) {
-    logger::debug["ncurses"] << "submit start" << std::endl;
-    _worker_busy = true;
-    _current_reply.clear();
+    logger::debug["ncurses"] << "submit line=[" << line << "]" << std::endl;
+    {
+        std::lock_guard<std::mutex> lock(_queue_mutex);
+        _pending_prompts.push(line);
+    }
+    ensure_worker();
+}
+
+void NcursesRepl::ensure_worker() {
+    bool expected = false;
+    if ( !_worker_busy.compare_exchange_strong(expected, true)) {
+        logger::debug["ncurses"] << "worker already running" << std::endl;
+        return;
+    }
+
     if ( _worker.joinable()) {
         logger::debug["ncurses"] << "joining previous worker" << std::endl;
         _worker.join();
     }
 
-    _worker = std::thread([this, line]() {
+    logger::debug["ncurses"] << "starting worker" << std::endl;
+    _worker = std::thread([this]() { worker_loop(); });
+}
+
+void NcursesRepl::worker_loop() {
+    while ( true ) {
+        std::string line;
+        {
+            std::lock_guard<std::mutex> lock(_queue_mutex);
+            if ( _pending_prompts.empty()) {
+                _worker_busy = false;
+                _state = State::idle;
+                _ui_queue.push([this]() { draw(); });
+                _queue_cv.notify_one();
+                logger::debug["ncurses"] << "worker queue empty, exiting" << std::endl;
+                return;
+            }
+            line = _pending_prompts.front();
+            _pending_prompts.pop();
+            _state = State::processing;
+            _ui_queue.push([this]() { draw(); });
+            _queue_cv.notify_one();
+        }
+
+        logger::debug["ncurses"] << "worker processing line=[" << line << "]" << std::endl;
+
         try {
             std::string reply = _callback(line, [this](const std::string& chunk) {
                 std::lock_guard<std::mutex> lock(_queue_mutex);
@@ -180,10 +230,7 @@ void NcursesRepl::submit(const std::string& line) {
                 add_message("error", msg);
             });
         }
-        _worker_busy = false;
-        logger::debug["ncurses"] << "submit worker finished" << std::endl;
-        _queue_cv.notify_one();
-    });
+    }
 }
 
 std::string NcursesRepl::read_utf8_char(int first_byte) {
@@ -218,18 +265,14 @@ void NcursesRepl::run() {
             } else if ( ch == '\n' || ch == KEY_ENTER ) {
                 std::string line = common::trim_ws(_input);
                 logger::debug["ncurses"] << "enter line=[" << line << "] worker_busy=" << _worker_busy.load() << std::endl;
-                if ( _worker_busy ) {
-                    add_message("error", "please wait for the current response to finish");
-                } else {
-                    if ( !line.empty()) {
-                        add_message("prompt", line);
-                        _prompt_history.push_back(line);
-                        if ( line == "exit" || line == "quit" ) {
-                            break;
-                        }
-                        submit(line);
-                        _history_index = _prompt_history.size();
+                if ( !line.empty()) {
+                    add_message("prompt", line);
+                    _prompt_history.push_back(line);
+                    if ( line == "exit" || line == "quit" ) {
+                        break;
                     }
+                    submit(line);
+                    _history_index = _prompt_history.size();
                 }
                 _input.clear();
                 cursor = 0;
