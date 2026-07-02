@@ -8,7 +8,7 @@ namespace agent {
 
 class NcursesRepl {
 public:
-    using callback_t = std::function<std::string(const std::string&)>;
+    using callback_t = std::function<std::string(const std::string&, std::function<void(const std::string&)>)>;
 
     explicit NcursesRepl(callback_t cb);
     ~NcursesRepl();
@@ -23,6 +23,7 @@ private:
 
     callback_t _callback;
     std::string _input;
+    std::string _current_reply;
     std::vector<std::string> _history;        // all displayed lines as "role:text"
     std::vector<std::string> _prompt_history; // only user inputs
     size_t _history_index = 0;

@@ -10,6 +10,8 @@ public:
 
     std::string name() const override { return "openai"; }
     std::string endpoint() const override { return _config.api_url; }
+    bool supports_streaming() const override { return true; }
+    std::string parse_stream(const std::string& chunk, std::string& buffer, bool& done) override;
 
     JSON build_request(const Conversation& conv, const JSON& tools_schema) override;
     Response parse_response(const JSON& response) override;

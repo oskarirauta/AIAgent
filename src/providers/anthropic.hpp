@@ -12,6 +12,8 @@ public:
     std::string endpoint() const override { return _config.api_url; }
     std::string auth_header() const override { return "x-api-key"; }
     std::string auth_value() const override { return _config.api_key; }
+    bool supports_streaming() const override { return true; }
+    std::string parse_stream(const std::string& chunk, std::string& buffer, bool& done) override;
 
     JSON build_request(const Conversation& conv, const JSON& tools_schema) override;
     Response parse_response(const JSON& response) override;

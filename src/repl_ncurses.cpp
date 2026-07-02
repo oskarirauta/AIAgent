@@ -76,8 +76,15 @@ void NcursesRepl::draw() {
     int y = 2;
     int available = _rows - y - 2;
 
-    // collect rendered lines from history
+    // collect rendered lines from history + current streaming reply
     std::vector<std::pair<std::string, bool>> rendered; // text, is_prompt
+
+    if ( !_current_reply.empty()) {
+        auto lines = wrap(_current_reply, _cols - 2);
+        for ( const auto& l : lines )
+            rendered.push_back({ " " + l, false });
+    }
+
     for ( const auto& entry : _history ) {
         size_t pos = entry.find(':');
         if ( pos == std::string::npos )
@@ -143,8 +150,19 @@ void NcursesRepl::run() {
                 if ( line == "exit" || line == "quit" ) {
                     break;
                 }
-                std::string reply = _callback(line);
-                add_message("assistant", reply);
+                _current_reply.clear();
+                std::string reply = _callback(line, [this](const std::string& chunk) {
+                    _current_reply += chunk;
+                    draw();
+                    move(_rows - 1, 2 + (int)this->_input.size());
+                    refresh();
+                });
+                if ( !_current_reply.empty()) {
+                    add_message("assistant", _current_reply);
+                    _current_reply.clear();
+                } else if ( !reply.empty()) {
+                    add_message("assistant", reply);
+                }
                 _history_index = _prompt_history.size();
             }
             _input.clear();

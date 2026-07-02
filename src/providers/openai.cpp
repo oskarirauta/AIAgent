@@ -92,4 +92,36 @@ JSON OpenAI::make_tool_result(const std::string& tool_call_id, const std::string
     };
 }
 
+std::string OpenAI::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
+    buffer += chunk;
+    std::string out;
+    size_t pos;
+    while ((pos = buffer.find("\n\n")) != std::string::npos) {
+        std::string frame = buffer.substr(0, pos);
+        buffer.erase(0, pos + 2);
+
+        size_t data_pos = frame.find("data: ");
+        if ( data_pos == std::string::npos )
+            continue;
+
+        std::string data = frame.substr(data_pos + 6);
+        if ( data == "[DONE]" ) {
+            done = true;
+            continue;
+        }
+
+        try {
+            JSON j = JSON::parse(data);
+            if ( j.contains("choices") && j["choices"] == JSON::TYPE::ARRAY && j["choices"].size() > 0 ) {
+                JSON delta = j["choices"][0]["delta"];
+                if ( delta.contains("content") && delta["content"] != nullptr )
+                    out += delta["content"].to_string();
+            }
+        } catch ( const std::exception& e ) {
+            // ignore malformed chunks
+        }
+    }
+    return out;
+}
+
 } // namespace agent::providers

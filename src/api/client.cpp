@@ -69,4 +69,48 @@ std::string Client::post(const std::string& url, const std::string& auth_header,
     return response;
 }
 
+void Client::post_stream(const std::string& url, const std::string& auth_header, const std::string& auth_value, const std::string& body, std::function<void(const std::string&)> callback) {
+
+    CURL* c = static_cast<CURL*>(curl);
+    curl_easy_reset(c);
+
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    if ( !auth_header.empty() && !auth_value.empty()) {
+        std::string auth = auth_header + ": " + auth_value;
+        headers = curl_slist_append(headers, auth.c_str());
+    }
+
+    auto stream_callback = [](char* ptr, size_t size, size_t nmemb, void* userdata) -> size_t {
+        auto* cb = static_cast<std::function<void(const std::string&)>*>(userdata);
+        std::string chunk(ptr, size * nmemb);
+        (*cb)(chunk);
+        return size * nmemb;
+    };
+
+    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, stream_callback);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &callback);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 120L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
+
+    logger::vverbose["http"] << "POST STREAM " << url << "\n" << body << std::endl;
+
+    CURLcode res = curl_easy_perform(c);
+    curl_slist_free_all(headers);
+
+    if ( res != CURLE_OK )
+        throws << "http request failed: " << curl_easy_strerror(res) << std::endl;
+
+    long http_code = 0;
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
+
+    if ( http_code < 200 || http_code >= 300 )
+        throws << "http error " << http_code << std::endl;
+}
+
 } // namespace agent::api

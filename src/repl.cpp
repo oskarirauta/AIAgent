@@ -25,7 +25,7 @@ Repl::Repl(const Config& config)
     _conversation.set_system(system);
 }
 
-std::string Repl::process_turn(const std::string& prompt) {
+std::string Repl::process_turn(const std::string& prompt, std::function<void(const std::string&)> stream_cb) {
 
     _conversation.add_user(prompt);
 
@@ -33,8 +33,32 @@ std::string Repl::process_turn(const std::string& prompt) {
 
         JSON tools = _registry.schema();
         JSON request = _provider->build_request(_conversation, tools);
-        std::string body = request.dump_minified();
 
+        // Use streaming when supported, requested, and no tools are registered
+        bool can_stream = stream_cb && _provider->supports_streaming() &&
+                          ( tools != JSON::TYPE::ARRAY || tools.empty());
+
+        if ( can_stream ) {
+            request["stream"] = true;
+            std::string body = request.dump_minified();
+            std::string buffer;
+            bool done = false;
+            std::string full_reply;
+
+            _client.post_stream(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), body,
+                [&](const std::string& chunk) {
+                    std::string text = _provider->parse_stream(chunk, buffer, done);
+                    if ( !text.empty()) {
+                        full_reply += text;
+                        stream_cb(text);
+                    }
+                });
+
+            _conversation.add_assistant(full_reply);
+            return full_reply;
+        }
+
+        std::string body = request.dump_minified();
         std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), body);
         JSON response = JSON::parse(response_str);
         providers::Response resp = _provider->parse_response(response);
@@ -81,8 +105,10 @@ void Repl::run_plain() {
             break;
 
         try {
-            std::string reply = process_turn(line);
-            std::cout << reply << std::endl;
+            std::string reply = process_turn(line, [](const std::string& chunk) {
+                std::cout << chunk << std::flush;
+            });
+            std::cout << std::endl;
         } catch ( const std::exception& e ) {
             logger::error << "request failed: " << e.what() << std::endl;
         }
@@ -93,9 +119,9 @@ void Repl::run_plain() {
 
 void Repl::run_tty() {
 
-    NcursesRepl ncurses([this](const std::string& prompt) -> std::string {
+    NcursesRepl ncurses([this](const std::string& prompt, std::function<void(const std::string&)> stream_cb) -> std::string {
         try {
-            return this->process_turn(prompt);
+            return this->process_turn(prompt, stream_cb);
         } catch ( const std::exception& e ) {
             return std::string("error: ") + e.what();
         }
@@ -115,8 +141,10 @@ void Repl::run() {
 void Repl::run_once(const std::string& prompt) {
 
     try {
-        std::string reply = process_turn(prompt);
-        std::cout << reply << std::endl;
+        std::string reply = process_turn(prompt, [](const std::string& chunk) {
+            std::cout << chunk << std::flush;
+        });
+        std::cout << std::endl;
     } catch ( const std::exception& e ) {
         logger::error << "request failed: " << e.what() << std::endl;
     }

@@ -136,4 +136,36 @@ JSON Anthropic::make_tool_result(const std::string& tool_call_id, const std::str
     };
 }
 
+std::string Anthropic::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
+    buffer += chunk;
+    std::string out;
+    size_t pos;
+    while ((pos = buffer.find("\n\n")) != std::string::npos) {
+        std::string frame = buffer.substr(0, pos);
+        buffer.erase(0, pos + 2);
+
+        if ( frame.find("event: message_stop") != std::string::npos ) {
+            done = true;
+            continue;
+        }
+
+        size_t data_pos = frame.find("data: ");
+        if ( data_pos == std::string::npos )
+            continue;
+
+        std::string data = frame.substr(data_pos + 6);
+        try {
+            JSON j = JSON::parse(data);
+            if ( j.contains("delta")) {
+                JSON delta = j["delta"];
+                if ( delta.contains("type") && delta["type"].to_string() == "text_delta" && delta.contains("text"))
+                    out += delta["text"].to_string();
+            }
+        } catch ( const std::exception& e ) {
+            // ignore malformed chunks
+        }
+    }
+    return out;
+}
+
 } // namespace agent::providers

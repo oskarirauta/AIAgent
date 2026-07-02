@@ -89,4 +89,35 @@ JSON Ollama::make_tool_result(const std::string& tool_call_id, const std::string
     };
 }
 
+std::string Ollama::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
+    buffer += chunk;
+    std::string out;
+    size_t pos;
+    while ((pos = buffer.find("\n\n")) != std::string::npos) {
+        std::string frame = buffer.substr(0, pos);
+        buffer.erase(0, pos + 2);
+
+        size_t data_pos = frame.find("data: ");
+        if ( data_pos == std::string::npos )
+            continue;
+
+        std::string data = frame.substr(data_pos + 6);
+        try {
+            JSON j = JSON::parse(data);
+            if ( j.contains("done") && j["done"].to_bool()) {
+                done = true;
+                continue;
+            }
+            if ( j.contains("message")) {
+                JSON msg = j["message"];
+                if ( msg.contains("content") && msg["content"] != nullptr )
+                    out += msg["content"].to_string();
+            }
+        } catch ( const std::exception& e ) {
+            // ignore malformed chunks
+        }
+    }
+    return out;
+}
+
 } // namespace agent::providers
