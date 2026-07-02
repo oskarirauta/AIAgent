@@ -3,6 +3,7 @@ all: world
 CXX?=g++
 CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include -I./src
 LDFLAGS?=-L/usr/lib
+LIBS?=-lcurl -lncurses
 
 OBJS:= \
 	objs/main.o \
@@ -78,7 +79,7 @@ objs/tools_grep.o: src/tools/grep.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 
 agent: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(OBJS)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@;
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(LIBS) $^ -o $@;
 
 .PHONY: clean
 clean:
