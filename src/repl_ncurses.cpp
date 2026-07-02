@@ -80,6 +80,15 @@ static std::vector<std::string> wrap(const std::string& text, size_t width) {
     return lines;
 }
 
+static std::string box_hline(int cols) {
+    // Unicode box-drawing light horizontal: U+2500 (e2 94 80)
+    std::string s;
+    const char box[] = "\xe2\x94\x80";
+    for ( int i = 0; i < cols; ++i )
+        s += box;
+    return s;
+}
+
 void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, Language lang) {
     int x = 0;
     if ( is_prompt ) {
@@ -175,7 +184,7 @@ void NcursesRepl::draw() {
     mvprintw(0, 0, "AI Agent - ESC aborts AI, Ctrl-C quits");
     if ( has_colors()) attroff(COLOR_PAIR(1));
     attroff(A_BOLD);
-    mvprintw(1, 0, std::string(_cols, '-').c_str());
+    mvaddstr(1, 0, box_hline(_cols).c_str());
 
     // bottom layout (from bottom up):
     // _rows-1 : status bottom (left messages, right context usage)
@@ -232,7 +241,7 @@ void NcursesRepl::draw() {
     if ( ctx_x < _cols )
         mvaddstr(status_bottom_row, ctx_x, right_ctx.c_str());
 
-    mvprintw(status_bottom_row - 1, 0, std::string(_cols, '-').c_str());
+    mvaddstr(status_bottom_row - 1, 0, box_hline(_cols).c_str());
 
     // prompt with side padding
     mvaddstr(prompt_row, 1, "> ");
@@ -240,7 +249,7 @@ void NcursesRepl::draw() {
     move(prompt_row, 3 + (int)_input.size());
 
     // separator above prompt
-    mvprintw(prompt_sep_top, 0, std::string(_cols, '-').c_str());
+    mvaddstr(prompt_sep_top, 0, box_hline(_cols).c_str());
 
     // pending queue (if any)
     bool has_pending = false;
@@ -262,7 +271,7 @@ void NcursesRepl::draw() {
     if ( has_pending ) {
         const int queue_text_row = _rows - 6;
         const int queue_sep_top = _rows - 7;
-        mvprintw(queue_sep_top, 0, std::string(_cols, '-').c_str());
+        mvaddstr(queue_sep_top, 0, box_hline(_cols).c_str());
         if ( (int)pending_text.size() > _cols - 2 )
             pending_text = pending_text.substr(0, _cols - 5) + "...";
         mvaddstr(queue_text_row, 1, pending_text.c_str());
