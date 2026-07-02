@@ -408,6 +408,7 @@ void NcursesRepl::run() {
         int ch = getch();
 
         if ( ch != ERR ) {
+            logger::debug["ncurses"] << "key ch=" << ch << std::endl;
             if ( ch == 27 ) { // ESC
                 if ( _worker_busy.load(std::memory_order_relaxed)) {
                     _abort_current.store(true, std::memory_order_relaxed);
