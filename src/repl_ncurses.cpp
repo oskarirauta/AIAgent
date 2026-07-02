@@ -72,16 +72,17 @@ void NcursesRepl::setup() {
     curs_set(0); // hide hardware cursor; we draw a fake one
     if ( has_colors()) {
         start_color();
-        init_pair(1, COLOR_GREEN, COLOR_BLACK);   // title
-        init_pair(2, COLOR_YELLOW, COLOR_BLACK);  // status
-        init_pair(3, COLOR_CYAN, COLOR_BLACK);    // prompt
+        use_default_colors();
+        init_pair(1, COLOR_GREEN, -1);   // title
+        init_pair(2, COLOR_YELLOW, -1);  // status / prompt
+        init_pair(3, COLOR_CYAN, -1);    // prompt (fallback)
         // syntax highlighting pairs (4-9)
-        init_pair(4, COLOR_BLUE, COLOR_BLACK);    // keyword
-        init_pair(5, COLOR_GREEN, COLOR_BLACK);   // string
-        init_pair(6, COLOR_WHITE, COLOR_BLACK);   // comment
-        init_pair(7, COLOR_YELLOW, COLOR_BLACK);  // number
-        init_pair(8, COLOR_MAGENTA, COLOR_BLACK); // type
-        init_pair(9, COLOR_CYAN, COLOR_BLACK);    // fence
+        init_pair(4, COLOR_BLUE, -1);    // keyword
+        init_pair(5, COLOR_GREEN, -1);   // string
+        init_pair(6, COLOR_WHITE, -1);   // comment
+        init_pair(7, COLOR_YELLOW, -1);  // number
+        init_pair(8, COLOR_MAGENTA, -1); // type
+        init_pair(9, COLOR_CYAN, -1);    // fence
     }
     getmaxyx(stdscr, _rows, _cols);
     _running = true;
