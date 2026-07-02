@@ -81,8 +81,64 @@ void NcursesRepl::draw() {
     attroff(A_BOLD);
     mvprintw(1, 0, std::string(_cols, '-').c_str());
 
-    int y = 2;
-    int available = _rows - y - 3; // reserve bottom rows for prompt + status
+    // bottom layout (from bottom up):
+    // _rows-1 : info bar
+    // _rows-2 : separator
+    // _rows-3 : prompt (with side padding)
+    // _rows-4 : separator
+    // if pending queue:
+    //   _rows-5 : queued messages
+    //   _rows-6 : separator
+    // conversation ends above that
+
+    const int info_row = _rows - 1;
+    const int prompt_row = _rows - 3;
+    const int prompt_sep_top = _rows - 4;
+    int conv_end = prompt_sep_top - 1;
+
+    // info bar
+    std::string info = " ESC=quit ";
+    mvaddstr(info_row, 0, info.c_str());
+    mvprintw(info_row - 1, 0, std::string(_cols, '-').c_str());
+
+    // prompt with side padding
+    mvaddstr(prompt_row, 1, "> ");
+    mvaddstr(prompt_row, 3, _input.c_str());
+    move(prompt_row, 3 + (int)_input.size());
+
+    // separator above prompt
+    mvprintw(prompt_sep_top, 0, std::string(_cols, '-').c_str());
+
+    // pending queue (if any)
+    bool has_pending = false;
+    std::string pending_text;
+    {
+        std::lock_guard<std::mutex> lock(_queue_mutex);
+        has_pending = !_pending_prompts.empty();
+        if ( has_pending ) {
+            std::vector<std::string> items;
+            auto tmp = _pending_prompts;
+            while ( !tmp.empty()) {
+                items.push_back(tmp.front());
+                tmp.pop();
+            }
+            pending_text = "Queued: " + common::join_vector(items, " | ");
+        }
+    }
+
+    if ( has_pending ) {
+        const int queue_text_row = _rows - 5;
+        const int queue_sep_top = _rows - 6;
+        mvprintw(queue_sep_top, 0, std::string(_cols, '-').c_str());
+        if ( (int)pending_text.size() > _cols - 2 )
+            pending_text = pending_text.substr(0, _cols - 5) + "...";
+        mvaddstr(queue_text_row, 1, pending_text.c_str());
+        conv_end = queue_sep_top - 1;
+    }
+
+    int available = conv_end - 2 + 1;
+    if ( available < 1 )
+        available = 1;
 
     // collect rendered lines from history + current streaming reply
     std::vector<std::pair<std::string, bool>> rendered; // text, is_prompt
@@ -106,6 +162,10 @@ void NcursesRepl::draw() {
             auto lines = wrap(text, _cols - 2);
             for ( const auto& l : lines )
                 rendered.push_back({ " " + l, false });
+        } else if ( role == "assistant" ) {
+            auto lines = wrap(text, _cols - 2);
+            for ( const auto& l : lines )
+                rendered.push_back({ " " + l, false });
         } else {
             auto lines = wrap(text, _cols - 2);
             for ( const auto& l : lines )
@@ -114,8 +174,9 @@ void NcursesRepl::draw() {
     }
 
     // show last N lines that fit
+    int y = 2;
     size_t start = rendered.size() > (size_t)available ? rendered.size() - available : 0;
-    for ( size_t i = start; i < rendered.size() && y < _rows - 3; i++, y++ ) {
+    for ( size_t i = start; i < rendered.size() && y <= conv_end; i++, y++ ) {
         if ( rendered[i].second ) {
             attron(A_BOLD);
             if ( has_colors()) attron(COLOR_PAIR(3));
@@ -127,19 +188,14 @@ void NcursesRepl::draw() {
         }
     }
 
-    // status line
-    if ( _state == State::processing ) {
+    // status line inside conversation area
+    if ( _state == State::processing && y <= conv_end ) {
         attron(A_BOLD);
         if ( has_colors()) attron(COLOR_PAIR(2));
-        mvprintw(_rows - 2, 0, "AI is thinking...");
+        mvaddstr(y, 1, "AI is thinking...");
         if ( has_colors()) attroff(COLOR_PAIR(2));
         attroff(A_BOLD);
     }
-
-    // prompt line
-    mvaddstr(_rows - 1, 0, "> ");
-    mvaddstr(_rows - 1, 2, _input.c_str());
-    move(_rows - 1, 2 + (int)_input.size());
 
     refresh();
 }
