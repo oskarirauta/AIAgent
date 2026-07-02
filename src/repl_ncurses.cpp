@@ -241,15 +241,24 @@ std::vector<std::tuple<std::string, bool, Language>> NcursesRepl::build_lines(in
         }
     };
 
-    if ( !_current_reply.empty())
+    if ( !_current_reply.empty()) {
         append_block(_current_reply, false);
+    }
 
+    bool first_entry = true;
     for ( const auto& entry : _history ) {
         size_t pos = entry.find(':');
         if ( pos == std::string::npos )
             continue;
         std::string role = entry.substr(0, pos);
         std::string text = entry.substr(pos + 1);
+
+        // One blank line before every entry so the conversation breathes;
+        // also keeps the very first prompt from touching the top separator.
+        if ( !first_entry || !_current_reply.empty())
+            out.emplace_back("", false, Language::none);
+        first_entry = false;
+
         append_block(text, role == "prompt");
     }
 
@@ -447,14 +456,14 @@ void NcursesRepl::draw() {
         render_line(y, text, is_prompt, lang);
     }
 
-    // Show the thinking indicator on the last conversation row while processing.
-    if ( show_thinking ) {
+    // Show the thinking indicator right after the last rendered line.
+    if ( show_thinking && y <= conv_end ) {
         auto elapsed = std::chrono::steady_clock::now() - _animation_start;
         int seconds = static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
         std::string thinking = " [...] AI is thinking... (" + std::to_string(seconds) + "s) ";
         if ( (int)thinking.size() > _cols - 2 )
             thinking = thinking.substr(0, _cols - 5) + "...";
-        mvaddstr(conv_end, 1, thinking.c_str());
+        mvaddstr(y, 1, thinking.c_str());
     }
 
     refresh();
