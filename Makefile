@@ -10,6 +10,7 @@ OBJS:= \
 	objs/conversation.o \
 	objs/repl.o \
 	objs/repl_ncurses.o \
+	objs/signal_handler.o \
 	objs/api_client.o \
 	objs/provider.o \
 	objs/openai.o \
@@ -27,6 +28,7 @@ LOGGER_DIR:=logger
 THROWS_DIR:=throws
 JSON_DIR:=json
 SIGNAL_DIR:=signal
+PROCESS_DIR:=process
 
 include $(USAGECPP_DIR)/Makefile.inc
 include $(COMMON_DIR)/Makefile.inc
@@ -34,6 +36,7 @@ include $(LOGGER_DIR)/Makefile.inc
 include $(THROWS_DIR)/Makefile.inc
 include $(JSON_DIR)/Makefile.inc
 include $(SIGNAL_DIR)/Makefile.inc
+include $(PROCESS_DIR)/Makefile.inc
 
 LDFLAGS += -lcurl -lncurses
 
@@ -50,6 +53,8 @@ objs/conversation.o: src/conversation.cpp
 objs/repl.o: src/repl.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/repl_ncurses.o: src/repl_ncurses.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/signal_handler.o: src/signal_handler.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/api_client.o: src/api/client.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
@@ -72,7 +77,7 @@ objs/tools_list_directory.o: src/tools/list_directory.cpp
 objs/tools_grep.o: src/tools/grep.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 
-agent: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(OBJS)
+agent: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@;
 
 .PHONY: clean
