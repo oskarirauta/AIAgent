@@ -623,8 +623,8 @@ void NcursesRepl::run() {
                 logger::info["ncurses"] << "backspace ch=" << ch << " (KEY_BACKSPACE=" << KEY_BACKSPACE << ") _cursor=" << _cursor << " input_size=" << _input.size() << std::endl;
                 if ( _cursor > 0 ) {
                     // erase one UTF-8 character backwards
-                    size_t prev = _cursor;
-                    while ( prev > 0 && (static_cast<unsigned char>(_input[prev - 1]) & 0xC0) == 0x80 )
+                    size_t prev = _cursor - 1;
+                    while ( prev > 0 && (static_cast<unsigned char>(_input[prev]) & 0xC0) == 0x80 )
                         --prev;
                     logger::info["ncurses"] << "backspace erase start prev=" << prev << " count=" << (_cursor - prev) << std::endl;
                     _input.erase(prev, _cursor - prev);
