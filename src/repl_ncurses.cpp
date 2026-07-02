@@ -119,11 +119,11 @@ void NcursesRepl::draw() {
         if ( rendered[i].second ) {
             attron(A_BOLD);
             if ( has_colors()) attron(COLOR_PAIR(3));
-            mvprintw(y, 0, rendered[i].first.c_str());
+            mvaddstr(y, 0, rendered[i].first.c_str());
             if ( has_colors()) attroff(COLOR_PAIR(3));
             attroff(A_BOLD);
         } else {
-            mvprintw(y, 0, rendered[i].first.c_str());
+            mvaddstr(y, 0, rendered[i].first.c_str());
         }
     }
 
@@ -137,8 +137,8 @@ void NcursesRepl::draw() {
     }
 
     // prompt line
-    mvprintw(_rows - 1, 0, "> ");
-    mvprintw(_rows - 1, 2, _input.c_str());
+    mvaddstr(_rows - 1, 0, "> ");
+    mvaddstr(_rows - 1, 2, _input.c_str());
     move(_rows - 1, 2 + (int)_input.size());
 
     refresh();
