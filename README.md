@@ -14,6 +14,7 @@ Philosophy: **Support enough — not everything.**
   - `run_command`
   - `list_directory`
   - `grep`
+- Streaming responses in REPL
 - Single-prompt mode and interactive REPL (ncurses UI with line editing and history)
 - Graceful shutdown on SIGINT / SIGTERM
 - Long-term memory from `home_dir/memories/`
