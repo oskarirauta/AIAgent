@@ -9,6 +9,7 @@
 #include "agent/repl_ncurses.hpp"
 #include "agent/signal_handler.hpp"
 #include "agent/memory.hpp"
+#include "agent/text_utils.hpp"
 
 namespace agent {
 
@@ -58,7 +59,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
 
             _client.post_stream(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), body,
                 [&](const std::string& chunk) {
-                    std::string text = _provider->parse_stream(chunk, buffer, done);
+                    std::string text = agent::normalize_text(_provider->parse_stream(chunk, buffer, done));
                     if ( !text.empty()) {
                         full_reply += text;
                         stream_cb(text);
@@ -77,10 +78,11 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         if ( !resp.success )
             throws << "provider response error: " << resp.message << std::endl;
 
-        _conversation.add_assistant(resp.message);
+        std::string normalized = agent::normalize_text(resp.message);
+        _conversation.add_assistant(normalized);
 
         if ( resp.tool_calls.empty())
-            return resp.message;
+            return normalized;
 
         for ( const auto& tc : resp.tool_calls ) {
 

@@ -17,6 +17,7 @@ OBJS:= \
 	objs/repl.o \
 	objs/repl_ncurses.o \
 	objs/syntax_highlighter.o \
+	objs/text_utils.o \
 	objs/signal_handler.o \
 	objs/api_client.o \
 	objs/provider.o \
@@ -66,6 +67,8 @@ objs/repl.o: src/repl.cpp
 objs/repl_ncurses.o: src/repl_ncurses.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/syntax_highlighter.o: src/syntax_highlighter.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/text_utils.o: src/text_utils.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/signal_handler.o: src/signal_handler.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
