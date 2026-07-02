@@ -231,7 +231,7 @@ std::vector<std::tuple<std::string, bool, Language>> NcursesRepl::build_lines(in
                 continue;
             }
 
-            std::string prefix = is_prompt ? ( first ? "> " : "  " ) : " ";
+            std::string prefix = is_prompt ? ( first ? "> " : "  " ) : "  ";
             auto wrapped = wrap(line, width - (int)prefix.size());
             for ( const auto& w : wrapped ) {
                 out.emplace_back(prefix + w, is_prompt, lang);
@@ -245,7 +245,6 @@ std::vector<std::tuple<std::string, bool, Language>> NcursesRepl::build_lines(in
         append_block(_current_reply, false);
     }
 
-    bool first_entry = true;
     for ( const auto& entry : _history ) {
         size_t pos = entry.find(':');
         if ( pos == std::string::npos )
@@ -255,9 +254,7 @@ std::vector<std::tuple<std::string, bool, Language>> NcursesRepl::build_lines(in
 
         // One blank line before every entry so the conversation breathes;
         // also keeps the very first prompt from touching the top separator.
-        if ( !first_entry || !_current_reply.empty())
-            out.emplace_back("", false, Language::none);
-        first_entry = false;
+        out.emplace_back("", false, Language::none);
 
         append_block(text, role == "prompt");
     }
