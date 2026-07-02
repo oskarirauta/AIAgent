@@ -47,6 +47,7 @@ private:
     int _cols = 0;
 
     State _state = State::idle;
+    std::atomic<bool> _abort_current{false};
 
     // Worker thread for the blocking LLM calls.
     std::thread _worker;

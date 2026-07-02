@@ -7,10 +7,20 @@
 namespace agent {
 
 std::atomic<bool> running{true};
+std::atomic<int> sigint_count{0};
 
 static void signal_handler(int signum) {
-    logger::info["signal"] << "received " << SIG::to_string(signum) << ", shutting down" << std::endl;
-    running.store(false, std::memory_order_relaxed);
+    if ( signum == SIGINT || signum == SIGTERM ) {
+        int count = sigint_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if ( count >= 2 ) {
+            logger::warning["signal"] << "received second " << SIG::to_string(signum) << ", exiting immediately" << std::endl;
+            std::exit(1);
+        }
+        logger::info["signal"] << "received " << SIG::to_string(signum) << ", press again to force quit" << std::endl;
+        running.store(false, std::memory_order_relaxed);
+    } else {
+        // ignore broken pipe
+    }
 }
 
 void install_signal_handlers() {

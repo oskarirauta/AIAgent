@@ -76,7 +76,7 @@ void NcursesRepl::draw() {
 
     attron(A_BOLD);
     if ( has_colors()) attron(COLOR_PAIR(1));
-    mvprintw(0, 0, "AI Agent - type 'exit' or press ESC to quit");
+    mvprintw(0, 0, "AI Agent - ESC aborts AI, Ctrl-C quits");
     if ( has_colors()) attroff(COLOR_PAIR(1));
     attroff(A_BOLD);
     mvprintw(1, 0, std::string(_cols, '-').c_str());
@@ -97,7 +97,14 @@ void NcursesRepl::draw() {
     int conv_end = prompt_sep_top - 1;
 
     // info bar
-    std::string info = " ESC=quit ";
+    std::string info;
+    int sig_count = agent::sigint_count.load(std::memory_order_relaxed);
+    if ( sig_count >= 1 )
+        info = " Press Ctrl-C again to exit ";
+    else
+        info = " ESC=abort AI  Ctrl-C=quit ";
+    if ( (int)info.size() > _cols )
+        info = info.substr(0, _cols);
     mvaddstr(info_row, 0, info.c_str());
     mvprintw(info_row - 1, 0, std::string(_cols, '-').c_str());
 
@@ -261,8 +268,12 @@ void NcursesRepl::worker_loop() {
 
         logger::debug["ncurses"] << "worker processing line=[" << line << "]" << std::endl;
 
+        _abort_current.store(false, std::memory_order_relaxed);
+
         try {
             std::string reply = _callback(line, [this](const std::string& chunk) {
+                if ( _abort_current.load(std::memory_order_relaxed))
+                    return;
                 std::lock_guard<std::mutex> lock(_queue_mutex);
                 _ui_queue.push([this, chunk]() {
                     _current_reply += chunk;
@@ -273,6 +284,10 @@ void NcursesRepl::worker_loop() {
 
             std::lock_guard<std::mutex> lock(_queue_mutex);
             _ui_queue.push([this, reply]() {
+                if ( _abort_current.load(std::memory_order_relaxed)) {
+                    _current_reply.clear();
+                    return;
+                }
                 if ( !_current_reply.empty()) {
                     add_message("assistant", _current_reply);
                     _current_reply.clear();
@@ -317,7 +332,17 @@ void NcursesRepl::run() {
 
         if ( ch != ERR ) {
             if ( ch == 27 ) { // ESC
-                break;
+                if ( _worker_busy.load(std::memory_order_relaxed)) {
+                    _abort_current.store(true, std::memory_order_relaxed);
+                    {
+                        std::lock_guard<std::mutex> lock(_queue_mutex);
+                        while ( !_pending_prompts.empty())
+                            _pending_prompts.pop();
+                    }
+                    add_message("error", "AI request aborted");
+                } else {
+                    break;
+                }
             } else if ( ch == '\n' || ch == KEY_ENTER ) {
                 std::string line = common::trim_ws(_input);
                 logger::debug["ncurses"] << "enter line=[" << line << "] worker_busy=" << _worker_busy.load() << std::endl;
