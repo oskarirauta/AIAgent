@@ -17,7 +17,6 @@ static void signal_handler(int signum) {
             std::exit(1);
         }
         logger::info["signal"] << "received " << SIG::to_string(signum) << ", press again to force quit" << std::endl;
-        running.store(false, std::memory_order_relaxed);
     } else {
         // ignore broken pipe
     }

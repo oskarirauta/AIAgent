@@ -409,6 +409,9 @@ void NcursesRepl::process_ui_queue(bool local_change) {
     // Keep the "AI is thinking" animation alive even when no other updates arrive.
     if ( _state == State::processing )
         needs_draw = true;
+    // Ensure the "press Ctrl-C again to exit" message is shown after the first signal.
+    if ( agent::sigint_count.load(std::memory_order_relaxed) >= 1 )
+        needs_draw = true;
     if ( needs_draw )
         draw();
 }
@@ -530,7 +533,7 @@ void NcursesRepl::run() {
     _cursor = 0;
     draw();
 
-    while ( _running && agent::running.load(std::memory_order_relaxed)) {
+    while ( _running ) {
         int ch = getch();
         bool local_change = (ch != ERR);
 
@@ -562,9 +565,10 @@ void NcursesRepl::run() {
                     }
                     add_message("error", "AI request aborted");
                 }
-            } else if ( ch == 3 ) { // Ctrl-C as raw key; let the signal handler count it
-                if ( agent::running.load(std::memory_order_relaxed))
-                    agent::running.store(false, std::memory_order_relaxed);
+            } else if ( ch == 3 ) { // Ctrl-C as raw key
+                int count = agent::sigint_count.fetch_add(1, std::memory_order_relaxed) + 1;
+                if ( count >= 2 )
+                    std::exit(1);
             } else if ( ch == '\n' || ch == KEY_ENTER ) {
                 std::string line = common::trim_ws(_input);
                 logger::debug["ncurses"] << "enter line=[" << line << "] worker_busy=" << _worker_busy.load() << std::endl;
