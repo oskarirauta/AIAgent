@@ -2,6 +2,7 @@
 
 #include <ncurses.h>
 #include <cctype>
+#include <clocale>
 #include <algorithm>
 #include <filesystem>
 #include "common.hpp"
@@ -33,6 +34,9 @@ NcursesRepl::~NcursesRepl() {
 }
 
 void NcursesRepl::setup() {
+    // Enable the user's locale so UTF-8 and wide-character rendering work.
+    std::setlocale(LC_ALL, "");
+
     // Redirect all logger output to a file so it does not corrupt the ncurses screen.
     std::string log_dir = _config.home_dir;
     std::string log_path = log_dir + "/agent.log";
@@ -110,8 +114,12 @@ static std::vector<std::string> wrap(const std::string& text, size_t width) {
 }
 
 static std::string box_hline(int cols) {
-    // Use plain ASCII dash so the separator works on every terminal/locale.
-    return std::string(cols, '-');
+    // Unicode box-drawing light horizontal: U+2500 (e2 94 80)
+    std::string s;
+    const char box[] = "\xe2\x94\x80";
+    for ( int i = 0; i < cols; ++i )
+        s += box;
+    return s;
 }
 
 // Return the largest byte count <= max_bytes that does not split a UTF-8 character.

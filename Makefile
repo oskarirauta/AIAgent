@@ -6,7 +6,7 @@ LDFLAGS?=-L/usr/lib
 
 # Prefer pkg-config for curl/ncurses when available, fallback to plain flags.
 CURL_LIBS := $(shell pkg-config --libs libcurl 2>/dev/null || echo -lcurl)
-NCURSES_LIBS := $(shell pkg-config --libs ncursesw 2>/dev/null || pkg-config --libs ncurses 2>/dev/null || echo -lncurses)
+NCURSES_LIBS := $(shell pkg-config --libs ncursesw 2>/dev/null || pkg-config --libs ncurses 2>/dev/null || echo -lncursesw)
 LIBS?=$(CURL_LIBS) $(NCURSES_LIBS)
 
 OBJS:= \
