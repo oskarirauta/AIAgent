@@ -3,7 +3,7 @@
 #include <map>
 #include <memory>
 #include <string>
-#include "tool.hpp"
+#include "agent/tools/tool.hpp"
 
 namespace agent::tools {
 

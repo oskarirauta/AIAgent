@@ -1,6 +1,6 @@
 #pragma once
 
-#include "openai.hpp"
+#include "agent/providers/openai.hpp"
 
 namespace agent::providers {
 

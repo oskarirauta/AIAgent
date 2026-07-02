@@ -1,15 +1,17 @@
 #pragma once
 
-#include "provider.hpp"
+#include "agent/providers/provider.hpp"
 
 namespace agent::providers {
 
-class Ollama : public Provider {
+class Anthropic : public Provider {
 public:
-    Ollama(const Config& cfg) : Provider(cfg) {}
+    Anthropic(const Config& cfg) : Provider(cfg) {}
 
-    std::string name() const override { return "ollama"; }
+    std::string name() const override { return "anthropic"; }
     std::string endpoint() const override { return _config.api_url; }
+    std::string auth_header() const override { return "x-api-key"; }
+    std::string auth_value() const override { return _config.api_key; }
     bool supports_streaming() const override { return true; }
     std::string parse_stream(const std::string& chunk, std::string& buffer, bool& done) override;
 
@@ -19,6 +21,7 @@ public:
 
 private:
     JSON message_to_json(const Message& msg);
+    JSON convert_tools(const JSON& tools_schema);
 };
 
 } // namespace agent::providers

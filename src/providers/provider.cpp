@@ -1,9 +1,9 @@
-#include "provider.hpp"
+#include "agent/providers/provider.hpp"
 
-#include "openai.hpp"
-#include "ollama.hpp"
-#include "anthropic.hpp"
-#include "moonshot.hpp"
+#include "agent/providers/openai.hpp"
+#include "agent/providers/ollama.hpp"
+#include "agent/providers/anthropic.hpp"
+#include "agent/providers/moonshot.hpp"
 #include "throws.hpp"
 
 namespace agent::providers {

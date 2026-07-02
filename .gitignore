@@ -68,5 +68,5 @@ Testing/
 .cache/
 
 objs/
-agent
+/agent
 test_runner

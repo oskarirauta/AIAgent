@@ -1,4 +1,4 @@
-#include "ollama.hpp"
+#include "agent/providers/ollama.hpp"
 
 #include "throws.hpp"
 #include "logger.hpp"

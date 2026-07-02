@@ -4,9 +4,9 @@
 
 #include "usage.hpp"
 #include "logger.hpp"
-#include "config.hpp"
-#include "repl.hpp"
-#include "signal_handler.hpp"
+#include "agent/config.hpp"
+#include "agent/repl.hpp"
+#include "agent/signal_handler.hpp"
 
 static void set_log_level(const std::string& s) {
     std::string lvl = common::to_lower(s);

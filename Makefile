@@ -1,7 +1,7 @@
 all: world
 
 CXX?=g++
-CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include -I./src
+CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include
 LDFLAGS?=-L/usr/lib
 LIBS?=-lcurl -lncurses
 

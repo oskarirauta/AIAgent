@@ -2,11 +2,11 @@
 
 #include <string>
 #include <memory>
-#include "config.hpp"
-#include "api/client.hpp"
-#include "conversation.hpp"
-#include "providers/provider.hpp"
-#include "tools/registry.hpp"
+#include "agent/config.hpp"
+#include "agent/api/client.hpp"
+#include "agent/conversation.hpp"
+#include "agent/providers/provider.hpp"
+#include "agent/tools/registry.hpp"
 
 namespace agent {
 

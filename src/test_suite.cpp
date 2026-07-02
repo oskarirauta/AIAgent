@@ -3,15 +3,15 @@
 #include <cassert>
 #include <filesystem>
 
-#include "config.hpp"
-#include "conversation.hpp"
-#include "memory.hpp"
-#include "providers/provider.hpp"
-#include "providers/openai.hpp"
-#include "providers/ollama.hpp"
-#include "providers/anthropic.hpp"
-#include "providers/moonshot.hpp"
-#include "tools/registry.hpp"
+#include "agent/config.hpp"
+#include "agent/conversation.hpp"
+#include "agent/memory.hpp"
+#include "agent/providers/provider.hpp"
+#include "agent/providers/openai.hpp"
+#include "agent/providers/ollama.hpp"
+#include "agent/providers/anthropic.hpp"
+#include "agent/providers/moonshot.hpp"
+#include "agent/tools/registry.hpp"
 
 static int passed = 0;
 static int failed = 0;

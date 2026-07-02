@@ -1,4 +1,4 @@
-#include "conversation.hpp"
+#include "agent/conversation.hpp"
 
 #include <filesystem>
 #include <fstream>

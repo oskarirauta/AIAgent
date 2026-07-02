@@ -1,14 +1,14 @@
 #pragma once
 
-#include "provider.hpp"
+#include "agent/providers/provider.hpp"
 
 namespace agent::providers {
 
-class OpenAI : public Provider {
+class Ollama : public Provider {
 public:
-    OpenAI(const Config& cfg) : Provider(cfg) {}
+    Ollama(const Config& cfg) : Provider(cfg) {}
 
-    std::string name() const override { return "openai"; }
+    std::string name() const override { return "ollama"; }
     std::string endpoint() const override { return _config.api_url; }
     bool supports_streaming() const override { return true; }
     std::string parse_stream(const std::string& chunk, std::string& buffer, bool& done) override;

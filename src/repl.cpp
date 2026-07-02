@@ -1,4 +1,4 @@
-#include "repl.hpp"
+#include "agent/repl.hpp"
 
 #include <iostream>
 #include <unistd.h>
@@ -6,9 +6,9 @@
 #include "logger.hpp"
 #include "common.hpp"
 #include "throws.hpp"
-#include "repl_ncurses.hpp"
-#include "signal_handler.hpp"
-#include "memory.hpp"
+#include "agent/repl_ncurses.hpp"
+#include "agent/signal_handler.hpp"
+#include "agent/memory.hpp"
 
 namespace agent {
 

@@ -1,12 +1,12 @@
-#include "registry.hpp"
+#include "agent/tools/registry.hpp"
 
 #include "throws.hpp"
 #include "logger.hpp"
-#include "read_file.hpp"
-#include "write_file.hpp"
-#include "run_command.hpp"
-#include "list_directory.hpp"
-#include "grep.hpp"
+#include "agent/tools/read_file.hpp"
+#include "agent/tools/write_file.hpp"
+#include "agent/tools/run_command.hpp"
+#include "agent/tools/list_directory.hpp"
+#include "agent/tools/grep.hpp"
 
 namespace agent::tools {
 

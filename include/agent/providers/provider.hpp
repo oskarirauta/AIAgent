@@ -4,8 +4,8 @@
 #include <vector>
 #include <memory>
 #include "json.hpp"
-#include "conversation.hpp"
-#include "config.hpp"
+#include "agent/conversation.hpp"
+#include "agent/config.hpp"
 
 namespace agent::providers {
 

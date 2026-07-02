@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tool.hpp"
+#include "agent/tools/tool.hpp"
 
 namespace agent::tools {
 

@@ -1,10 +1,10 @@
-#include "repl_ncurses.hpp"
+#include "agent/repl_ncurses.hpp"
 
 #include <ncurses.h>
 #include <cctype>
 #include <algorithm>
 #include "common.hpp"
-#include "signal_handler.hpp"
+#include "agent/signal_handler.hpp"
 
 namespace agent {
 
