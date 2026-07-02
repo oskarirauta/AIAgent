@@ -14,7 +14,9 @@ static void signal_handler(int signum) {
         int count = sigint_count.fetch_add(1, std::memory_order_relaxed) + 1;
         if ( count >= 2 ) {
             logger::warning["signal"] << "received second " << SIG::to_string(signum) << ", exiting immediately" << std::endl;
-            std::exit(1);
+            // Ask the main loop to shut down cleanly so endwin() is called.
+            running.store(false, std::memory_order_relaxed);
+            return;
         }
         logger::info["signal"] << "received " << SIG::to_string(signum) << ", press again to force quit" << std::endl;
     } else {

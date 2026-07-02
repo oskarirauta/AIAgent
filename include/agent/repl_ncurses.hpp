@@ -28,6 +28,7 @@ public:
 
     void run();
     bool confirm(const std::string& action);
+    void teardown();
 
 private:
     enum class State {
@@ -36,7 +37,6 @@ private:
     };
 
     void setup();
-    void teardown();
     void draw();
     void add_message(const std::string& role, const std::string& text);
     void render_line(int row, const std::string& text, bool is_prompt, Language lang);

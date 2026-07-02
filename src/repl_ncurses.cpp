@@ -3,6 +3,7 @@
 #include <ncurses.h>
 #include <cctype>
 #include <clocale>
+#include <cstdlib>
 #include <cwchar>
 #include <algorithm>
 #include <filesystem>
@@ -13,6 +14,15 @@
 #include "agent/signal_handler.hpp"
 
 namespace agent {
+
+// Global pointer used by atexit() to ensure endwin() is called even if the
+// process exits through std::exit() before reaching NcursesRepl::teardown().
+static NcursesRepl* g_active_repl = nullptr;
+
+static void ncurses_atexit_cleanup() {
+    if ( g_active_repl )
+        g_active_repl->teardown();
+}
 
 NcursesRepl::NcursesRepl(callback_t cb, const Config& config, const Conversation& conversation)
     : _callback(std::move(cb)), _config(config), _conversation(conversation) {
@@ -74,9 +84,12 @@ void NcursesRepl::setup() {
     }
     getmaxyx(stdscr, _rows, _cols);
     _running = true;
+    g_active_repl = this;
+    std::atexit(ncurses_atexit_cleanup);
 }
 
 void NcursesRepl::teardown() {
+    g_active_repl = nullptr;
     if ( _running ) {
         clear();
         refresh();
@@ -247,6 +260,13 @@ std::vector<std::tuple<std::string, bool, Language>> NcursesRepl::build_lines(in
 }
 
 void NcursesRepl::draw() {
+    {
+        std::string dbg = "draw _history.size=" + std::to_string(_history.size());
+        for ( size_t i = 0; i < _history.size(); ++i )
+            dbg += " [" + std::to_string(i) + "]=" + _history[i];
+        logger::info["ncurses"] << dbg << std::endl;
+    }
+
     clear();
     getmaxyx(stdscr, _rows, _cols);
 
@@ -569,7 +589,7 @@ void NcursesRepl::run() {
     _cursor = 0;
     draw();
 
-    while ( _running ) {
+    while ( _running && agent::running.load(std::memory_order_relaxed)) {
         int ch = getch();
         bool local_change = (ch != ERR);
 
@@ -603,8 +623,10 @@ void NcursesRepl::run() {
                 }
             } else if ( ch == 3 ) { // Ctrl-C as raw key
                 int count = agent::sigint_count.fetch_add(1, std::memory_order_relaxed) + 1;
-                if ( count >= 2 )
-                    std::exit(1);
+                if ( count >= 2 ) {
+                    _running = false;
+                    break;
+                }
             } else if ( ch == '\n' || ch == KEY_ENTER ) {
                 std::string line = common::trim_ws(_input);
                 logger::debug["ncurses"] << "enter line=[" << line << "] worker_busy=" << _worker_busy.load() << std::endl;
