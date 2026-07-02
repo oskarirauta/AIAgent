@@ -1,3 +1,5 @@
+[![License:MIT](https://img.shields.io/badge/License-MIT-blue?style=plastic)](LICENSE) [![CI build](https://img.shields.io/github/actions/workflow/status/oskarirauta/AIAgent/build.yml?style=plastic&label=build)](https://github.com/oskarirauta/AIAgent/actions/workflows/build.yml)
+
 # AI Agent
 
 C++17 Linux CLI AI assistant — a local, minimal but capable alternative to tools like Kimi Code, Claude Code, or OpenCode.
