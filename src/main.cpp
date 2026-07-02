@@ -20,29 +20,29 @@ static void set_log_level(const std::string& s) {
     else logger::loglevel(logger::info);
 }
 
+static usage_t make_usage(int argc, char **argv) {
+
+    return usage_t{
+        { argc, argv },
+        { "AI Agent", "\nversion ", "0.1.0", "author ", "Oskari Rauta", "copyright ", "2026, Oskari Rauta", "\nusage:\n   ", "[options] [prompt]", "\nOptions:", "\nUniversal Linux CLI AI Agent\n" },
+        {
+            { "help", { "h", "help", "show usage help" }},
+            { "version", { "v", "version", "show version" }},
+            { "config", { "c", "config", "path to config file", usage_t::OPTIONAL }},
+            { "provider", { "p", "provider", "ai provider: openai or ollama", usage_t::OPTIONAL }},
+            { "model", { "m", "model", "model name", usage_t::OPTIONAL }},
+            { "api_url", { "u", "api-url", "api endpoint url", usage_t::OPTIONAL }},
+            { "api_key", { "k", "api-key", "api key / token", usage_t::OPTIONAL }},
+            { "log_level", { "l", "log-level", "quiet/error/warning/notice/info/verbose/vverbose/debug", usage_t::OPTIONAL }},
+            { "system_prompt", { "s", "system-prompt", "system prompt message", usage_t::OPTIONAL }},
+            { "prompt", { "P", "prompt", "single prompt mode, exit after answer", usage_t::OPTIONAL }}
+        }
+    };
+}
+
 int main(int argc, char **argv) {
 
-    usage_t usage;
-    usage.args = { argc, argv };
-    usage.info.name = "AI Agent";
-    usage.info.version = "0.1.0";
-    usage.info.author = "Oskari Rauta";
-    usage.info.copyright = "2026, Oskari Rauta";
-    usage.info.usage = "[options] [prompt]";
-    usage.info.description = "\nUniversal Linux CLI AI Agent\n";
-
-    usage.options = {
-        { "help", { "h", "help", "show usage help" }},
-        { "version", { "v", "version", "show version" }},
-        { "config", { "c", "config", "path to config file", usage_t::OPTIONAL }},
-        { "provider", { "p", "provider", "ai provider: openai or ollama", usage_t::OPTIONAL }},
-        { "model", { "m", "model", "model name", usage_t::OPTIONAL }},
-        { "api_url", { "u", "api-url", "api endpoint url", usage_t::OPTIONAL }},
-        { "api_key", { "k", "api-key", "api key / token", usage_t::OPTIONAL }},
-        { "log_level", { "l", "log-level", "quiet/error/warning/notice/info/verbose/vverbose/debug", usage_t::OPTIONAL }},
-        { "system_prompt", { "s", "system-prompt", "system prompt message", usage_t::OPTIONAL }},
-        { "prompt", { "P", "prompt", "single prompt mode, exit after answer", usage_t::OPTIONAL }}
-    };
+    usage_t usage = make_usage(argc, argv);
 
     if ( !usage.validated ) {
         std::cerr << usage.title() << "\n" << usage.errors() << std::endl;
