@@ -12,6 +12,8 @@ NcursesRepl::NcursesRepl(callback_t cb) : _callback(std::move(cb)) {}
 
 NcursesRepl::~NcursesRepl() {
     teardown();
+    if ( _worker.joinable())
+        _worker.join();
 }
 
 void NcursesRepl::setup() {
@@ -19,6 +21,7 @@ void NcursesRepl::setup() {
     raw();
     noecho();
     keypad(stdscr, TRUE);
+    timeout(50); // non-blocking input so the UI can update while the worker runs
     if ( has_colors()) {
         start_color();
         init_pair(1, COLOR_GREEN, COLOR_BLACK);
@@ -127,6 +130,73 @@ void NcursesRepl::draw() {
     refresh();
 }
 
+void NcursesRepl::process_ui_queue() {
+    std::queue<std::function<void()>> updates;
+    {
+        std::lock_guard<std::mutex> lock(_queue_mutex);
+        updates.swap(_ui_queue);
+    }
+    while ( !updates.empty()) {
+        updates.front()();
+        updates.pop();
+        move(_rows - 1, 2 + (int)_input.size());
+        refresh();
+    }
+}
+
+void NcursesRepl::submit(const std::string& line) {
+    _worker_busy = true;
+    _current_reply.clear();
+    if ( _worker.joinable())
+        _worker.join();
+
+    _worker = std::thread([this, line]() {
+        try {
+            std::string reply = _callback(line, [this](const std::string& chunk) {
+                std::lock_guard<std::mutex> lock(_queue_mutex);
+                _ui_queue.push([this, chunk]() {
+                    _current_reply += chunk;
+                    draw();
+                });
+                _queue_cv.notify_one();
+            });
+
+            std::lock_guard<std::mutex> lock(_queue_mutex);
+            _ui_queue.push([this, reply]() {
+                if ( !_current_reply.empty()) {
+                    add_message("assistant", _current_reply);
+                    _current_reply.clear();
+                } else if ( !reply.empty()) {
+                    add_message("assistant", reply);
+                }
+            });
+        } catch ( const std::exception& e ) {
+            std::lock_guard<std::mutex> lock(_queue_mutex);
+            _ui_queue.push([this, msg = std::string(e.what())]() {
+                add_message("error", msg);
+            });
+        }
+        _worker_busy = false;
+        _queue_cv.notify_one();
+    });
+}
+
+std::string NcursesRepl::read_utf8_char(int first_byte) {
+    std::string s(1, static_cast<char>(first_byte));
+    int remaining = 0;
+    if ( (first_byte & 0xE0) == 0xC0 ) remaining = 1;
+    else if ( (first_byte & 0xF0) == 0xE0 ) remaining = 2;
+    else if ( (first_byte & 0xF8) == 0xF0 ) remaining = 3;
+
+    for ( int i = 0; i < remaining; ++i ) {
+        int b = getch();
+        if ( b == ERR || (b & 0xC0) != 0x80 )
+            break;
+        s += static_cast<char>(b);
+    }
+    return s;
+}
+
 void NcursesRepl::run() {
 
     setup();
@@ -137,83 +207,92 @@ void NcursesRepl::run() {
     while ( _running && agent::running.load(std::memory_order_relaxed)) {
         int ch = getch();
 
-        if ( ch == ERR )
-            continue;
-
-        if ( ch == 27 ) { // ESC
-            break;
-        } else if ( ch == '\n' || ch == KEY_ENTER ) {
-            std::string line = common::trim_ws(_input);
-            if ( !line.empty()) {
-                add_message("prompt", line);
-                _prompt_history.push_back(line);
-                if ( line == "exit" || line == "quit" ) {
-                    break;
+        if ( ch != ERR ) {
+            if ( ch == 27 ) { // ESC
+                break;
+            } else if ( ch == '\n' || ch == KEY_ENTER ) {
+                if ( _worker_busy ) {
+                    add_message("error", "please wait for the current response to finish");
+                } else {
+                    std::string line = common::trim_ws(_input);
+                    if ( !line.empty()) {
+                        add_message("prompt", line);
+                        _prompt_history.push_back(line);
+                        if ( line == "exit" || line == "quit" ) {
+                            break;
+                        }
+                        submit(line);
+                        _history_index = _prompt_history.size();
+                    }
                 }
-                _current_reply.clear();
-                std::string reply = _callback(line, [this](const std::string& chunk) {
-                    _current_reply += chunk;
-                    draw();
-                    move(_rows - 1, 2 + (int)this->_input.size());
-                    refresh();
-                });
-                if ( !_current_reply.empty()) {
-                    add_message("assistant", _current_reply);
-                    _current_reply.clear();
-                } else if ( !reply.empty()) {
-                    add_message("assistant", reply);
-                }
-                _history_index = _prompt_history.size();
-                // Note: conversation save is handled by Repl after this callback returns
-            }
-            _input.clear();
-            cursor = 0;
-        } else if ( ch == KEY_BACKSPACE || ch == 127 || ch == '\b' ) {
-            if ( cursor > 0 ) {
-                _input.erase(cursor - 1, 1);
-                cursor--;
-            }
-        } else if ( ch == KEY_DC ) {
-            if ( cursor < (int)_input.size()) {
-                _input.erase(cursor, 1);
-            }
-        } else if ( ch == KEY_LEFT ) {
-            if ( cursor > 0 ) cursor--;
-        } else if ( ch == KEY_RIGHT ) {
-            if ( cursor < (int)_input.size()) cursor++;
-        } else if ( ch == KEY_HOME ) {
-            cursor = 0;
-        } else if ( ch == KEY_END ) {
-            cursor = (int)_input.size();
-        } else if ( ch == KEY_UP ) {
-            if ( !_prompt_history.empty() && _history_index > 0 ) {
-                _history_index--;
-                _input = _prompt_history[_history_index];
-                cursor = (int)_input.size();
-            }
-        } else if ( ch == KEY_DOWN ) {
-            if ( !_prompt_history.empty() && _history_index + 1 < _prompt_history.size()) {
-                _history_index++;
-                _input = _prompt_history[_history_index];
-                cursor = (int)_input.size();
-            } else if ( _history_index < _prompt_history.size()) {
-                _history_index = _prompt_history.size();
                 _input.clear();
                 cursor = 0;
+            } else if ( ch == KEY_BACKSPACE || ch == 127 || ch == '\b' ) {
+                if ( cursor > 0 ) {
+                    // erase one UTF-8 character backwards
+                    size_t prev = cursor;
+                    while ( prev > 0 && (static_cast<unsigned char>(_input[prev - 1]) & 0xC0) == 0x80 )
+                        --prev;
+                    _input.erase(prev, cursor - prev);
+                    cursor = static_cast<int>(prev);
+                }
+            } else if ( ch == KEY_DC ) {
+                if ( cursor < (int)_input.size()) {
+                    size_t next = cursor + 1;
+                    while ( next < _input.size() && (static_cast<unsigned char>(_input[next]) & 0xC0) == 0x80 )
+                        ++next;
+                    _input.erase(cursor, next - cursor);
+                }
+            } else if ( ch == KEY_LEFT ) {
+                if ( cursor > 0 ) {
+                    do { --cursor; } while ( cursor > 0 && (static_cast<unsigned char>(_input[cursor]) & 0xC0) == 0x80 );
+                }
+            } else if ( ch == KEY_RIGHT ) {
+                if ( cursor < (int)_input.size()) {
+                    do { ++cursor; } while ( cursor < (int)_input.size() && (static_cast<unsigned char>(_input[cursor]) & 0xC0) == 0x80 );
+                }
+            } else if ( ch == KEY_HOME ) {
+                cursor = 0;
+            } else if ( ch == KEY_END ) {
+                cursor = (int)_input.size();
+            } else if ( ch == KEY_UP ) {
+                if ( !_prompt_history.empty() && _history_index > 0 ) {
+                    _history_index--;
+                    _input = _prompt_history[_history_index];
+                    cursor = (int)_input.size();
+                }
+            } else if ( ch == KEY_DOWN ) {
+                if ( !_prompt_history.empty() && _history_index + 1 < _prompt_history.size()) {
+                    _history_index++;
+                    _input = _prompt_history[_history_index];
+                    cursor = (int)_input.size();
+                } else if ( _history_index < _prompt_history.size()) {
+                    _history_index = _prompt_history.size();
+                    _input.clear();
+                    cursor = 0;
+                }
+            } else if ( ch == KEY_RESIZE ) {
+                // handled by draw()
+            } else if ( ch >= 32 && ch < 127 ) { // printable ASCII
+                _input.insert(cursor, 1, static_cast<char>(ch));
+                cursor++;
+            } else if ( ch >= 128 && ch < 256 ) { // UTF-8 multibyte start
+                std::string utf8 = read_utf8_char(ch);
+                _input.insert(cursor, utf8);
+                cursor += (int)utf8.size();
             }
-        } else if ( ch == KEY_RESIZE ) {
-            // handled by draw()
-        } else if ( std::isprint(ch)) {
-            _input.insert(cursor, 1, (char)ch);
-            cursor++;
+
+            draw();
+            move(_rows - 1, 2 + cursor);
+            refresh();
         }
 
-        draw();
-        move(_rows - 1, 2 + cursor);
-        refresh();
+        process_ui_queue();
     }
 
     teardown();
+    if ( _worker.joinable())
+        _worker.join();
 }
 
 } // namespace agent

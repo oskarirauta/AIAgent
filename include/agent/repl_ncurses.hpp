@@ -1,7 +1,12 @@
 #pragma once
 
-#include <string>
+#include <atomic>
+#include <condition_variable>
 #include <functional>
+#include <mutex>
+#include <queue>
+#include <string>
+#include <thread>
 #include <vector>
 
 namespace agent {
@@ -20,6 +25,9 @@ private:
     void teardown();
     void draw();
     void add_message(const std::string& role, const std::string& text);
+    void process_ui_queue();
+    void submit(const std::string& line);
+    static std::string read_utf8_char(int first_byte);
 
     callback_t _callback;
     std::string _input;
@@ -30,6 +38,13 @@ private:
     bool _running = false;
     int _rows = 0;
     int _cols = 0;
+
+    // Worker thread for the blocking LLM call.
+    std::thread _worker;
+    std::mutex _queue_mutex;
+    std::condition_variable _queue_cv;
+    std::queue<std::function<void()>> _ui_queue;
+    std::atomic<bool> _worker_busy{false};
 };
 
 } // namespace agent
