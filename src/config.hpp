@@ -1,0 +1,24 @@
+#pragma once
+
+#include <string>
+#include <optional>
+#include "usage.hpp"
+
+namespace agent {
+
+class Config {
+public:
+    std::string provider = "openai";
+    std::string model = "gpt-4o-mini";
+    std::string api_url = "https://api.openai.com/v1/chat/completions";
+    std::string api_key;
+    std::string log_level = "info";
+    std::string system_prompt = "You are a helpful Linux CLI assistant.";
+
+    void load(const std::string& path);
+    void apply_cli(const usage_t& usage);
+
+    static std::string default_path();
+};
+
+} // namespace agent

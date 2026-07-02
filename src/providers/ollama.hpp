@@ -1,0 +1,22 @@
+#pragma once
+
+#include "provider.hpp"
+
+namespace agent::providers {
+
+class Ollama : public Provider {
+public:
+    Ollama(const Config& cfg) : Provider(cfg) {}
+
+    std::string name() const override { return "ollama"; }
+    std::string endpoint() const override { return _config.api_url; }
+
+    JSON build_request(const Conversation& conv, const JSON& tools_schema) override;
+    Response parse_response(const JSON& response) override;
+    JSON make_tool_result(const std::string& tool_call_id, const std::string& result) override;
+
+private:
+    JSON message_to_json(const Message& msg);
+};
+
+} // namespace agent::providers
