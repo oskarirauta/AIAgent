@@ -390,12 +390,14 @@ void NcursesRepl::draw() {
     std::string visible_input = _input.substr(0, visible_len);
     mvaddstr(prompt_row, 3, visible_input.c_str());
 
-    // fake cursor (hardware cursor is hidden)
+    // fake cursor (hardware cursor is hidden) - blinking full block
     int cursor_x = 3 + utf8_display_width(_input, std::min(_cursor, visible_len));
-    if ( cursor_x < _cols - 2 )
-        mvaddstr(prompt_row, cursor_x, "[_]");
-    else if ( cursor_x < _cols - 1 )
-        mvaddstr(prompt_row, cursor_x, "_");
+    const char block[] = "\xe2\x96\x88"; // U+2588 full block (ASCII 219 / CP437)
+    if ( cursor_x < _cols - 1 ) {
+        attron(A_BLINK);
+        mvaddstr(prompt_row, cursor_x, block);
+        attroff(A_BLINK);
+    }
 
     // separator above prompt
     mvaddstr(prompt_sep_top, 1, box_hline(_cols - 2).c_str());
