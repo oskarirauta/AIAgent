@@ -217,14 +217,28 @@ void NcursesRepl::draw() {
     // status bottom: left messages + right context
     int sig_count = agent::sigint_count.load(std::memory_order_relaxed);
     std::string left_msg;
-    if ( sig_count >= 1 )
+    bool italic = false;
+    if ( sig_count >= 1 ) {
         left_msg = " Press Ctrl-C again to exit ";
-    else if ( _abort_current.load(std::memory_order_relaxed))
+    } else if ( _abort_current.load(std::memory_order_relaxed)) {
         left_msg = " Aborting... ";
-    else if ( _state == State::processing )
-        left_msg = " AI is thinking... ";
-    else
+    } else if ( _state == State::processing ) {
+        italic = true;
+        auto elapsed = std::chrono::steady_clock::now() - _animation_start;
+        int frame = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() / 120);
+        const int slot_count = 4;
+        int pos = frame % (slot_count * 2);
+        if ( pos >= slot_count )
+            pos = slot_count * 2 - pos - 1;
+        std::string anim = "[";
+        anim.append(pos, ' ');
+        anim += '.';
+        anim.append(slot_count - pos, ' ');
+        anim += "]";
+        left_msg = " AI is thinking " + anim + " ";
+    } else {
         left_msg = " Ready ";
+    }
 
     size_t total_chars = 0;
     for ( const auto& m : _conversation.messages())
@@ -234,7 +248,11 @@ void NcursesRepl::draw() {
 
     if ( (int)left_msg.size() > _cols - 2 )
         left_msg = left_msg.substr(0, _cols - 2);
+    if ( italic )
+        attron(A_ITALIC);
     mvaddstr(status_bottom_row, 1, left_msg.c_str());
+    if ( italic )
+        attroff(A_ITALIC);
 
     int ctx_x = _cols - 1 - (int)right_ctx.size();
     if ( ctx_x < (int)left_msg.size() + 3 )
@@ -308,6 +326,7 @@ void NcursesRepl::process_ui_queue() {
         updates.front()();
         updates.pop();
     }
+    draw();
 }
 
 void NcursesRepl::submit(const std::string& line) {
@@ -351,7 +370,7 @@ void NcursesRepl::worker_loop() {
             line = _pending_prompts.front();
             _pending_prompts.pop();
             _state = State::processing;
-            _ui_queue.push([this]() { draw(); });
+            _animation_start = std::chrono::steady_clock::now();
             _queue_cv.notify_one();
         }
 
@@ -366,7 +385,6 @@ void NcursesRepl::worker_loop() {
                 std::lock_guard<std::mutex> lock(_queue_mutex);
                 _ui_queue.push([this, chunk]() {
                     _current_reply += chunk;
-                    draw();
                 });
                 _queue_cv.notify_one();
             });
@@ -502,11 +520,6 @@ void NcursesRepl::run() {
                 _input.insert(_cursor, utf8);
                 _cursor += (int)utf8.size();
             }
-
-            draw();
-            const int prompt_row = _rows - 4;
-            move(prompt_row, 3 + _cursor);
-            refresh();
         }
 
         process_ui_queue();
