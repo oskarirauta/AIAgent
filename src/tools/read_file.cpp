@@ -23,8 +23,16 @@ static std::string normalize_text(std::string s) {
         { "\xe2\x80\x9c", "\"" },  // left double quotation mark
         { "\xe2\x80\x9d", "\"" },  // right double quotation mark
         { "\xe2\x80\xa6", "..." },  // horizontal ellipsis
+        { "\xe2\x80\xa2", "*" },    // bullet
+        { "\xe2\x86\x92", "->" },   // rightwards arrow
+        { "\xe2\x86\x90", "<-" },   // leftwards arrow
+        { "\xe2\x9c\x85", "[x]" },  // white heavy check mark
+        { "\xe2\x9a\xa0", "(!)" },  // warning sign
+        { "\xe2\x84\xa2", "(TM)" },  // trade mark sign
         { "\xc2\xab", "<<" },       // left-pointing double angle quotation mark
         { "\xc2\xbb", ">>" },       // right-pointing double angle quotation mark
+        { "\xc2\xa9", "(C)" },      // copyright sign
+        { "\xc2\xae", "(R)" },      // registered sign
         { "\xc2\xa0", " " },        // non-breaking space
     };
     for ( const auto& r : reps ) {
