@@ -25,16 +25,17 @@ Requirements:
 - C++17 compiler
 - libcurl development files
 - libncurses development files
+- process_cpp and signal submodules initialized
 - Make
 
 ```bash
 make
 ```
 
-If `common/tsl` or `common/rva` submodules are empty, initialize them first:
+If `common/tsl`, `common/rva`, `signal` or `process` submodules are empty, initialize them first:
 
 ```bash
-cd common && git submodule update --init --recursive
+git submodule update --init --recursive
 ```
 
 ## Configuration
