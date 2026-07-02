@@ -561,11 +561,9 @@ void NcursesRepl::run() {
                     }
                     add_message("error", "AI request aborted");
                 }
-            } else if ( ch == 3 ) { // Ctrl-C as raw key: match signal handler semantics
-                int count = agent::sigint_count.fetch_add(1, std::memory_order_relaxed) + 1;
-                if ( count >= 2 )
-                    std::exit(1);
-                agent::running.store(false, std::memory_order_relaxed);
+            } else if ( ch == 3 ) { // Ctrl-C as raw key; let the signal handler count it
+                if ( agent::running.load(std::memory_order_relaxed))
+                    agent::running.store(false, std::memory_order_relaxed);
             } else if ( ch == '\n' || ch == KEY_ENTER ) {
                 std::string line = common::trim_ws(_input);
                 logger::debug["ncurses"] << "enter line=[" << line << "] worker_busy=" << _worker_busy.load() << std::endl;
