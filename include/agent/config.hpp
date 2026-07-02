@@ -10,7 +10,7 @@ class Config {
 public:
     std::string provider = "openai";
     std::string model = "gpt-4o-mini";
-    std::string api_url = "https://api.openai.com/v1/chat/completions";
+    std::string api_url = "https://api.openai.com/v1";
     std::string api_key;
     std::string log_level = "info";
     std::string system_prompt = "You are a helpful Linux CLI assistant.";

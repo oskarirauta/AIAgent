@@ -42,6 +42,12 @@ std::string Client::post(const std::string& url, const std::string& auth_header,
     if ( !auth_header.empty() && !auth_value.empty()) {
         std::string auth = auth_header + ": " + auth_value;
         headers = curl_slist_append(headers, auth.c_str());
+        std::string masked = auth_value.size() > 12
+            ? auth_value.substr(0, 6) + "..." + auth_value.substr(auth_value.size() - 4)
+            : std::string(auth_value.size(), '*');
+        logger::debug["http"] << "auth header: " << auth_header << ": " << masked << std::endl;
+    } else {
+        logger::debug["http"] << "no auth header added (header=" << auth_header << ", value empty=" << auth_value.empty() << ")" << std::endl;
     }
 
     curl_easy_setopt(c, CURLOPT_URL, url.c_str());
@@ -81,6 +87,12 @@ void Client::post_stream(const std::string& url, const std::string& auth_header,
     if ( !auth_header.empty() && !auth_value.empty()) {
         std::string auth = auth_header + ": " + auth_value;
         headers = curl_slist_append(headers, auth.c_str());
+        std::string masked = auth_value.size() > 12
+            ? auth_value.substr(0, 6) + "..." + auth_value.substr(auth_value.size() - 4)
+            : std::string(auth_value.size(), '*');
+        logger::debug["http"] << "auth header: " << auth_header << ": " << masked << std::endl;
+    } else {
+        logger::debug["http"] << "no auth header added (header=" << auth_header << ", value empty=" << auth_value.empty() << ")" << std::endl;
     }
 
     auto stream_callback = [](char* ptr, size_t size, size_t nmemb, void* userdata) -> size_t {
