@@ -9,6 +9,8 @@
 #include <thread>
 #include <vector>
 
+#include "agent/syntax_highlighter.hpp"
+
 namespace agent {
 
 class NcursesRepl {
@@ -30,6 +32,8 @@ private:
     void teardown();
     void draw();
     void add_message(const std::string& role, const std::string& text);
+    void render_line(int row, const std::string& text, bool is_prompt, Language lang);
+    std::vector<std::tuple<std::string, bool, Language>> build_lines(int width) const;
     void process_ui_queue();
     void submit(const std::string& line);
     void ensure_worker();
@@ -48,6 +52,7 @@ private:
 
     State _state = State::idle;
     std::atomic<bool> _abort_current{false};
+    SyntaxHighlighter _highlighter{4}; // color pairs 4-9 reserved for syntax highlighting
 
     // Worker thread for the blocking LLM calls.
     std::thread _worker;

@@ -29,9 +29,16 @@ void NcursesRepl::setup() {
     timeout(50); // non-blocking input so the UI can update while the worker runs
     if ( has_colors()) {
         start_color();
-        init_pair(1, COLOR_GREEN, COLOR_BLACK);
-        init_pair(2, COLOR_YELLOW, COLOR_BLACK);
-        init_pair(3, COLOR_CYAN, COLOR_BLACK);
+        init_pair(1, COLOR_GREEN, COLOR_BLACK);   // title
+        init_pair(2, COLOR_YELLOW, COLOR_BLACK);  // status
+        init_pair(3, COLOR_CYAN, COLOR_BLACK);    // prompt
+        // syntax highlighting pairs (4-9)
+        init_pair(4, COLOR_BLUE, COLOR_BLACK);    // keyword
+        init_pair(5, COLOR_GREEN, COLOR_BLACK);   // string
+        init_pair(6, COLOR_WHITE, COLOR_BLACK);   // comment
+        init_pair(7, COLOR_YELLOW, COLOR_BLACK);  // number
+        init_pair(8, COLOR_MAGENTA, COLOR_BLACK); // type
+        init_pair(9, COLOR_CYAN, COLOR_BLACK);    // fence
     }
     getmaxyx(stdscr, _rows, _cols);
     _running = true;
@@ -68,6 +75,92 @@ static std::vector<std::string> wrap(const std::string& text, size_t width) {
     if ( lines.empty())
         lines.push_back("");
     return lines;
+}
+
+void NcursesRepl::render_line(int row, const std::string& text, bool is_prompt, Language lang) {
+    int x = 0;
+    if ( is_prompt ) {
+        attron(A_BOLD);
+        if ( has_colors()) attron(COLOR_PAIR(3));
+    }
+
+    if ( !text.empty() && text.size() >= 3 && text.substr(0, 3) == "```" ) {
+        // fence line (opening or closing)
+        if ( has_colors()) attron(COLOR_PAIR(_highlighter.color_for_fence()));
+        mvaddnstr(row, x, text.c_str(), _cols);
+        if ( has_colors()) attroff(COLOR_PAIR(_highlighter.color_for_fence()));
+    } else {
+        auto spans = _highlighter.highlight(text, lang);
+        for ( const auto& span : spans ) {
+            if ( x >= _cols )
+                break;
+            if ( span.color_pair != 0 && has_colors()) attron(COLOR_PAIR(span.color_pair));
+            if ( span.bold ) attron(A_BOLD);
+            int remaining = _cols - x;
+            if ( remaining > 0 )
+                mvaddnstr(row, x, span.text.c_str(), remaining);
+            if ( span.bold ) attroff(A_BOLD);
+            if ( span.color_pair != 0 && has_colors()) attroff(COLOR_PAIR(span.color_pair));
+            x += (int)span.text.size();
+        }
+    }
+
+    if ( is_prompt ) {
+        if ( has_colors()) attroff(COLOR_PAIR(3));
+        attroff(A_BOLD);
+    }
+}
+
+std::vector<std::tuple<std::string, bool, Language>> NcursesRepl::build_lines(int width) const {
+    std::vector<std::tuple<std::string, bool, Language>> out;
+    Language lang = Language::none;
+    bool in_fence = false;
+
+    auto append_block = [&](const std::string& block, bool is_prompt) {
+        size_t start = 0;
+        bool first = true;
+        while ( start <= block.size()) {
+            size_t end = block.find('\n', start);
+            if ( end == std::string::npos ) end = block.size();
+            std::string line = block.substr(start, end - start);
+            start = end + 1;
+
+            if ( line.size() >= 3 && line.substr(0, 3) == "```" ) {
+                if ( !in_fence ) {
+                    in_fence = true;
+                    lang = _highlighter.detect(line.substr(3));
+                } else {
+                    in_fence = false;
+                    lang = Language::none;
+                }
+                out.emplace_back(line, is_prompt, Language::none);
+                first = false;
+                continue;
+            }
+
+            std::string prefix = is_prompt ? ( first ? "> " : "  " ) : " ";
+            auto wrapped = wrap(line, width - (int)prefix.size());
+            for ( const auto& w : wrapped ) {
+                out.emplace_back(prefix + w, is_prompt, lang);
+                if ( is_prompt ) prefix = "  ";
+            }
+            first = false;
+        }
+    };
+
+    if ( !_current_reply.empty())
+        append_block(_current_reply, false);
+
+    for ( const auto& entry : _history ) {
+        size_t pos = entry.find(':');
+        if ( pos == std::string::npos )
+            continue;
+        std::string role = entry.substr(0, pos);
+        std::string text = entry.substr(pos + 1);
+        append_block(text, role == "prompt");
+    }
+
+    return out;
 }
 
 void NcursesRepl::draw() {
@@ -147,52 +240,12 @@ void NcursesRepl::draw() {
     if ( available < 1 )
         available = 1;
 
-    // collect rendered lines from history + current streaming reply
-    std::vector<std::pair<std::string, bool>> rendered; // text, is_prompt
-
-    if ( !_current_reply.empty()) {
-        auto lines = wrap(_current_reply, _cols - 2);
-        for ( const auto& l : lines )
-            rendered.push_back({ " " + l, false });
-    }
-
-    for ( const auto& entry : _history ) {
-        size_t pos = entry.find(':');
-        if ( pos == std::string::npos )
-            continue;
-        std::string role = entry.substr(0, pos);
-        std::string text = entry.substr(pos + 1);
-
-        if ( role == "prompt" ) {
-            rendered.push_back({ "> " + text, true });
-        } else if ( role == "error" ) {
-            auto lines = wrap(text, _cols - 2);
-            for ( const auto& l : lines )
-                rendered.push_back({ " " + l, false });
-        } else if ( role == "assistant" ) {
-            auto lines = wrap(text, _cols - 2);
-            for ( const auto& l : lines )
-                rendered.push_back({ " " + l, false });
-        } else {
-            auto lines = wrap(text, _cols - 2);
-            for ( const auto& l : lines )
-                rendered.push_back({ " " + l, false });
-        }
-    }
-
-    // show last N lines that fit
+    auto lines = build_lines(_cols - 2);
     int y = 2;
-    size_t start = rendered.size() > (size_t)available ? rendered.size() - available : 0;
-    for ( size_t i = start; i < rendered.size() && y <= conv_end; i++, y++ ) {
-        if ( rendered[i].second ) {
-            attron(A_BOLD);
-            if ( has_colors()) attron(COLOR_PAIR(3));
-            mvaddstr(y, 0, rendered[i].first.c_str());
-            if ( has_colors()) attroff(COLOR_PAIR(3));
-            attroff(A_BOLD);
-        } else {
-            mvaddstr(y, 0, rendered[i].first.c_str());
-        }
+    size_t start = lines.size() > (size_t)available ? lines.size() - available : 0;
+    for ( size_t i = start; i < lines.size() && y <= conv_end; i++, y++ ) {
+        const auto& [text, is_prompt, lang] = lines[i];
+        render_line(y, text, is_prompt, lang);
     }
 
     // status line inside conversation area
