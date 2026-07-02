@@ -307,9 +307,6 @@ void NcursesRepl::process_ui_queue() {
     while ( !updates.empty()) {
         updates.front()();
         updates.pop();
-        const int prompt_row = _rows - 4;
-        move(prompt_row, 3 + _cursor);
-        refresh();
     }
 }
 
