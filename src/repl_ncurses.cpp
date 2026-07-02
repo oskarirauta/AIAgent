@@ -109,12 +109,8 @@ static std::vector<std::string> wrap(const std::string& text, size_t width) {
 }
 
 static std::string box_hline(int cols) {
-    // Unicode box-drawing light horizontal: U+2500 (e2 94 80)
-    std::string s;
-    const char box[] = "\xe2\x94\x80";
-    for ( int i = 0; i < cols; ++i )
-        s += box;
-    return s;
+    // Use plain ASCII dash so the separator works on every terminal/locale.
+    return std::string(cols, '-');
 }
 
 // Return the largest byte count <= max_bytes that does not split a UTF-8 character.
@@ -550,7 +546,10 @@ void NcursesRepl::run() {
                     }
                     add_message("error", "AI request aborted");
                 }
-            } else if ( ch == 3 ) { // Ctrl-C as raw key
+            } else if ( ch == 3 ) { // Ctrl-C as raw key: match signal handler semantics
+                int count = agent::sigint_count.fetch_add(1, std::memory_order_relaxed) + 1;
+                if ( count >= 2 )
+                    std::exit(1);
                 agent::running.store(false, std::memory_order_relaxed);
             } else if ( ch == '\n' || ch == KEY_ENTER ) {
                 std::string line = common::trim_ws(_input);
