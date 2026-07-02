@@ -4,6 +4,7 @@
 #include <cctype>
 #include <algorithm>
 #include "common.hpp"
+#include "signal_handler.hpp"
 
 namespace agent {
 
@@ -126,8 +127,11 @@ void NcursesRepl::run() {
     int cursor = 0;
     draw();
 
-    while ( _running ) {
+    while ( _running && agent::running.load(std::memory_order_relaxed)) {
         int ch = getch();
+
+        if ( ch == ERR )
+            continue;
 
         if ( ch == 27 ) { // ESC
             break;

@@ -7,6 +7,7 @@
 #include "common.hpp"
 #include "throws.hpp"
 #include "repl_ncurses.hpp"
+#include "signal_handler.hpp"
 
 namespace agent {
 
@@ -61,7 +62,7 @@ void Repl::run_plain() {
     std::cout << "AI Agent ready. Type 'exit' or 'quit' to leave.\n" << std::endl;
 
     std::string line;
-    while ( true ) {
+    while ( agent::running.load(std::memory_order_relaxed)) {
         std::cout << "> " << std::flush;
         if ( !std::getline(std::cin, line))
             break;

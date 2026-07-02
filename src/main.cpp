@@ -6,6 +6,7 @@
 #include "logger.hpp"
 #include "config.hpp"
 #include "repl.hpp"
+#include "signal_handler.hpp"
 
 static void set_log_level(const std::string& s) {
     std::string lvl = common::to_lower(s);
@@ -69,6 +70,8 @@ int main(int argc, char **argv) {
     config.load(config_path);
     config.apply_cli(usage);
     config.ensure_home_dir();
+
+    agent::install_signal_handlers();
 
     set_log_level(config.log_level);
 
