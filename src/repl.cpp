@@ -23,6 +23,14 @@ Repl::Repl(const Config& config)
         system += memories;
 
     _conversation.set_system(system);
+    _conversation.load(config.home_dir + "/conversations/default.json");
+}
+
+void Repl::save_conversation() {
+    std::string dir = _config.home_dir + "/conversations";
+    if ( !std::filesystem::exists(dir))
+        std::filesystem::create_directories(dir);
+    _conversation.save(dir + "/default.json");
 }
 
 std::string Repl::process_turn(const std::string& prompt, std::function<void(const std::string&)> stream_cb) {
@@ -109,6 +117,7 @@ void Repl::run_plain() {
                 std::cout << chunk << std::flush;
             });
             std::cout << std::endl;
+            save_conversation();
         } catch ( const std::exception& e ) {
             logger::error << "request failed: " << e.what() << std::endl;
         }
@@ -121,7 +130,9 @@ void Repl::run_tty() {
 
     NcursesRepl ncurses([this](const std::string& prompt, std::function<void(const std::string&)> stream_cb) -> std::string {
         try {
-            return this->process_turn(prompt, stream_cb);
+            std::string reply = this->process_turn(prompt, stream_cb);
+            this->save_conversation();
+            return reply;
         } catch ( const std::exception& e ) {
             return std::string("error: ") + e.what();
         }
@@ -145,6 +156,7 @@ void Repl::run_once(const std::string& prompt) {
             std::cout << chunk << std::flush;
         });
         std::cout << std::endl;
+        save_conversation();
     } catch ( const std::exception& e ) {
         logger::error << "request failed: " << e.what() << std::endl;
     }

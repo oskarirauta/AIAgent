@@ -17,6 +17,7 @@ public:
     void run();
     void run_once(const std::string& prompt);
     std::string process_turn(const std::string& prompt, std::function<void(const std::string&)> stream_cb = nullptr);
+    void save_conversation();
 
 private:
     void run_tty();

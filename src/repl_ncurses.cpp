@@ -164,6 +164,7 @@ void NcursesRepl::run() {
                     add_message("assistant", reply);
                 }
                 _history_index = _prompt_history.size();
+                // Note: conversation save is handled by Repl after this callback returns
             }
             _input.clear();
             cursor = 0;

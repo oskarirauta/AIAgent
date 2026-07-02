@@ -36,6 +36,9 @@ public:
     const std::vector<Message>& messages() const { return _messages; }
     void clear();
 
+    void save(const std::string& path) const;
+    void load(const std::string& path);
+
 private:
     std::vector<Message> _messages;
 };
