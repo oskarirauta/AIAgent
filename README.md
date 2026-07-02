@@ -15,6 +15,7 @@ Philosophy: **Support enough — not everything.**
   - `list_directory`
   - `grep`
 - Single-prompt mode and interactive REPL (ncurses UI with line editing and history)
+- Graceful shutdown on SIGINT / SIGTERM
 - Config file for default settings
 - Debug logging levels
 
