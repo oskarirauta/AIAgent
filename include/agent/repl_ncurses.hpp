@@ -41,7 +41,7 @@ private:
     void add_message(const std::string& role, const std::string& text);
     void render_line(int row, const std::string& text, bool is_prompt, Language lang);
     std::vector<std::tuple<std::string, bool, Language>> build_lines(int width) const;
-    void process_ui_queue();
+    void process_ui_queue(bool local_change = false);
     void submit(const std::string& line);
     void ensure_worker();
     void worker_loop();

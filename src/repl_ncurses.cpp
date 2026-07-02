@@ -354,13 +354,13 @@ void NcursesRepl::draw() {
     refresh();
 }
 
-void NcursesRepl::process_ui_queue() {
+void NcursesRepl::process_ui_queue(bool local_change) {
     std::queue<std::function<void()>> updates;
     {
         std::lock_guard<std::mutex> lock(_queue_mutex);
         updates.swap(_ui_queue);
     }
-    bool needs_draw = !updates.empty();
+    bool needs_draw = local_change || !updates.empty();
     while ( !updates.empty()) {
         updates.front()();
         updates.pop();
@@ -491,6 +491,7 @@ void NcursesRepl::run() {
 
     while ( _running && agent::running.load(std::memory_order_relaxed)) {
         int ch = getch();
+        bool local_change = (ch != ERR);
 
         if ( ch != ERR ) {
             logger::debug["ncurses"] << "key ch=" << ch << std::endl;
@@ -535,8 +536,8 @@ void NcursesRepl::run() {
                 }
                 _input.clear();
                 _cursor = 0;
-            } else if ( ch == KEY_BACKSPACE || ch == 127 || ch == '\b' ) {
-                logger::debug["ncurses"] << "backspace ch=" << ch << " _cursor=" << _cursor << " input_size=" << _input.size() << std::endl;
+            } else if ( ch == KEY_BACKSPACE || ch == 127 || ch == '\b' || ch == 8 || ch == 263 ) {
+                logger::info["ncurses"] << "backspace ch=" << ch << " (KEY_BACKSPACE=" << KEY_BACKSPACE << ") _cursor=" << _cursor << " input_size=" << _input.size() << std::endl;
                 if ( _cursor > 0 ) {
                     // erase one UTF-8 character backwards
                     size_t prev = _cursor;
@@ -592,7 +593,7 @@ void NcursesRepl::run() {
             }
         }
 
-        process_ui_queue();
+        process_ui_queue(local_change);
     }
 
     teardown();
