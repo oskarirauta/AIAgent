@@ -133,6 +133,7 @@ private:
     // ones (flushed only when more content follows), drop trailing ones.
     int  _pending_blanks = 0;
     bool _reply_has_content = false;
+    bool _reply_first_line = false; // the reply's first printed line gets the AI marker
 
     SyntaxHighlighter _highlighter{1};
     bool _raw_active = false;

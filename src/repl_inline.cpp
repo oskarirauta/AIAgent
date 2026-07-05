@@ -206,6 +206,17 @@ std::string InlineRepl::style_spans(const std::string& line, Language lang) cons
 }
 
 void InlineRepl::emit_styled_line(const std::string& line) {
+    // Each reply line is left-padded 2 columns (matching the "> " on user
+    // messages); combined with the wrap width below this leaves a 2-column right
+    // margin. The very first line of a reply gets the AI marker instead of pad.
+    auto next_prefix = [this]() -> std::string {
+        if ( _reply_first_line ) {
+            _reply_first_line = false;
+            return "\033[1;32m●\033[0m ";
+        }
+        return "  ";
+    };
+
     std::string trimmed = common::trim_ws(line);
     if ( trimmed.rfind("```", 0) == 0 ) {
         // Fenced code block delimiter.
@@ -216,21 +227,23 @@ void InlineRepl::emit_styled_line(const std::string& line) {
             _in_code = false;
             _code_lang = Language::none;
         }
-        wr("\033[90m" + line + "\033[0m");
+        wr(next_prefix() + "\033[90m" + line + "\033[0m");
         return;
     }
 
     if ( _in_code ) {
         // Code is left unwrapped (breaking at spaces would be wrong); the
         // terminal soft-wraps it so a copy stays faithful.
-        wr(style_spans(line, _code_lang));
+        wr(next_prefix() + style_spans(line, _code_lang));
         return;
     }
 
-    // Prose: word-wrap to the terminal width so lines don't break mid-word.
-    std::vector<std::string> segs = word_wrap(line, term_cols() - 1);
+    // Prose: word-wrap so lines don't break mid-word, within the padded width.
+    int width = term_cols() - 4;
+    if ( width < 8 ) width = 8;
+    std::vector<std::string> segs = word_wrap(line, width);
     for ( size_t i = 0; i < segs.size(); ++i ) {
-        wr(style_spans(segs[i], Language::markdown));
+        wr(next_prefix() + style_spans(segs[i], Language::markdown));
         if ( i + 1 < segs.size())
             wr("\n");
     }
@@ -260,6 +273,17 @@ static std::string trim_blank_edges(const std::string& s) {
     return out;
 }
 
+// Strip control characters (except tab) so pasted content can never corrupt the
+// terminal when it is echoed into the transcript.
+static std::string sanitize_display(const std::string& s) {
+    std::string out;
+    for ( unsigned char c : s ) {
+        if ( c == '\t' || c >= 0x20 )
+            out += static_cast<char>(c);
+    }
+    return out;
+}
+
 void InlineRepl::echo_user(const std::string& display) {
     erase_live();
     // One blank line before the message, edges trimmed — every message (user or
@@ -267,21 +291,69 @@ void InlineRepl::echo_user(const std::string& display) {
     wr("\n");
 
     std::string msg = trim_blank_edges(display);
-    int width = term_cols() - 3; // room for the "> " marker + a right margin
+    int width = term_cols() - 4; // 2-col "> "/"  " prefix + 2-col right margin
+    if ( width < 8 ) width = 8;
 
     bool first = true;
-    std::string logical;
-    std::istringstream ls(msg);
-    while ( std::getline(ls, logical)) {
-        for ( const auto& seg : word_wrap(logical, width)) {
-            if ( first ) {
-                wr("\033[1;36m›\033[0m " + seg + "\n");
-                first = false;
-            } else {
-                wr("  " + seg + "\n"); // continuation lines align under the text
+    auto emit = [&](const std::string& seg) {
+        if ( first ) {
+            wr("\033[1;36m›\033[0m " + seg + "\n");
+            first = false;
+        } else {
+            wr("  " + seg + "\n"); // continuation / block lines align under the text
+        }
+    };
+
+    auto emit_text = [&](const std::string& text) {
+        std::istringstream ls(text);
+        std::string logical;
+        while ( std::getline(ls, logical))
+            for ( const auto& seg : word_wrap(logical, width))
+                emit(seg);
+    };
+
+    // Expand paste placeholders into framed blocks so the whole message (exactly
+    // what the model received) is visible and copyable from the scrollback.
+    size_t pos = 0;
+    while ( pos <= msg.size()) {
+        size_t best = std::string::npos;
+        const PasteItem* which = nullptr;
+        for ( const auto& p : _pastes ) {
+            size_t f = msg.find(p.placeholder, pos);
+            if ( f != std::string::npos && ( best == std::string::npos || f < best )) {
+                best = f;
+                which = &p;
             }
         }
+
+        size_t text_end = ( best == std::string::npos ) ? msg.size() : best;
+        if ( text_end > pos )
+            emit_text(msg.substr(pos, text_end - pos));
+
+        if ( which == nullptr )
+            break;
+
+        // Framed paste block.
+        std::vector<std::string> plines;
+        {
+            std::istringstream cs(which->content);
+            std::string cl;
+            while ( std::getline(cs, cl))
+                plines.push_back(cl);
+        }
+        std::string header = "\033[90m── pasted · " + std::to_string(plines.size()) + " lines ";
+        int hw = static_cast<int>(split_cells("── pasted · " + std::to_string(plines.size()) + " lines ").size());
+        for ( int i = hw; i < width; ++i ) header += "─";
+        emit(header + "\033[0m");
+        for ( const auto& pl : plines )
+            emit("\033[90m" + sanitize_display(pl) + "\033[0m");
+        std::string footer;
+        for ( int i = 0; i < width; ++i ) footer += "─";
+        emit("\033[90m" + footer + "\033[0m");
+
+        pos = best + which->placeholder.size();
     }
+
     if ( first ) // empty message (shouldn't happen, but stay safe)
         wr("\033[1;36m›\033[0m\n");
 }
@@ -293,6 +365,7 @@ void InlineRepl::begin_reply() {
     _code_lang = Language::none;
     _pending_blanks = 0;
     _reply_has_content = false;
+    _reply_first_line = true;
 }
 
 void InlineRepl::emit_reply_line(const std::string& line) {
@@ -608,7 +681,9 @@ void InlineRepl::read_bracketed_paste() {
         }
     }
 
-    size_t lines = static_cast<size_t>(std::count(norm.begin(), norm.end(), '\n')) + 1;
+    size_t lines = static_cast<size_t>(std::count(norm.begin(), norm.end(), '\n'));
+    if ( norm.empty() || norm.back() != '\n' )
+        ++lines; // count the final line only when there is no trailing newline
     // Only large pastes collapse into a box. A short multi-line paste is inserted
     // inline; its newlines survive as atomic "↵" glyphs in the prompt.
     bool large = norm.size() > _config.paste_threshold_chars ||
