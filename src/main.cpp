@@ -1,12 +1,17 @@
 #include <iostream>
+#include <fstream>
 #include <filesystem>
 #include <cstdlib>
+#include <unistd.h>
+#include <curl/curl.h>
 
 #include "usage.hpp"
 #include "logger.hpp"
 #include "agent/config.hpp"
 #include "agent/repl.hpp"
 #include "agent/signal_handler.hpp"
+#include "agent/api/client.hpp"
+#include "agent/providers/provider.hpp"
 
 static void set_log_level(const std::string& s) {
     std::string lvl = common::to_lower(s);
@@ -30,16 +35,17 @@ static usage_t make_usage(int argc, char **argv) {
             { "help", { "h", "help", "show usage help" }},
             { "version", { "v", "version", "show version" }},
             { "config", { "c", "config", "path to config file", usage_t::OPTIONAL }},
-            { "provider", { "p", "provider", "ai provider: openai or ollama", usage_t::OPTIONAL }},
+            { "provider", { "p", "provider", "ai provider: openai, ollama, anthropic, moonshot, kimi or claude", usage_t::OPTIONAL }},
             { "model", { "m", "model", "model name", usage_t::OPTIONAL }},
             { "api_url", { "u", "api-url", "api endpoint url", usage_t::OPTIONAL }},
             { "api_key", { "k", "api-key", "api key / token", usage_t::OPTIONAL }},
+            { "login", { "L", "login", "force re-authentication for the selected provider and exit", usage_t::OPTIONAL }},
             { "log_level", { "l", "log-level", "quiet/error/warning/notice/info/verbose/vverbose/debug", usage_t::OPTIONAL }},
             { "system_prompt", { "s", "system-prompt", "system prompt message", usage_t::OPTIONAL }},
             { "home_dir", { "d", "home", "agent home directory for memory and data", usage_t::OPTIONAL }},
             { "no_tools", { "T", "no-tools", "disable tool calls (safer mode)", usage_t::OPTIONAL }},
-            { "yes_tools", { "Y", "yes-tools", "run tools without confirmation", usage_t::OPTIONAL }},
-            { "auto_tools", { "A", "auto-tools", "alias for --yes-tools", usage_t::OPTIONAL }},
+            { "yes_tools", { "Y", "yes-tools", "run ordinary tools without confirmation (danger-listed commands still warn)", usage_t::OPTIONAL }},
+            { "insecure", { "I", "insecure", "run ALL tools without any confirmation, including dangerous commands", usage_t::OPTIONAL }},
             { "prompt", { "P", "prompt", "single prompt mode, exit after answer", usage_t::OPTIONAL }}
         }
     };
@@ -47,15 +53,23 @@ static usage_t make_usage(int argc, char **argv) {
 
 int main(int argc, char **argv) {
 
+    // Own libcurl's global state explicitly instead of letting it initialise
+    // lazily. Declared first so its cleanup runs last — after every Client (and
+    // its easy handle) has been destroyed.
+    struct CurlGlobal {
+        CurlGlobal() { curl_global_init(CURL_GLOBAL_DEFAULT); }
+        ~CurlGlobal() { curl_global_cleanup(); }
+    } curl_global;
+
     usage_t usage = make_usage(argc, argv);
 
     if ( !usage.validated ) {
-        std::cerr << usage.title() << "\n" << usage.errors() << std::endl;
+        std::cerr << usage.title() << "\n" << usage.errors() << "\n" << std::endl;
         return 1;
     }
 
     if ( usage["help"] ) {
-        std::cout << usage << "\n" << usage.help() << std::endl;
+        std::cout << usage << "\n" << usage.help() << "\n" << std::endl;
         return 0;
     }
 
@@ -78,13 +92,61 @@ int main(int argc, char **argv) {
 
     set_log_level(config.log_level);
 
+    // Send the full log to a file so it never has to clutter the conversation.
+    // (The interactive REPL additionally limits the terminal to errors only.)
+    static std::ofstream log_file;
+    {
+        std::string log_dir = config.home_dir + "/logs";
+        std::filesystem::create_directories(log_dir);
+        log_file.open(log_dir + "/agent.log", std::ios::app);
+        if ( log_file.is_open())
+            logger::file_stream = &log_file;
+    }
+
+    // In the interactive UI, keep the terminal quiet (errors only) so logging
+    // never lands in the transcript — everything still goes to the log file.
+    if ( isatty(STDIN_FILENO))
+        logger::loglevel(logger::error);
+
+    // Resume the last-used provider/model when the user did not specify them.
+    // Provider is resolved first; the model then follows the resolved provider
+    // (its own remembered model, else a provider-appropriate default).
+    agent::Config::LastUsed last_used = agent::Config::load_last_used(config.home_dir);
+    if ( !config.provider_explicit && !last_used.provider.empty()) {
+        config.provider = last_used.provider;
+    }
+
     if ( config.provider != "openai" && config.provider != "ollama" &&
-         config.provider != "anthropic" && config.provider != "moonshot" ) {
-        logger::error << "unsupported provider: " << config.provider << ". use openai, ollama, anthropic or moonshot." << std::endl;
+         config.provider != "anthropic" && config.provider != "moonshot" &&
+         config.provider != "kimi" && config.provider != "claude" ) {
+        logger::error << "unsupported provider: " << config.provider << ". use openai, ollama, anthropic, moonshot, kimi or claude." << std::endl;
         return 1;
     }
 
-    if ( config.api_key.empty() && config.provider != "ollama" ) {
+    if ( config.provider == "kimi" && config.api_url == agent::Config().api_url ) {
+        config.api_url = "https://api.kimi.com/coding/v1";
+    }
+
+    // Resolve the model once the provider is final: keep an explicit -m/config
+    // model, otherwise reuse this provider's remembered model, otherwise fall
+    // back to a provider-appropriate default.
+    if ( !config.model_explicit ) {
+        std::string remembered = last_used.model_for(config.provider);
+        config.model = !remembered.empty() ? remembered
+                                           : agent::Config::default_model_for(config.provider);
+    }
+
+    // Persist the resolved provider/model as the new last-used state.
+    agent::Config::save_last_used(config.home_dir, config.provider, config.model);
+
+    // Give each provider a fitting identity when the user did not set a custom
+    // system prompt, so e.g. Kimi knows it is Kimi.
+    if ( config.system_prompt == agent::Config().system_prompt ) {
+        config.system_prompt = agent::Config::default_system_prompt_for(config.provider);
+    }
+
+    if ( config.api_key.empty() && config.provider != "ollama" &&
+         config.provider != "kimi" && config.provider != "claude" ) {
         logger::warning << "no api-key configured for " << config.provider << " provider" << std::endl;
     }
 
@@ -101,6 +163,19 @@ int main(int argc, char **argv) {
     logger::info["agent"] << "provider: " << config.provider << ", model: " << config.model << std::endl;
     logger::info["agent"] << "home dir: " << config.home_dir << std::endl;
 
+    if ( config.provider == "kimi" || config.provider == "claude" ) {
+        agent::api::Client client;
+        auto provider = agent::providers::create(config);
+        if ( !provider->authenticate(client, usage["login"]) ) {
+            logger::error << config.provider << " authentication failed" << "\n" << std::endl;
+            return 1;
+        }
+        if ( usage["login"] ) {
+            logger::info[config.provider] << "login successful, token saved" << "\n" << std::endl;
+            return 0;
+        }
+    }
+
     try {
         agent::Repl repl(config);
         if ( prompt.empty())
@@ -111,6 +186,8 @@ int main(int argc, char **argv) {
         logger::error << e.what() << std::endl;
         return 1;
     }
+
+    std::cout << "\n\n" << std::endl;
 
     return 0;
 }

@@ -13,6 +13,18 @@ static std::string trim(const std::string& s) {
     return common::trim_ws(s);
 }
 
+// Parse an unsigned integer setting, keeping the current value and warning on
+// malformed input instead of letting std::stoull throw and crash the program.
+static size_t parse_size(const std::string& value, size_t current, const std::string& key) {
+    try {
+        return std::stoull(value);
+    } catch ( const std::exception& ) {
+        logger::warning["config"] << "invalid numeric value for " << key << ": '" << value
+                                  << "' (keeping " << current << ")" << std::endl;
+        return current;
+    }
+}
+
 static std::string parse_value(const std::string& raw) {
     std::string s = raw;
     s = trim(s);
@@ -40,6 +52,28 @@ std::string Config::default_path() {
     if ( !home || !*home )
         home = "/root";
     return std::string(home) + "/.config/ai-agent/config";
+}
+
+std::string Config::default_model_for(const std::string& provider) {
+    if ( provider == "claude" ) return "claude-opus-4-8";
+    if ( provider == "anthropic" ) return "claude-opus-4-8";
+    if ( provider == "kimi" ) return "kimi-for-coding";     // managed:kimi-code / "K2.7 Code"
+    if ( provider == "moonshot" ) return "kimi-k2-0905-preview";
+    if ( provider == "ollama" ) return "llama3";
+    return "gpt-4o-mini"; // openai and any other OpenAI-compatible provider
+}
+
+std::string Config::default_system_prompt_for(const std::string& provider) {
+    if ( provider == "kimi" )
+        return "You are Kimi, an AI assistant built by Moonshot AI, running as a "
+               "command-line coding assistant. You help with software engineering "
+               "tasks on a Linux system. Be concise and precise.";
+    if ( provider == "claude" )
+        // The Claude provider additionally injects the required Claude Code
+        // identity block, so this second block only sets task context.
+        return "You are Claude Code, Anthropic's official CLI, assisting with "
+               "software engineering tasks on a Linux system. Be concise and precise.";
+    return "You are a helpful Linux CLI assistant.";
 }
 
 std::string Config::default_home_dir() {
@@ -80,14 +114,30 @@ void Config::load(const std::string& path) {
         std::string key = trim(line.substr(0, pos));
         std::string value = parse_value(line.substr(pos + 1));
 
-        if ( key == "provider" ) provider = value;
-        else if ( key == "model" ) model = value;
+        if ( key == "provider" ) { provider = value; provider_explicit = true; }
+        else if ( key == "model" ) { model = value; model_explicit = true; }
         else if ( key == "api_url" ) api_url = value;
         else if ( key == "api_key" ) api_key = value;
+        else if ( key == "oauth_host" ) oauth_host = value;
+        else if ( key == "oauth_client_id" ) oauth_client_id = value;
         else if ( key == "log_level" ) log_level = value;
         else if ( key == "system_prompt" ) system_prompt = value;
         else if ( key == "home_dir" ) home_dir = value;
         else if ( key == "tools_enabled" ) tools_enabled = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
+        else if ( key == "paste_threshold_chars" ) paste_threshold_chars = parse_size(value, paste_threshold_chars, key);
+        else if ( key == "paste_threshold_lines" ) paste_threshold_lines = parse_size(value, paste_threshold_lines, key);
+        else if ( key == "paste_single_line_chars" ) paste_single_line_chars = parse_size(value, paste_single_line_chars, key);
+        else if ( key == "paste_threshold_ms" ) paste_threshold_ms = parse_size(value, paste_threshold_ms, key);
+        else if ( key.rfind("provider.", 0) == 0 ) {
+            // provider.<name>.<key>: value
+            size_t first_dot = key.find('.', 0);
+            size_t second_dot = key.find('.', first_dot + 1);
+            if ( first_dot != std::string::npos && second_dot != std::string::npos ) {
+                std::string prov = key.substr(first_dot + 1, second_dot - first_dot - 1);
+                std::string opt = key.substr(second_dot + 1);
+                provider_options[prov][opt] = value;
+            }
+        }
         // confirm_tools is intentionally not loaded from config file; it must be
         // requested explicitly on the command line every session for safety.
     }
@@ -98,10 +148,14 @@ void Config::load(const std::string& path) {
 
 void Config::apply_cli(const usage_t& usage) {
 
-    if ( usage["provider"] )
+    if ( usage["provider"] ) {
         provider = usage["provider"].stringValue();
-    if ( usage["model"] )
+        provider_explicit = true;
+    }
+    if ( usage["model"] ) {
         model = usage["model"].stringValue();
+        model_explicit = true;
+    }
     if ( usage["api_url"] )
         api_url = usage["api_url"].stringValue();
     if ( usage["api_key"] )
@@ -114,8 +168,76 @@ void Config::apply_cli(const usage_t& usage) {
         home_dir = usage["home_dir"].stringValue();
     if ( usage["no_tools"] )
         tools_enabled = false;
-    if ( usage["yes_tools"] || usage["auto_tools"] )
+    if ( usage["yes_tools"] )
         confirm_tools = false;
+    if ( usage["insecure"] )
+        insecure = true;
+    // paste thresholds and oauth host/client id are config-file only (see load()).
+}
+
+static std::string state_path(const std::string& home_dir) {
+    return home_dir + "/state.json";
+}
+
+Config::LastUsed Config::load_last_used(const std::string& home_dir) {
+    LastUsed last;
+    std::string path = state_path(home_dir);
+    if ( !std::filesystem::exists(path))
+        return last;
+
+    std::ifstream ifd(path, std::ios::in);
+    if ( !ifd.is_open())
+        return last;
+
+    std::stringstream ss;
+    ss << ifd.rdbuf();
+    if ( ss.str().empty())
+        return last;
+
+    try {
+        JSON j = JSON::parse(ss.str());
+        if ( j.contains("provider") && j["provider"] == JSON::TYPE::STRING )
+            last.provider = j["provider"].to_string();
+        if ( j.contains("models") && j["models"] == JSON::TYPE::OBJECT ) {
+            j["models"].for_each([&last](JSON::fe_iterator& it, const JSON& value) {
+                if ( it.named() && value == JSON::TYPE::STRING )
+                    last.models[it.name()] = value.to_string();
+            });
+        }
+    } catch ( const std::exception& e ) {
+        logger::warning["config"] << "failed to parse state file: " << e.what() << std::endl;
+    }
+    return last;
+}
+
+void Config::save_last_used(const std::string& home_dir, const std::string& provider, const std::string& model) {
+    // Merge into any existing state so other providers' remembered models survive.
+    LastUsed last = load_last_used(home_dir);
+    last.provider = provider;
+    if ( !model.empty())
+        last.models[provider] = model;
+
+    JSON models = JSON::Object{};
+    for ( const auto& [name, m] : last.models )
+        models[name] = m;
+
+    JSON j = JSON::Object{
+        { "provider", last.provider },
+        { "models", models }
+    };
+
+    std::string path = state_path(home_dir);
+    std::string tmp = path + ".tmp";
+    {
+        std::ofstream ofd(tmp, std::ios::out | std::ios::trunc);
+        if ( !ofd.is_open()) {
+            logger::warning["config"] << "failed to write state file: " << tmp << std::endl;
+            return;
+        }
+        ofd << j.dump_minified() << "\n";
+        ofd.flush();
+    }
+    std::filesystem::rename(tmp, path);
 }
 
 void Config::ensure_home_dir() {

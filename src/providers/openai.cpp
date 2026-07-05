@@ -5,6 +5,12 @@
 
 namespace agent::providers {
 
+static long json_long(const JSON& v) {
+    if ( v == JSON::TYPE::INT ) return static_cast<long>(static_cast<long long>(v));
+    if ( v == JSON::TYPE::FLOAT ) return static_cast<long>(static_cast<long double>(v));
+    return 0;
+}
+
 static std::string role_to_string(agent::Role role) {
     switch ( role ) {
         case agent::Role::SYSTEM: return "system";
@@ -23,6 +29,22 @@ JSON OpenAI::message_to_json(const Message& msg) {
 
     if ( msg.role == agent::Role::TOOL && msg.tool_call_id.has_value()) {
         obj["tool_call_id"] = msg.tool_call_id.value();
+    }
+
+    if ( msg.role == agent::Role::ASSISTANT && !msg.tool_calls.empty()) {
+        JSON calls = JSON::Array{};
+        for ( const auto& tc : msg.tool_calls ) {
+            JSON call = JSON::Object{
+                { "id", tc.id },
+                { "type", "function" },
+                { "function", JSON::Object{
+                    { "name", tc.name },
+                    { "arguments", tc.arguments }
+                }}
+            };
+            calls.append(call);
+        }
+        obj["tool_calls"] = calls;
     }
 
     return obj;
@@ -79,6 +101,12 @@ Response OpenAI::parse_response(const JSON& response) {
                 }
             }
         }
+    }
+
+    if ( response.contains("usage") && response["usage"] == JSON::TYPE::OBJECT ) {
+        JSON u = response["usage"];
+        if ( u.contains("prompt_tokens")) r.input_tokens = json_long(u["prompt_tokens"]);
+        if ( u.contains("completion_tokens")) r.output_tokens = json_long(u["completion_tokens"]);
     }
 
     return r;

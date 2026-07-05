@@ -1,13 +1,13 @@
 all: world
 
 CXX?=g++
-CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include
+CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include -g
 LDFLAGS?=-L/usr/lib
 
-# Prefer pkg-config for curl/ncurses when available, fallback to plain flags.
+# Prefer pkg-config for curl when available, fallback to plain flags. The inline
+# REPL uses raw ANSI/termios, so no curses dependency is needed.
 CURL_LIBS := $(shell pkg-config --libs libcurl 2>/dev/null || echo -lcurl)
-NCURSES_LIBS := $(shell pkg-config --libs ncursesw 2>/dev/null || pkg-config --libs ncurses 2>/dev/null || echo -lncursesw)
-LIBS?=$(CURL_LIBS) $(NCURSES_LIBS)
+LIBS?=$(CURL_LIBS)
 
 OBJS:= \
 	objs/main.o \
@@ -15,7 +15,7 @@ OBJS:= \
 	objs/conversation.o \
 	objs/memory.o \
 	objs/repl.o \
-	objs/repl_ncurses.o \
+	objs/repl_inline.o \
 	objs/syntax_highlighter.o \
 	objs/text_utils.o \
 	objs/signal_handler.o \
@@ -25,6 +25,11 @@ OBJS:= \
 	objs/ollama.o \
 	objs/anthropic.o \
 	objs/moonshot.o \
+	objs/kimi_token.o \
+	objs/kimi_oauth.o \
+	objs/kimi_provider.o \
+	objs/claude_oauth.o \
+	objs/claude_provider.o \
 	objs/tools_registry.o \
 	objs/tools_read_file.o \
 	objs/tools_write_file.o \
@@ -64,7 +69,7 @@ objs/memory.o: src/memory.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/repl.o: src/repl.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
-objs/repl_ncurses.o: src/repl_ncurses.cpp
+objs/repl_inline.o: src/repl_inline.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/syntax_highlighter.o: src/syntax_highlighter.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
@@ -83,6 +88,16 @@ objs/ollama.o: src/providers/ollama.cpp
 objs/anthropic.o: src/providers/anthropic.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/moonshot.o: src/providers/moonshot.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/kimi_token.o: src/auth/kimi_token.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/kimi_oauth.o: src/auth/kimi_oauth.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/kimi_provider.o: src/providers/kimi.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/claude_oauth.o: src/auth/claude_oauth.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/claude_provider.o: src/providers/claude.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/tools_registry.o: src/tools/registry.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;

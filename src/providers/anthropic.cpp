@@ -5,6 +5,12 @@
 
 namespace agent::providers {
 
+static long json_long(const JSON& v) {
+    if ( v == JSON::TYPE::INT ) return static_cast<long>(static_cast<long long>(v));
+    if ( v == JSON::TYPE::FLOAT ) return static_cast<long>(static_cast<long double>(v));
+    return 0;
+}
+
 static std::string role_to_string(agent::Role role) {
     switch ( role ) {
         case agent::Role::SYSTEM: return "system";
@@ -16,6 +22,30 @@ static std::string role_to_string(agent::Role role) {
 }
 
 JSON Anthropic::message_to_json(const Message& msg) {
+    // Assistant messages that contain tool calls must be sent as content blocks
+    // so the model can correlate tool results with the original tool_use IDs.
+    if ( msg.role == agent::Role::ASSISTANT && !msg.tool_calls.empty()) {
+        JSON blocks = JSON::Array{};
+        if ( !msg.content.empty()) {
+            blocks.append(JSON::Object{
+                { "type", "text" },
+                { "text", msg.content }
+            });
+        }
+        for ( const auto& tc : msg.tool_calls ) {
+            blocks.append(JSON::Object{
+                { "type", "tool_use" },
+                { "id", tc.id },
+                { "name", tc.name },
+                { "input", JSON::parse(tc.arguments) }
+            });
+        }
+        return JSON::Object{
+            { "role", role_to_string(msg.role) },
+            { "content", blocks }
+        };
+    }
+
     return JSON::Object{
         { "role", role_to_string(msg.role) },
         { "content", msg.content }
@@ -118,6 +148,12 @@ Response Anthropic::parse_response(const JSON& response) {
                 r.tool_calls.push_back(tc);
             }
         }
+    }
+
+    if ( response.contains("usage") && response["usage"] == JSON::TYPE::OBJECT ) {
+        JSON u = response["usage"];
+        if ( u.contains("input_tokens")) r.input_tokens = json_long(u["input_tokens"]);
+        if ( u.contains("output_tokens")) r.output_tokens = json_long(u["output_tokens"]);
     }
 
     return r;

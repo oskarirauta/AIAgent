@@ -2,11 +2,13 @@
 
 #include <iostream>
 #include <unistd.h>
+#include <cctype>
+#include <filesystem>
 #include "json.hpp"
 #include "logger.hpp"
 #include "common.hpp"
 #include "throws.hpp"
-#include "agent/repl_ncurses.hpp"
+#include "agent/repl_inline.hpp"
 #include "agent/signal_handler.hpp"
 #include "agent/memory.hpp"
 #include "agent/text_utils.hpp"
@@ -21,27 +23,58 @@ Repl::Repl(const Config& config)
     else
         logger::info["agent"] << "tools disabled" << std::endl;
 
+    // Load any persisted history for THIS provider first, then (re)apply the
+    // current system prompt so a provider's identity and freshly-loaded memories
+    // always reflect the running config rather than whatever was saved earlier.
+    _conversation.load(conversation_path());
+
     std::string system = config.system_prompt;
-    std::string memories = load_memories(config.home_dir);
+    std::string memories = load_memories(config.home_dir, config.provider);
     if ( !memories.empty())
         system += memories;
 
     _conversation.set_system(system);
-    _conversation.load(config.home_dir + "/conversations/default.json");
+}
+
+std::string Repl::conversation_path() const {
+    // History is scoped by provider AND project (working directory), so different
+    // projects keep separate chats and Claude's chat never bleeds into Kimi's.
+    // The cwd is turned into a readable, filesystem-safe key, e.g.
+    // /usr/src/AIAgent -> -usr-src-AIAgent (matching Claude Code's convention).
+    std::string cwd;
+    try {
+        cwd = std::filesystem::current_path().string();
+    } catch ( ... ) {
+        cwd = "";
+    }
+
+    std::string key;
+    for ( char c : cwd )
+        key += std::isalnum(static_cast<unsigned char>(c)) ? c : '-';
+    if ( key.empty())
+        key = "default";
+
+    return _config.home_dir + "/conversations/" + _config.provider + "/" + key + ".json";
 }
 
 void Repl::save_conversation() {
-    std::string dir = _config.home_dir + "/conversations";
-    if ( !std::filesystem::exists(dir))
-        std::filesystem::create_directories(dir);
-    _conversation.save(dir + "/default.json");
+    std::string path = conversation_path();
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+    _conversation.save(path);
 }
 
-std::string Repl::process_turn(const std::string& prompt, std::function<void(const std::string&)> stream_cb) {
+std::string Repl::process_turn(const std::string& prompt, std::function<void(const std::string&)> stream_cb, std::atomic<bool>* abort_flag) {
 
     _conversation.add_user(prompt);
 
     while ( true ) {
+
+        if ( abort_flag && abort_flag->load(std::memory_order_relaxed))
+            return "";
+
+        _provider->prepare_request(_client);
+
+        auto headers = _provider->extra_headers();
 
         JSON tools = _registry.schema();
         JSON request = _provider->build_request(_conversation, tools);
@@ -57,29 +90,43 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             bool done = false;
             std::string full_reply;
 
-            _client.post_stream(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), body,
+            _client.post_stream(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body,
                 [&](const std::string& chunk) {
                     std::string text = agent::normalize_text(_provider->parse_stream(chunk, buffer, done));
                     if ( !text.empty()) {
                         full_reply += text;
                         stream_cb(text);
                     }
-                });
+                }, abort_flag);
+
+            if ( abort_flag && abort_flag->load(std::memory_order_relaxed))
+                return "";
 
             _conversation.add_assistant(full_reply);
             return full_reply;
         }
 
         std::string body = request.dump_minified();
-        std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), body);
+        std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body, abort_flag);
+
+        if ( abort_flag && abort_flag->load(std::memory_order_relaxed))
+            return "";
+
         JSON response = JSON::parse(response_str);
         providers::Response resp = _provider->parse_response(response);
+
+        _stats.record(resp.input_tokens, resp.output_tokens);
 
         if ( !resp.success )
             throws << "provider response error: " << resp.message << std::endl;
 
         std::string normalized = agent::normalize_text(resp.message);
-        _conversation.add_assistant(normalized);
+
+        std::vector<agent::ToolCall> assistant_calls;
+        for ( const auto& tc : resp.tool_calls ) {
+            assistant_calls.push_back({ tc.id, tc.name, tc.arguments.dump_minified() });
+        }
+        _conversation.add_assistant(normalized, assistant_calls);
 
         if ( resp.tool_calls.empty())
             return normalized;
@@ -101,18 +148,36 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     }
 }
 
+tools::ConfirmMode Repl::tool_mode() const {
+    if ( _config.insecure )
+        return tools::ConfirmMode::insecure;
+    return _config.confirm_tools ? tools::ConfirmMode::confirm
+                                 : tools::ConfirmMode::automatic;
+}
+
 void Repl::run_plain() {
 
-    std::cout << "AI Agent ready. Type 'exit' or 'quit' to leave.\n" << std::endl;
+    std::cout << "agent ready. Type /exit or /quit to leave.\n" << std::endl;
 
-    if ( _config.confirm_tools ) {
-        _registry.set_confirm_callback([](const std::string& action) -> bool {
-            std::cout << "\nAllow tool: " << action << " [y/N]? " << std::flush;
+    _registry.set_mode(tool_mode());
+    if ( _config.tools_enabled && tool_mode() != tools::ConfirmMode::insecure ) {
+        _registry.set_confirm_callback([](const tools::ConfirmRequest& req) -> tools::Decision {
+            if ( !req.danger.empty())
+                std::cout << "\n⚠ dangerous command — " << req.danger << std::endl;
+            std::cout << "\n" << req.tool << " wants to run:\n" << req.summary << "\n";
+            std::cout << "[y] once  [s] session";
+            if ( req.can_similar )
+                std::cout << "  [a] all `" << req.similar_key << "`";
+            std::cout << "  [N] deny\nchoice: " << std::flush;
+
             std::string answer;
             if ( !std::getline(std::cin, answer))
-                return false;
+                return tools::Decision::deny;
             std::string a = common::to_lower(common::trim_ws(answer));
-            return a == "y" || a == "yes";
+            if ( a == "y" || a == "yes" || a == "once" ) return tools::Decision::once;
+            if ( a == "s" || a == "session" )            return tools::Decision::session;
+            if ( ( a == "a" || a == "all" ) && req.can_similar ) return tools::Decision::similar;
+            return tools::Decision::deny;
         });
     }
 
@@ -144,23 +209,31 @@ void Repl::run_plain() {
 
 void Repl::run_tty() {
 
-    NcursesRepl ncurses(
-        [this](const std::string& prompt, std::function<void(const std::string&)> stream_cb) -> std::string {
+    // Keep the transcript clean: in the interactive UI only errors reach the
+    // terminal; the full log still goes to the log file (set up in main()).
+    logger::loglevel(logger::error);
+
+    InlineRepl inline_repl(
+        [this](const std::string& prompt, std::function<void(const std::string&)> stream_cb, std::atomic<bool>* abort_flag) -> std::string {
             try {
-                std::string reply = this->process_turn(prompt, stream_cb);
+                std::string reply = this->process_turn(prompt, stream_cb, abort_flag);
                 this->save_conversation();
                 return reply;
             } catch ( const std::exception& e ) {
                 return std::string("error: ") + e.what();
             }
         },
-        _config, _conversation);
+        _config, _conversation, _stats);
 
-    if ( _config.tools_enabled && _config.confirm_tools ) {
-        _registry.set_confirm_callback([&ncurses](const std::string& action) { return ncurses.confirm(action); });
+    _registry.set_mode(tool_mode());
+    if ( _config.tools_enabled && tool_mode() != tools::ConfirmMode::insecure ) {
+        _registry.set_confirm_callback([&inline_repl](const tools::ConfirmRequest& req) { return inline_repl.confirm(req); });
+    }
+    if ( _config.tools_enabled ) {
+        _registry.set_activity_callback([&inline_repl](const std::string& a) { inline_repl.set_activity(a); });
     }
 
-    ncurses.run();
+    inline_repl.run();
 }
 
 void Repl::run() {
@@ -172,6 +245,10 @@ void Repl::run() {
 }
 
 void Repl::run_once(const std::string& prompt) {
+
+    // Non-interactive: no prompt UI. Only insecure/automatic modes can run tools;
+    // otherwise confirmation-required tools fail safe (deny).
+    _registry.set_mode(tool_mode());
 
     try {
         std::string reply = process_turn(prompt, [](const std::string& chunk) {

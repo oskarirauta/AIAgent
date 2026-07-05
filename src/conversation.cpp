@@ -43,6 +43,12 @@ void Conversation::add_assistant(const std::string& content) {
     _messages.emplace_back(Role::ASSISTANT, content);
 }
 
+void Conversation::add_assistant(const std::string& content, const std::vector<ToolCall>& tool_calls) {
+    Message msg(Role::ASSISTANT, content);
+    msg.tool_calls = tool_calls;
+    _messages.push_back(std::move(msg));
+}
+
 void Conversation::add_tool_result(const std::string& tool_call_id, const std::string& name, const std::string& result) {
     _messages.emplace_back(Role::TOOL, result, tool_call_id, name);
 }
@@ -63,6 +69,21 @@ void Conversation::save(const std::string& path) const {
             obj["tool_call_id"] = msg.tool_call_id.value();
         if ( msg.name.has_value())
             obj["name"] = msg.name.value();
+        if ( !msg.tool_calls.empty()) {
+            JSON calls = JSON::Array{};
+            for ( const auto& tc : msg.tool_calls ) {
+                JSON call = JSON::Object{
+                    { "id", tc.id },
+                    { "type", "function" },
+                    { "function", JSON::Object{
+                        { "name", tc.name },
+                        { "arguments", tc.arguments }
+                    }}
+                };
+                calls.append(call);
+            }
+            obj["tool_calls"] = calls;
+        }
         arr.append(obj);
     }
 
@@ -105,6 +126,23 @@ void Conversation::load(const std::string& path) {
                 msg.tool_call_id = obj["tool_call_id"].to_string();
             if ( obj.contains("name"))
                 msg.name = obj["name"].to_string();
+            if ( obj.contains("tool_calls") && obj["tool_calls"] == JSON::TYPE::ARRAY ) {
+                JSON calls = obj["tool_calls"];
+                for ( size_t i = 0; i < calls.size(); ++i ) {
+                    JSON tc = calls[i];
+                    ToolCall call;
+                    if ( tc.contains("id"))
+                        call.id = tc["id"].to_string();
+                    if ( tc.contains("function") && tc["function"] == JSON::TYPE::OBJECT ) {
+                        JSON fn = tc["function"];
+                        if ( fn.contains("name"))
+                            call.name = fn["name"].to_string();
+                        if ( fn.contains("arguments"))
+                            call.arguments = fn["arguments"].to_string();
+                    }
+                    msg.tool_calls.push_back(std::move(call));
+                }
+            }
             _messages.push_back(msg);
         }
 

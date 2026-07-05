@@ -3,26 +3,68 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include "agent/tools/tool.hpp"
 
 namespace agent::tools {
 
+// Confirmation policy for tool calls.
+//   confirm   - ask before every confirmation-requiring tool (default)
+//   automatic - run ordinary tools without asking, but still warn on danger-listed ones
+//   insecure  - run everything without asking
+enum class ConfirmMode { confirm, automatic, insecure };
+
+// Outcome of a confirmation prompt.
+enum class Decision {
+    deny,     // do not run
+    once,     // run this one time
+    session,  // run, and don't ask again for this exact command this session
+    similar   // run, and don't ask again for similar commands (same program) this session
+};
+
+// Everything the UI needs to render a confirmation prompt.
+struct ConfirmRequest {
+    std::string tool;        // tool name
+    std::string summary;     // full human-readable action / command
+    std::string danger;      // reason string if the command is danger-listed, else empty
+    std::string similar_key; // what "allow similar" would whitelist (e.g. program name)
+    bool can_similar = false;
+};
+
 class Registry {
 public:
-    using confirm_cb_t = std::function<bool(const std::string& action)>;
+    using confirm_cb_t = std::function<Decision(const ConfirmRequest&)>;
+    using activity_cb_t = std::function<void(const std::string&)>;
 
     void register_defaults();
     void add(std::unique_ptr<Tool> tool);
     void set_confirm_callback(confirm_cb_t cb);
+    void set_activity_callback(activity_cb_t cb) { _activity_cb = std::move(cb); }
+    void set_mode(ConfirmMode mode) { _mode = mode; }
 
     JSON schema() const;
     std::string execute(const std::string& name, const JSON& args);
     bool has(const std::string& name) const;
 
+    // Classify a shell command against the danger list. Returns a human-readable
+    // reason when the command is risky, or an empty string otherwise. Exposed for
+    // testing.
+    static std::string classify_danger(const std::string& command);
+
+    // Classify a file-write target path: writing into a system directory or
+    // outside the working directory is risky. Returns a reason or empty string.
+    static std::string classify_path_danger(const std::string& path);
+
 private:
     std::map<std::string, std::unique_ptr<Tool>> _tools;
     confirm_cb_t _confirm_cb;
+    activity_cb_t _activity_cb;
+    ConfirmMode _mode = ConfirmMode::confirm;
+
+    // Session-scoped approvals granted via "allow session" / "allow similar".
+    std::set<std::string> _allow_exact;   // full command / action strings
+    std::set<std::string> _allow_similar; // program names / tool names
 };
 
 } // namespace agent::tools

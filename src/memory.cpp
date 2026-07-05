@@ -24,9 +24,12 @@ static bool is_memory_file(const std::string& name) {
     return false;
 }
 
-std::string load_memories(const std::string& home_dir) {
+std::string load_memories(const std::string& home_dir, const std::string& provider) {
 
-    std::string mem_dir = home_dir + "/memories";
+    // Memories are per-provider (but not per-model), so switching e.g. Claude
+    // Opus -> Claude Fable keeps the same memory set while Claude and Kimi stay
+    // separate.
+    std::string mem_dir = home_dir + "/memories/" + provider;
     if ( !std::filesystem::exists(mem_dir) || !std::filesystem::is_directory(mem_dir)) {
         logger::verbose["memory"] << "no memories directory: " << mem_dir << std::endl;
         return "";

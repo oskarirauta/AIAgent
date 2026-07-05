@@ -14,11 +14,18 @@ enum class Role {
     TOOL
 };
 
+struct ToolCall {
+    std::string id;
+    std::string name;
+    std::string arguments; // JSON string
+};
+
 struct Message {
     Role role = Role::USER;
     std::string content;
     std::optional<std::string> tool_call_id;
     std::optional<std::string> name; // for tool result sender
+    std::vector<ToolCall> tool_calls; // assistant tool calls
 
     Message() = default;
     Message(Role r, const std::string& c) : role(r), content(c) {}
@@ -31,6 +38,7 @@ public:
     void set_system(const std::string& prompt);
     void add_user(const std::string& content);
     void add_assistant(const std::string& content);
+    void add_assistant(const std::string& content, const std::vector<ToolCall>& tool_calls);
     void add_tool_result(const std::string& tool_call_id, const std::string& name, const std::string& result);
 
     const std::vector<Message>& messages() const { return _messages; }

@@ -15,6 +15,14 @@ static size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdat
     return size * nmemb;
 }
 
+static int progress_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
+    (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+    auto* flag = static_cast<std::atomic<bool>*>(clientp);
+    if ( flag && flag->load(std::memory_order_relaxed))
+        return 1; // abort the transfer
+    return 0;
+}
+
 Client::Client() {
     curl = curl_easy_init();
     if ( !curl )
@@ -26,11 +34,17 @@ Client::~Client() {
         curl_easy_cleanup(static_cast<CURL*>(curl));
 }
 
-std::string Client::post(const std::string& url, const std::string& api_key, const std::string& body) {
-    return post(url, "Authorization", api_key.empty() ? "" : "Bearer " + api_key, body);
+std::string Client::post(const std::string& url, const std::string& api_key, const std::string& body, std::atomic<bool>* abort_flag) {
+    return post(url, "Authorization", api_key.empty() ? "" : "Bearer " + api_key, body, abort_flag);
 }
 
-std::string Client::post(const std::string& url, const std::string& auth_header, const std::string& auth_value, const std::string& body) {
+std::string Client::post(const std::string& url, const std::string& auth_header, const std::string& auth_value, const std::string& body, std::atomic<bool>* abort_flag) {
+    return post(url, auth_header, auth_value, {}, body, abort_flag);
+}
+
+std::string Client::post(const std::string& url, const std::string& auth_header, const std::string& auth_value,
+                         const std::vector<std::pair<std::string, std::string>>& extra_headers,
+                         const std::string& body, std::atomic<bool>* abort_flag) {
 
     CURL* c = static_cast<CURL*>(curl);
     std::string response;
@@ -38,6 +52,11 @@ std::string Client::post(const std::string& url, const std::string& auth_header,
 
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    for ( const auto& h : extra_headers ) {
+        std::string header = h.first + ": " + h.second;
+        headers = curl_slist_append(headers, header.c_str());
+    }
 
     if ( !auth_header.empty() && !auth_value.empty()) {
         std::string auth = auth_header + ": " + auth_value;
@@ -59,10 +78,20 @@ std::string Client::post(const std::string& url, const std::string& auth_header,
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
 
-    logger::vverbose["http"] << "POST " << url << "\n" << body << std::endl;
+    if ( abort_flag ) {
+        curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, progress_callback);
+        curl_easy_setopt(c, CURLOPT_XFERINFODATA, abort_flag);
+    }
+
+    logger::debug["http"] << "POST " << url << std::endl;
+    logger::vverbose["http"] << "POST body\n" << body << std::endl;
 
     CURLcode res = curl_easy_perform(c);
     curl_slist_free_all(headers);
+
+    if ( res == CURLE_ABORTED_BY_CALLBACK )
+        return "";
 
     if ( res != CURLE_OK )
         throws << "http request failed: " << curl_easy_strerror(res) << std::endl;
@@ -76,13 +105,24 @@ std::string Client::post(const std::string& url, const std::string& auth_header,
     return response;
 }
 
-void Client::post_stream(const std::string& url, const std::string& auth_header, const std::string& auth_value, const std::string& body, std::function<void(const std::string&)> callback) {
+void Client::post_stream(const std::string& url, const std::string& auth_header, const std::string& auth_value, const std::string& body, std::function<void(const std::string&)> callback, std::atomic<bool>* abort_flag) {
+    post_stream(url, auth_header, auth_value, {}, body, callback, abort_flag);
+}
+
+void Client::post_stream(const std::string& url, const std::string& auth_header, const std::string& auth_value,
+                         const std::vector<std::pair<std::string, std::string>>& extra_headers,
+                         const std::string& body, std::function<void(const std::string&)> callback, std::atomic<bool>* abort_flag) {
 
     CURL* c = static_cast<CURL*>(curl);
     curl_easy_reset(c);
 
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    for ( const auto& h : extra_headers ) {
+        std::string header = h.first + ": " + h.second;
+        headers = curl_slist_append(headers, header.c_str());
+    }
 
     if ( !auth_header.empty() && !auth_value.empty()) {
         std::string auth = auth_header + ": " + auth_value;
@@ -111,10 +151,20 @@ void Client::post_stream(const std::string& url, const std::string& auth_header,
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
 
-    logger::vverbose["http"] << "POST STREAM " << url << "\n" << body << std::endl;
+    if ( abort_flag ) {
+        curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, progress_callback);
+        curl_easy_setopt(c, CURLOPT_XFERINFODATA, abort_flag);
+    }
+
+    logger::debug["http"] << "POST STREAM " << url << std::endl;
+    logger::vverbose["http"] << "POST STREAM body\n" << body << std::endl;
 
     CURLcode res = curl_easy_perform(c);
     curl_slist_free_all(headers);
+
+    if ( res == CURLE_ABORTED_BY_CALLBACK )
+        return;
 
     if ( res != CURLE_OK )
         throws << "http request failed: " << curl_easy_strerror(res) << std::endl;
@@ -124,6 +174,62 @@ void Client::post_stream(const std::string& url, const std::string& auth_header,
 
     if ( http_code < 200 || http_code >= 300 )
         throws << "http error " << http_code << std::endl;
+}
+
+std::string Client::post_form(const std::string& url, const std::string& body, std::atomic<bool>* abort_flag) {
+    return post_form(url, {}, body, abort_flag);
+}
+
+std::string Client::post_form(const std::string& url,
+                              const std::vector<std::pair<std::string, std::string>>& extra_headers,
+                              const std::string& body, std::atomic<bool>* abort_flag) {
+
+    CURL* c = static_cast<CURL*>(curl);
+    std::string response;
+    curl_easy_reset(c);
+
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/x-www-form-urlencoded");
+    headers = curl_slist_append(headers, "Accept: application/json");
+
+    for ( const auto& h : extra_headers ) {
+        std::string header = h.first + ": " + h.second;
+        headers = curl_slist_append(headers, header.c_str());
+    }
+
+    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
+
+    if ( abort_flag ) {
+        curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, progress_callback);
+        curl_easy_setopt(c, CURLOPT_XFERINFODATA, abort_flag);
+    }
+
+    logger::vverbose["http"] << "POST FORM " << url << "\n" << body << std::endl;
+
+    CURLcode res = curl_easy_perform(c);
+    curl_slist_free_all(headers);
+
+    if ( res == CURLE_ABORTED_BY_CALLBACK )
+        return "";
+
+    if ( res != CURLE_OK )
+        throws << "http request failed: " << curl_easy_strerror(res) << std::endl;
+
+    long http_code = 0;
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
+
+    if ( http_code < 200 || http_code >= 300 )
+        throws << "http error " << http_code << ": " << response << std::endl;
+
+    return response;
 }
 
 } // namespace agent::api

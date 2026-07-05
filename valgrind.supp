@@ -1,0 +1,16 @@
+# Valgrind suppressions for AI Agent.
+#
+# These silence known-benign noise from third-party libraries, NOT bugs in this
+# codebase. Use with:  valgrind --suppressions=valgrind.supp ./agent ...
+#
+# OpenSSL's devcrypto engine probes /dev/crypto with an ioctl that reads a
+# partially-uninitialised struct during OPENSSL_init_crypto (triggered via
+# curl_global_init). Harmless, and entirely inside libcrypto.
+{
+   openssl-devcrypto-ioctl-uninitialised
+   Memcheck:Param
+   ioctl(generic)
+   fun:ioctl
+   ...
+   obj:*/libcrypto.so.*
+}

@@ -13,6 +13,9 @@ public:
     std::string auth_header() const override { return "x-api-key"; }
     std::string auth_value() const override { return _config.api_key; }
     bool supports_streaming() const override { return true; }
+    std::vector<std::pair<std::string, std::string>> extra_headers() const override {
+        return { { "anthropic-version", "2023-06-01" } };
+    }
     std::string parse_stream(const std::string& chunk, std::string& buffer, bool& done) override;
 
     JSON build_request(const Conversation& conv, const JSON& tools_schema) override;

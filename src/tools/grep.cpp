@@ -3,9 +3,43 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
+#include <algorithm>
+#include <regex>
 #include "common.hpp"
 
 namespace agent::tools {
+
+namespace {
+
+constexpr size_t MAX_MATCHES     = 200;
+constexpr size_t MAX_LINE_CHARS  = 500;
+constexpr size_t MAX_TOTAL_BYTES = 100000;
+
+bool looks_binary(const std::string& data) {
+    size_t n = std::min(data.size(), static_cast<size_t>(8000));
+    if ( n == 0 )
+        return false;
+    size_t nonprint = 0;
+    for ( size_t i = 0; i < n; ++i ) {
+        unsigned char c = static_cast<unsigned char>(data[i]);
+        if ( c == 0 )
+            return true;
+        if ( c < 9 || ( c > 13 && c < 32 ))
+            ++nonprint;
+    }
+    return nonprint * 100 / n > 30;
+}
+
+bool json_truthy(const JSON& v) {
+    if ( v == JSON::TYPE::STRING ) {
+        std::string s = common::to_lower(v.to_string());
+        return s == "true" || s == "1" || s == "yes";
+    }
+    return v.to_bool();
+}
+
+} // namespace
 
 JSON Grep::parameters() const {
     return JSON::Object{
@@ -17,7 +51,15 @@ JSON Grep::parameters() const {
             }},
             { "pattern", JSON::Object{
                 { "type", "string" },
-                { "description", "substring to search for" }
+                { "description", "regular expression to search for (ECMAScript syntax)" }
+            }},
+            { "ignore_case", JSON::Object{
+                { "type", "boolean" },
+                { "description", "case-insensitive match (optional)" }
+            }},
+            { "literal", JSON::Object{
+                { "type", "boolean" },
+                { "description", "treat pattern as a literal substring, not a regex (optional)" }
             }}
         }},
         { "required", JSON::Array{ "path", "pattern" }}
@@ -26,29 +68,80 @@ JSON Grep::parameters() const {
 
 std::string Grep::execute(const JSON& args) {
     std::string path = common::trim_ws(args["path"].to_string());
-    std::string pattern = common::trim_ws(args["pattern"].to_string());
+    std::string pattern = args["pattern"].to_string();
 
     if ( pattern.empty())
         return "error: empty pattern";
 
-    std::ifstream ifd(path, std::ios::in);
+    bool ignore_case = args.contains("ignore_case") && json_truthy(args["ignore_case"]);
+    bool literal = args.contains("literal") && json_truthy(args["literal"]);
+
+    std::ifstream ifd(path, std::ios::in | std::ios::binary);
     if ( !ifd.is_open())
         return std::string("error: cannot open file: ") + path;
 
-    std::ostringstream ss;
-    std::string line;
-    int lineno = 0;
-    while ( std::getline(ifd, line)) {
-        lineno++;
-        if ( line.find(pattern) != std::string::npos )
-            ss << lineno << ": " << line << "\n";
+    std::stringstream buf;
+    buf << ifd.rdbuf();
+    std::string content = buf.str();
+
+    if ( looks_binary(content))
+        return "error: " + path + " appears to be a binary file; not searched.";
+
+    // Compile the regex up front so an invalid pattern is a clear error.
+    std::regex re;
+    if ( !literal ) {
+        auto flags = std::regex::ECMAScript;
+        if ( ignore_case )
+            flags |= std::regex::icase;
+        try {
+            re.assign(pattern, flags);
+        } catch ( const std::regex_error& e ) {
+            return std::string("error: invalid regular expression: ") + e.what();
+        }
     }
 
-    std::string result = ss.str();
-    if ( result.empty())
-        return "no matches";
+    std::string needle = ignore_case ? common::to_lower(pattern) : pattern;
 
-    return result;
+    std::ostringstream ss;
+    std::string line;
+    long lineno = 0;
+    size_t matches = 0;
+    bool capped = false;
+
+    std::istringstream lines(content);
+    while ( std::getline(lines, line)) {
+        ++lineno;
+        bool hit;
+        if ( literal ) {
+            hit = ignore_case ? ( common::to_lower(line).find(needle) != std::string::npos)
+                              : ( line.find(pattern) != std::string::npos);
+        } else {
+            hit = std::regex_search(line, re);
+        }
+        if ( !hit )
+            continue;
+
+        std::string shown = line;
+        if ( shown.size() > MAX_LINE_CHARS )
+            shown = shown.substr(0, MAX_LINE_CHARS) + " …[truncated]";
+
+        std::string entry = std::to_string(lineno) + ": " + shown + "\n";
+        if ( matches >= MAX_MATCHES ||
+             static_cast<size_t>(ss.tellp()) + entry.size() > MAX_TOTAL_BYTES ) {
+            capped = true;
+            break;
+        }
+        ss << entry;
+        ++matches;
+    }
+
+    if ( matches == 0 )
+        return "no matches for " + (literal ? ("\"" + pattern + "\"") : ("/" + pattern + "/")) +
+               " in " + path;
+
+    std::string header = std::to_string(matches) + (matches == 1 ? " match" : " matches") +
+                         (capped ? " (stopped at limit)" : "") + ":\n";
+    return header + ss.str();
 }
 
 } // namespace agent::tools
