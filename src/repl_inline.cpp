@@ -8,6 +8,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <sstream>
 #include <algorithm>
 #include <utility>
 #include <vector>
@@ -51,6 +52,44 @@ static std::vector<std::string> split_cells(const std::string& s) {
         i = j;
     }
     return cells;
+}
+
+// Greedy word-wrap a prose line to `width` display columns, preserving leading
+// indentation on every wrapped segment. A single over-long word (URL, token) is
+// left to overflow rather than broken. Lines that already fit are returned as-is.
+static std::vector<std::string> word_wrap(const std::string& line, int width) {
+    if ( width < 8 )
+        width = 8;
+    if ( static_cast<int>(split_cells(line).size()) <= width )
+        return { line };
+
+    size_t ie = 0;
+    while ( ie < line.size() && ( line[ie] == ' ' || line[ie] == '\t' ))
+        ++ie;
+    std::string indent = line.substr(0, ie);
+    int indent_w = static_cast<int>(split_cells(indent).size());
+
+    std::vector<std::string> out;
+    std::string cur = indent;
+    int cur_w = indent_w;
+
+    std::istringstream iss(line.substr(ie));
+    std::string word;
+    while ( iss >> word ) {
+        int ww = static_cast<int>(split_cells(word).size());
+        bool has_word = cur_w > indent_w;
+        if ( has_word && cur_w + 1 + ww > width ) {
+            out.push_back(cur);
+            cur = indent;
+            cur_w = indent_w;
+            has_word = false;
+        }
+        if ( has_word ) { cur += " "; cur_w += 1; }
+        cur += word;
+        cur_w += ww;
+    }
+    out.push_back(cur);
+    return out;
 }
 
 // ── construction / teardown ─────────────────────────────────────────────
@@ -181,10 +220,20 @@ void InlineRepl::emit_styled_line(const std::string& line) {
         return;
     }
 
-    if ( _in_code )
+    if ( _in_code ) {
+        // Code is left unwrapped (breaking at spaces would be wrong); the
+        // terminal soft-wraps it so a copy stays faithful.
         wr(style_spans(line, _code_lang));
-    else
-        wr(style_spans(line, Language::markdown));
+        return;
+    }
+
+    // Prose: word-wrap to the terminal width so lines don't break mid-word.
+    std::vector<std::string> segs = word_wrap(line, term_cols() - 1);
+    for ( size_t i = 0; i < segs.size(); ++i ) {
+        wr(style_spans(segs[i], Language::markdown));
+        if ( i + 1 < segs.size())
+            wr("\n");
+    }
 }
 
 // ── transcript output ───────────────────────────────────────────────────
@@ -215,7 +264,26 @@ void InlineRepl::echo_user(const std::string& display) {
     erase_live();
     // One blank line before the message, edges trimmed — every message (user or
     // AI) is preceded by exactly one blank line so speakers are easy to tell apart.
-    wr("\n\033[1;36m›\033[0m " + trim_blank_edges(display) + "\n");
+    wr("\n");
+
+    std::string msg = trim_blank_edges(display);
+    int width = term_cols() - 3; // room for the "> " marker + a right margin
+
+    bool first = true;
+    std::string logical;
+    std::istringstream ls(msg);
+    while ( std::getline(ls, logical)) {
+        for ( const auto& seg : word_wrap(logical, width)) {
+            if ( first ) {
+                wr("\033[1;36m›\033[0m " + seg + "\n");
+                first = false;
+            } else {
+                wr("  " + seg + "\n"); // continuation lines align under the text
+            }
+        }
+    }
+    if ( first ) // empty message (shouldn't happen, but stay safe)
+        wr("\033[1;36m›\033[0m\n");
 }
 
 void InlineRepl::begin_reply() {
