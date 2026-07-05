@@ -111,10 +111,12 @@ void Conversation::load(const std::string& path) {
 
     try {
         JSON arr = JSON::parse(ss.str());
-        if ( arr != JSON::TYPE::ARRAY )
-            throws << "conversation file is not an array: " << path << std::endl;
+        if ( arr != JSON::TYPE::ARRAY ) {
+            logger::warning["conversation"] << "conversation file is not an array, ignoring: " << path << std::endl;
+            return;
+        }
 
-        _messages.clear();
+        std::vector<Message> loaded;
         for ( size_t i = 0; i < arr.size(); i++ ) {
             JSON obj = arr[i];
             Message msg;
@@ -143,12 +145,15 @@ void Conversation::load(const std::string& path) {
                     msg.tool_calls.push_back(std::move(call));
                 }
             }
-            _messages.push_back(msg);
+            loaded.push_back(msg);
         }
 
+        // Only replace the in-memory history once parsing fully succeeded.
+        _messages = std::move(loaded);
         logger::verbose["conversation"] << "loaded " << _messages.size() << " message(s) from " << path << std::endl;
     } catch ( const std::exception& e ) {
-        throws << "failed to load conversation: " << e.what() << std::endl;
+        // A corrupt history must not crash the agent — warn and start fresh.
+        logger::warning["conversation"] << "ignoring unreadable conversation file " << path << ": " << e.what() << std::endl;
     }
 }
 

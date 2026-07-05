@@ -6,8 +6,29 @@
 #include <stdexcept>
 #include "throws.hpp"
 #include "logger.hpp"
+#include "json.hpp"
 
 namespace agent::api {
+
+// Extract a human-readable message from a provider error body. OpenAI and
+// Anthropic both use {"error":{"message":...}} (Anthropic also {"type":"error"}),
+// so pull that out; fall back to the raw body when it is not recognisable JSON.
+static std::string format_api_error(const std::string& body) {
+    try {
+        JSON j = JSON::parse(body);
+        if ( j.contains("error")) {
+            JSON e = j["error"];
+            if ( e == JSON::TYPE::OBJECT && e.contains("message"))
+                return e["message"].to_string();
+            if ( e == JSON::TYPE::STRING )
+                return e.to_string();
+        }
+        if ( j.contains("message"))
+            return j["message"].to_string();
+    } catch ( ... ) {
+    }
+    return body;
+}
 
 static size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
     std::string* out = static_cast<std::string*>(userdata);
@@ -100,7 +121,7 @@ std::string Client::post(const std::string& url, const std::string& auth_header,
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
 
     if ( http_code < 200 || http_code >= 300 )
-        throws << "http error " << http_code << ": " << response << std::endl;
+        throws << "http error " << http_code << ": " << format_api_error(response) << std::endl;
 
     return response;
 }
@@ -227,7 +248,7 @@ std::string Client::post_form(const std::string& url,
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
 
     if ( http_code < 200 || http_code >= 300 )
-        throws << "http error " << http_code << ": " << response << std::endl;
+        throws << "http error " << http_code << ": " << format_api_error(response) << std::endl;
 
     return response;
 }

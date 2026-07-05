@@ -82,7 +82,7 @@ int main(int argc, char **argv) {
 
     std::string config_path = agent::Config::default_path();
     if ( usage["config"] )
-        config_path = usage["config"].stringValue();
+        config_path = agent::Config::expand_tilde(usage["config"].stringValue());
 
     config.load(config_path);
     config.apply_cli(usage);

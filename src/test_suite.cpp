@@ -216,6 +216,32 @@ static void test_tools() {
     std::filesystem::remove("/tmp/ai_agent_tool_test.txt");
 }
 
+static void test_expand_tilde() {
+    std::cout << "tilde expansion" << std::endl;
+    setenv("HOME", "/home/tester", 1);
+    check(agent::Config::expand_tilde("~/x") == "/home/tester/x", "~/ expands to HOME");
+    check(agent::Config::expand_tilde("~") == "/home/tester", "bare ~ expands to HOME");
+    check(agent::Config::expand_tilde("/abs") == "/abs", "absolute path unchanged");
+    check(agent::Config::expand_tilde("rel/p") == "rel/p", "relative path unchanged");
+}
+
+static void test_conversation_corrupt() {
+    std::cout << "corrupt conversation handling" << std::endl;
+    std::string path = "/tmp/ai_conv_bad.json";
+    { std::ofstream o(path); o << "{ not valid json ["; }
+    agent::Conversation c;
+    bool threw = false;
+    try { c.load(path); } catch ( ... ) { threw = true; }
+    check(!threw, "corrupt conversation file does not throw");
+
+    { std::ofstream o(path); o << "{\"a\":1}"; } // valid JSON but not an array
+    threw = false;
+    try { c.load(path); } catch ( ... ) { threw = true; }
+    check(!threw, "non-array conversation file does not throw");
+
+    std::filesystem::remove(path);
+}
+
 static void test_run_command_robustness() {
     std::cout << "run_command robustness" << std::endl;
     agent::tools::RunCommand rc;
@@ -356,6 +382,8 @@ int main() {
     std::cout << "Running AI Agent test suite\n" << std::endl;
 
     test_conversation_save_load();
+    test_conversation_corrupt();
+    test_expand_tilde();
     test_memory_loading();
     test_openai_request();
     test_ollama_request();

@@ -47,6 +47,19 @@ static std::string parse_value(const std::string& raw) {
     return s;
 }
 
+std::string Config::expand_tilde(const std::string& path) {
+    if ( path.empty() || path[0] != '~' )
+        return path;
+    const char* home = std::getenv("HOME");
+    if ( !home || !*home )
+        home = "/root";
+    if ( path.size() == 1 )                 // "~"
+        return home;
+    if ( path[1] == '/' )                   // "~/..."
+        return std::string(home) + path.substr(1);
+    return path;                            // "~user" is not expanded
+}
+
 std::string Config::default_path() {
     const char* home = std::getenv("HOME");
     if ( !home || !*home )
@@ -122,7 +135,7 @@ void Config::load(const std::string& path) {
         else if ( key == "oauth_client_id" ) oauth_client_id = value;
         else if ( key == "log_level" ) log_level = value;
         else if ( key == "system_prompt" ) system_prompt = value;
-        else if ( key == "home_dir" ) home_dir = value;
+        else if ( key == "home_dir" ) home_dir = expand_tilde(value);
         else if ( key == "tools_enabled" ) tools_enabled = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
         else if ( key == "paste_threshold_chars" ) paste_threshold_chars = parse_size(value, paste_threshold_chars, key);
         else if ( key == "paste_threshold_lines" ) paste_threshold_lines = parse_size(value, paste_threshold_lines, key);
@@ -165,7 +178,7 @@ void Config::apply_cli(const usage_t& usage) {
     if ( usage["system_prompt"] )
         system_prompt = usage["system_prompt"].stringValue();
     if ( usage["home_dir"] )
-        home_dir = usage["home_dir"].stringValue();
+        home_dir = expand_tilde(usage["home_dir"].stringValue());
     if ( usage["no_tools"] )
         tools_enabled = false;
     if ( usage["yes_tools"] )

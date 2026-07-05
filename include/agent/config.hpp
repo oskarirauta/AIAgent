@@ -59,6 +59,9 @@ public:
     static std::string default_path();
     static std::string default_home_dir();
 
+    // Expand a leading "~" or "~/" to $HOME (falling back to /root).
+    static std::string expand_tilde(const std::string& path);
+
     // Provider-appropriate default model, used when the user did not pass -m and
     // left `model` at its built-in default.
     static std::string default_model_for(const std::string& provider);
