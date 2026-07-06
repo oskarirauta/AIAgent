@@ -49,7 +49,6 @@ public:
     // visible deltas while accumulating content/reasoning/tool_calls internally),
     // and assemble the full Response once the stream is done. Providers that can
     // stream tool calls override all three; others only produce content.
-    virtual bool stream_wants_usage() const { return false; } // request stream_options.include_usage
     virtual void stream_reset() {}
     virtual StreamChunk parse_stream(const std::string& chunk, std::string& buffer, bool& done) { (void)chunk; (void)buffer; (void)done; return {}; }
     virtual Response stream_result() { return Response{}; }

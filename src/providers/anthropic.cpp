@@ -242,7 +242,9 @@ void Anthropic::stream_reset() {
 }
 
 StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
-    buffer += chunk;
+    // Strip CR so CRLF line endings still split on "\n\n" (some gateways send \r\n).
+    for ( char ch : chunk )
+        if ( ch != '\r' ) buffer += ch;
     StreamChunk out;
     size_t pos;
     while ((pos = buffer.find("\n\n")) != std::string::npos) {
@@ -262,7 +264,7 @@ StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffe
             JSON j = JSON::parse(data);
             std::string type = j.contains("type") ? j["type"].to_string() : "";
 
-            if ( type == "message_start" && j.contains("message")) {
+            if ( type == "message_start" && j.contains("message") && j["message"].contains("usage")) {
                 JSON u = j["message"]["usage"];
                 if ( u == JSON::TYPE::OBJECT && u.contains("input_tokens"))
                     _s_input_tokens = json_long(u["input_tokens"]);

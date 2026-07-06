@@ -52,12 +52,15 @@ bool Claude::authenticate(api::Client& client, bool force_login) {
         try {
             std::string previous_refresh = _token->refresh_token;
             auto refreshed = auth::refresh_access_token(client, _token->refresh_token);
-            // Some refresh responses omit a new refresh token; keep the old one.
-            if ( refreshed.refresh_token.empty())
+            // Anthropic rotates the refresh token; if the response omits a new one,
+            // keep the old (and log it — reusing a rotated-out token 401s next time).
+            bool rotated = !refreshed.refresh_token.empty();
+            if ( !rotated )
                 refreshed.refresh_token = previous_refresh;
             _token = refreshed;
             auth::save_claude_token(_config.home_dir, *_token);
-            logger::info["claude"] << "access token refreshed" << std::endl;
+            logger::info["claude"] << "access token refreshed (expires_in=" << _token->expires_in
+                                   << "s, new_refresh_token=" << ( rotated ? "yes" : "no" ) << ")" << std::endl;
             return true;
         } catch ( const std::exception& e ) {
             logger::warning["claude"] << "token refresh failed: " << e.what() << std::endl;

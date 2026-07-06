@@ -96,7 +96,9 @@ void Ollama::stream_reset() {
 }
 
 StreamChunk Ollama::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
-    buffer += chunk;
+    // Strip CR so CRLF line endings still split on "\n\n" (some gateways send \r\n).
+    for ( char ch : chunk )
+        if ( ch != '\r' ) buffer += ch;
     StreamChunk out;
     size_t pos;
     while ((pos = buffer.find("\n\n")) != std::string::npos) {

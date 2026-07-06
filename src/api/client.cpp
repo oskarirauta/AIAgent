@@ -179,7 +179,12 @@ void Client::post_stream(const std::string& url, const std::string& auth_header,
     curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, stream_write_callback);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &sink);
-    curl_easy_setopt(c, CURLOPT_TIMEOUT, 120L);
+    // No hard total timeout for streaming — a long answer (deep thinking + a long
+    // reply) legitimately takes minutes. Instead abort only if the connection
+    // stalls: less than 1 byte/s for 120s. Plus a bounded connect timeout.
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 30L);
+    curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 1L);
+    curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, 120L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
 
