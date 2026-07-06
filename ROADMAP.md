@@ -24,7 +24,10 @@ each list is roughly the current priority order.
 - **Tool safety**: confirm / auto / insecure modes, danger list, chain-aware safe
   list, `strict` mode.
 - **Persistence**: per-provider + per-project history and memories; UI settings
-  (theme, multiline, thinking, thinking_stream, context) saved to `state.json`.
+  (theme, multiline, thinking, thinking_stream/collapse, context, paste_preview)
+  saved to `state.json`.
+- **Paste preview**: `paste_preview` trims a framed paste's echo to the first N
+  lines + "… N more lines" (full text still sent to the model).
 - **Slash commands**: `/about /settings /model /tools /strict /thinking /theme
   /stream /history /retry /undo /memories /context /clear /help`.
 
@@ -33,18 +36,16 @@ each list is roughly the current priority order.
 - **`/compact`**: summarise history when it grows (trimming is done; summarisation
   is the remaining piece).
 - **Autocomplete**: slash commands and file paths.
-- **Settable paste thresholds** in `/settings`; **collapsed paste preview** (show N
-  dimmed lines + "X more…", with a settable preview line count).
+- **Settable paste thresholds** in `/settings` (the char/line/ms thresholds exist in
+  config but are not yet exposed in the menu).
 - **`/provider` switching** mid-session (needs re-auth + a fresh conversation).
 - **`SIGWINCH`** handling — redraw the live block on terminal resize.
 - **Config-extensible danger/safe command lists**.
 - **`/btw`** (mid-turn note) and **`/tasks`** (agent todo list) — Claude Code-style
   harness features; provider-agnostic if built as app features, sizeable.
-- **paste-block settings** Currently whole block is displayed, we should also support
-  a setting that suppresses paste-block to certain amount of lines in chat history,
-  giving a preview of X lines and dimming to end with note of X lines more..
-  Possibly with expand support, but this is still under valuation if expansion will
-  be supported.
+- **paste-block expand**: the preview (first N lines + "… N more lines") ships via
+  `paste_preview`; interactive expand/collapse of a previewed block is still open
+  and under evaluation.
 - **`/workflows` command** for claude only
 - **`/rc` command** for claude only
 - **`/advisor` command** setting for claude only
