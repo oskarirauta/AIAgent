@@ -25,6 +25,7 @@ public:
     bool insecure = false;      // run every tool without asking (implies no danger warnings)
     bool strict = false;        // in confirm mode, ignore the safe-command allowlist
     size_t context_limit = 0;   // approx token budget for history sent to the model (0 = unlimited)
+    bool context_auto = false;  // derive the budget from the model's known context window
 
     // ncurses paste detection thresholds
     size_t paste_threshold_chars = 500;        // characters for multi-line paste
@@ -76,6 +77,14 @@ public:
     // Provider-appropriate default system prompt (identity), used when the user
     // did not override `system_prompt`.
     static std::string default_system_prompt_for(const std::string& provider);
+
+    // Approximate context window (tokens) known for a model, or 0 if unknown.
+    static size_t context_window_for(const std::string& model);
+
+    // The token budget to actually apply when trimming history: the model's
+    // window (with response headroom) in auto mode, else `context_limit`.
+    // 0 means no limit.
+    size_t context_budget() const;
 };
 
 } // namespace agent

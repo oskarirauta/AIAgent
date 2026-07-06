@@ -274,6 +274,26 @@ static void test_context_budget() {
     check(tiny.size() >= 2 && tiny.front().role == agent::Role::SYSTEM, "tiny budget keeps system + latest");
 }
 
+static void test_context_auto() {
+    std::cout << "context auto budget" << std::endl;
+    check(agent::Config::context_window_for("claude-opus-4-8") == 200000, "claude window");
+    check(agent::Config::context_window_for("kimi-for-coding") == 256000, "kimi window");
+    check(agent::Config::context_window_for("mystery-model") == 0, "unknown window is 0");
+
+    agent::Config cfg;
+    cfg.model = "claude-opus-4-8";
+    cfg.context_auto = true;
+    check(cfg.context_budget() == static_cast<size_t>(200000 * 0.85), "auto applies response headroom");
+
+    cfg.context_auto = false;
+    cfg.context_limit = 5000;
+    check(cfg.context_budget() == 5000, "explicit limit used when not auto");
+
+    cfg.model = "mystery-model";
+    cfg.context_auto = true;
+    check(cfg.context_budget() == 0, "auto with unknown model = unlimited");
+}
+
 static void test_conversation_corrupt() {
     std::cout << "corrupt conversation handling" << std::endl;
     std::string path = "/tmp/ai_conv_bad.json";
@@ -467,6 +487,7 @@ int main() {
     test_conversation_save_load();
     test_conversation_undo();
     test_context_budget();
+    test_context_auto();
     test_conversation_corrupt();
     test_expand_tilde();
     test_memory_loading();

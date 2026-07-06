@@ -1142,9 +1142,14 @@ void InlineRepl::render_context() {
     if ( mem > 0 )
         wr("    " + _theme.dim + "└ memories      " + fmt(mem) + Theme::reset + "\n");
 
-    std::string footer = "  " + _theme.dim + "context limit: " +
-                         ( _config.context_limit == 0 ? std::string("unlimited")
-                                                      : fmt(_config.context_limit) + " tokens" );
+    std::string limit_str;
+    if ( _config.context_auto ) {
+        size_t b = _config.context_budget();
+        limit_str = b ? "auto (" + fmt(b) + ")" : "auto (unlimited)";
+    } else {
+        limit_str = _config.context_limit == 0 ? "unlimited" : fmt(_config.context_limit) + " tokens";
+    }
+    std::string footer = "  " + _theme.dim + "context limit: " + limit_str;
     if ( actual > 0 )
         footer += " · last turn reported " + fmt(static_cast<size_t>(actual));
     footer += Theme::reset + std::string("\n");

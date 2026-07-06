@@ -71,7 +71,7 @@ protected:
     // history that would overflow a small context window (e.g. local models) is
     // dropped from the request while the full history stays saved.
     std::vector<Message> request_messages(const Conversation& conv) const {
-        return conv.within_token_budget(_config.context_limit);
+        return conv.within_token_budget(_config.context_budget());
     }
 
     std::string build_endpoint(const std::string& path) const {

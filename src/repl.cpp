@@ -217,8 +217,9 @@ std::string Repl::handle_command(const std::string& line) {
         s += "  system prompt: " + std::to_string(sys) + "\n";
         s += "  conversation:  " + std::to_string(msg) + "\n";
         s += "  total:         " + std::to_string(sys + msg) + "\n";
-        s += "  limit:         " + ( _config.context_limit == 0 ? std::string("unlimited")
-                                                                : std::to_string(_config.context_limit));
+        s += "  limit:         " + ( _config.context_auto
+                 ? ( _config.context_budget() ? "auto (" + std::to_string(_config.context_budget()) + ")" : "auto (unlimited)" )
+                 : ( _config.context_limit == 0 ? std::string("unlimited") : std::to_string(_config.context_limit)));
         if ( _stats.context_tokens.load() > 0 )
             s += "\n  last turn:     " + std::to_string(_stats.context_tokens.load());
         return s;
@@ -287,7 +288,14 @@ std::string Repl::handle_command(const std::string& line) {
             if ( key == "thinking" || key == "effort" ) return handle_command("/thinking " + val);
             if ( key == "context" || key == "context_limit" ) {
                 if ( val.empty())
-                    return "usage: /settings context <tokens|0>  (e.g. 64K, 0 = unlimited)";
+                    return "usage: /settings context <auto|tokens|0>  (e.g. auto, 64K, 0 = unlimited)";
+                if ( common::to_lower(val) == "auto" ) {
+                    _config.context_auto = true;
+                    size_t b = _config.context_budget();
+                    return b ? "context: auto (" + std::to_string(b) + " tokens for " + _config.model + ")"
+                             : "context: auto (window unknown for " + _config.model + " → unlimited)";
+                }
+                _config.context_auto = false;
                 _config.context_limit = Config::parse_size_suffixed(val, _config.context_limit);
                 return _config.context_limit == 0
                      ? std::string("context: unlimited")
@@ -304,8 +312,14 @@ std::string Repl::handle_command(const std::string& line) {
         s += "model:     " + _config.model + "\n";
         s += "tools:     " + tools + ( _config.strict ? " (strict)" : "" ) + "\n";
         s += "thinking:  " + ( _thinking.empty() ? std::string("(provider default)") : _thinking ) + "\n";
-        s += "context:   " + ( _config.context_limit == 0 ? std::string("unlimited")
-                                                          : std::to_string(_config.context_limit) + " tokens" ) + "\n";
+        std::string ctx;
+        if ( _config.context_auto ) {
+            size_t b = _config.context_budget();
+            ctx = b ? "auto (" + std::to_string(b) + " tokens)" : "auto (window unknown → unlimited)";
+        } else {
+            ctx = _config.context_limit == 0 ? "unlimited" : std::to_string(_config.context_limit) + " tokens";
+        }
+        s += "context:   " + ctx + "\n";
         s += "home:      " + _config.home_dir + "\n";
         s += "tokens:    ctx " + std::to_string(_stats.context_tokens.load()) +
              ", session " + std::to_string(_stats.session_total());

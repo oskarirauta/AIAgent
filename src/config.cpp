@@ -102,6 +102,33 @@ std::string Config::default_system_prompt_for(const std::string& provider) {
     return "You are a helpful Linux CLI assistant.";
 }
 
+size_t Config::context_window_for(const std::string& model) {
+    std::string m = common::to_lower(model);
+    auto has = [&](const char* p) { return m.find(p) != std::string::npos; };
+    // Explicit 1M-context variants first.
+    if ( has("1m") ) return 1000000;
+    if ( has("claude") || has("opus") || has("sonnet") || has("haiku") || has("fable") )
+        return 200000;
+    if ( has("kimi") || has("moonshot") ) return 256000;
+    if ( has("gpt-4o") || has("gpt-4.1") || has("o1") || has("o3") || has("gpt-4-turbo") )
+        return 128000;
+    if ( has("gpt-4") ) return 128000;
+    if ( has("gpt-3.5") ) return 16000;
+    if ( has("llama") || has("mistral") || has("qwen") || has("gemma") || has("phi") )
+        return 8192;
+    return 0; // unknown
+}
+
+size_t Config::context_budget() const {
+    if ( context_auto ) {
+        size_t w = context_window_for(model);
+        if ( w == 0 )
+            return 0;                                       // unknown model: no trimming
+        return static_cast<size_t>(w * 0.85);               // leave headroom for the reply
+    }
+    return context_limit;
+}
+
 std::string Config::default_home_dir() {
     const char* home = std::getenv("HOME");
     if ( !home || !*home )
@@ -152,7 +179,10 @@ void Config::load(const std::string& path) {
         else if ( key == "home_dir" ) home_dir = expand_tilde(value);
         else if ( key == "tools_enabled" ) tools_enabled = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
         else if ( key == "strict" ) strict = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
-        else if ( key == "context_limit" ) context_limit = parse_size(value, context_limit, key);
+        else if ( key == "context_limit" ) {
+            if ( common::to_lower(value) == "auto" ) { context_auto = true; }
+            else { context_auto = false; context_limit = parse_size(value, context_limit, key); }
+        }
         else if ( key == "paste_threshold_chars" ) paste_threshold_chars = parse_size(value, paste_threshold_chars, key);
         else if ( key == "paste_threshold_lines" ) paste_threshold_lines = parse_size(value, paste_threshold_lines, key);
         else if ( key == "paste_single_line_chars" ) paste_single_line_chars = parse_size(value, paste_single_line_chars, key);
