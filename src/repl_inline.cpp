@@ -1011,7 +1011,9 @@ void InlineRepl::render_command(const std::string& cmd, const std::string& resul
     while ( std::getline(ls, line))
         for ( const auto& seg : word_wrap(line, width))
             wr("  " + seg + "\n");
-    wr("\n");
+    // No trailing blank: the live block's own leading spacer separates the result
+    // from the prompt (and from a following command), so adding one here would
+    // double the gap when commands are chained.
     draw_live();
 }
 
