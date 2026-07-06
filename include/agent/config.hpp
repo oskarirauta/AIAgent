@@ -24,6 +24,7 @@ public:
     bool confirm_tools = true;  // ask before confirmation-requiring tools
     bool insecure = false;      // run every tool without asking (implies no danger warnings)
     bool strict = false;        // in confirm mode, ignore the safe-command allowlist
+    size_t context_limit = 0;   // approx token budget for history sent to the model (0 = unlimited)
 
     // ncurses paste detection thresholds
     size_t paste_threshold_chars = 500;        // characters for multi-line paste
@@ -63,6 +64,10 @@ public:
 
     // Expand a leading "~" or "~/" to $HOME (falling back to /root).
     static std::string expand_tilde(const std::string& path);
+
+    // Parse an unsigned size with an optional K/M/G suffix (K = 1024), e.g.
+    // "64K" -> 65536. Returns `fallback` (and does not throw) on malformed input.
+    static size_t parse_size_suffixed(const std::string& value, size_t fallback);
 
     // Provider-appropriate default model, used when the user did not pass -m and
     // left `model` at its built-in default.

@@ -66,6 +66,14 @@ protected:
     Provider(const Config& cfg) : _config(cfg) {}
     Config _config;
 
+    // The messages to send, trimmed to the configured context budget (if any).
+    // build_request implementations iterate this instead of conv.messages() so
+    // history that would overflow a small context window (e.g. local models) is
+    // dropped from the request while the full history stays saved.
+    std::vector<Message> request_messages(const Conversation& conv) const {
+        return conv.within_token_budget(_config.context_limit);
+    }
+
     std::string build_endpoint(const std::string& path) const {
         std::string url = _config.api_url;
         while (!url.empty() && url.back() == '/')

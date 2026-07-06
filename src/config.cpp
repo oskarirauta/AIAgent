@@ -17,12 +17,25 @@ static std::string trim(const std::string& s) {
 // malformed input instead of letting std::stoull throw and crash the program.
 static size_t parse_size(const std::string& value, size_t current, const std::string& key) {
     try {
-        return std::stoull(value);
+        size_t idx = 0;
+        size_t n = std::stoull(common::trim_ws(value), &idx);
+        std::string suffix = common::trim_ws(common::trim_ws(value).substr(idx));
+        if ( !suffix.empty()) {
+            char c = suffix[0];
+            if ( c == 'k' || c == 'K' ) n *= 1024;
+            else if ( c == 'm' || c == 'M' ) n *= 1024 * 1024;
+            else if ( c == 'g' || c == 'G' ) n *= 1024ull * 1024 * 1024;
+        }
+        return n;
     } catch ( const std::exception& ) {
         logger::warning["config"] << "invalid numeric value for " << key << ": '" << value
                                   << "' (keeping " << current << ")" << std::endl;
         return current;
     }
+}
+
+size_t Config::parse_size_suffixed(const std::string& value, size_t fallback) {
+    return parse_size(value, fallback, "value");
 }
 
 static std::string parse_value(const std::string& raw) {
@@ -139,6 +152,7 @@ void Config::load(const std::string& path) {
         else if ( key == "home_dir" ) home_dir = expand_tilde(value);
         else if ( key == "tools_enabled" ) tools_enabled = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
         else if ( key == "strict" ) strict = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
+        else if ( key == "context_limit" ) context_limit = parse_size(value, context_limit, key);
         else if ( key == "paste_threshold_chars" ) paste_threshold_chars = parse_size(value, paste_threshold_chars, key);
         else if ( key == "paste_threshold_lines" ) paste_threshold_lines = parse_size(value, paste_threshold_lines, key);
         else if ( key == "paste_single_line_chars" ) paste_single_line_chars = parse_size(value, paste_single_line_chars, key);

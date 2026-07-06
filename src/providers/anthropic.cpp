@@ -82,7 +82,7 @@ JSON Anthropic::build_request(const Conversation& conv, const JSON& tools_schema
     std::string system;
     JSON messages = JSON::Array{};
 
-    for ( const auto& msg : conv.messages()) {
+    for ( const auto& msg : request_messages(conv)) {
         if ( msg.role == agent::Role::SYSTEM ) {
             system = msg.content;
         } else if ( msg.role == agent::Role::TOOL ) {

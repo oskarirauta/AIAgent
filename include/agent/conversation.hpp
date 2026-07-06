@@ -44,6 +44,12 @@ public:
     const std::vector<Message>& messages() const { return _messages; }
     void clear();
 
+    // Messages to send under an approximate token budget (4 chars ≈ 1 token):
+    // keep a leading system message plus the most recent messages that fit.
+    // 0 means no limit (returns the full history). Leading orphaned tool
+    // results — whose assistant tool_call got trimmed — are dropped.
+    std::vector<Message> within_token_budget(size_t max_tokens) const;
+
     // Remove the most recent exchange: everything from the last user message to
     // the end (its assistant reply and any tool messages). Returns the removed
     // user message's content, or empty if there was nothing to undo.

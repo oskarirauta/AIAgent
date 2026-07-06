@@ -168,7 +168,7 @@ std::string Repl::handle_command(const std::string& line) {
         return "commands:\n"
                "  /help                    show this help\n"
                "  /about                   about the app, version, provider/model (alias /info)\n"
-               "  /settings                show current settings\n"
+               "  /settings [key value]    show settings, or set one (context, model, tools, strict, thinking)\n"
                "  /model [name]            show or change the model\n"
                "  /tools <confirm|auto|insecure>   set the tool confirmation mode\n"
                "  /strict <on|off>         also confirm safe read-only commands\n"
@@ -233,6 +233,30 @@ std::string Repl::handle_command(const std::string& line) {
     }
 
     if ( cmd == "/settings" ) {
+        // With arguments, set a value: /settings <key> <value>. Common settings
+        // delegate to their dedicated command so the logic stays in one place.
+        if ( !args.empty()) {
+            std::istringstream iss(args);
+            std::string key, val;
+            iss >> key;
+            std::getline(iss, val);
+            val = common::trim_ws(val);
+            key = common::to_lower(key);
+            if ( key == "model" ) return handle_command("/model " + val);
+            if ( key == "tools" ) return handle_command("/tools " + val);
+            if ( key == "strict" ) return handle_command("/strict " + val);
+            if ( key == "thinking" || key == "effort" ) return handle_command("/thinking " + val);
+            if ( key == "context" || key == "context_limit" ) {
+                if ( val.empty())
+                    return "usage: /settings context <tokens|0>  (e.g. 64K, 0 = unlimited)";
+                _config.context_limit = Config::parse_size_suffixed(val, _config.context_limit);
+                return _config.context_limit == 0
+                     ? std::string("context: unlimited")
+                     : "context: " + std::to_string(_config.context_limit) + " tokens";
+            }
+            return "unknown setting: " + key + "  (model, tools, strict, thinking, context; theme via /theme)";
+        }
+
         std::string tools = !_config.tools_enabled ? "off"
                           : ( _config.insecure ? "insecure"
                           : ( _config.confirm_tools ? "confirm" : "auto" ));
@@ -241,6 +265,8 @@ std::string Repl::handle_command(const std::string& line) {
         s += "model:     " + _config.model + "\n";
         s += "tools:     " + tools + ( _config.strict ? " (strict)" : "" ) + "\n";
         s += "thinking:  " + ( _thinking.empty() ? std::string("(provider default)") : _thinking ) + "\n";
+        s += "context:   " + ( _config.context_limit == 0 ? std::string("unlimited")
+                                                          : std::to_string(_config.context_limit) + " tokens" ) + "\n";
         s += "home:      " + _config.home_dir + "\n";
         s += "tokens:    ctx " + std::to_string(_stats.context_tokens.load()) +
              ", session " + std::to_string(_stats.session_total());

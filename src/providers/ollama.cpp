@@ -26,7 +26,7 @@ JSON Ollama::message_to_json(const Message& msg) {
 JSON Ollama::build_request(const Conversation& conv, const JSON& tools_schema) {
 
     JSON messages = JSON::Array{};
-    for ( const auto& msg : conv.messages()) {
+    for ( const auto& msg : request_messages(conv)) {
         messages.append(message_to_json(msg));
     }
 

@@ -238,6 +238,24 @@ static void test_conversation_undo() {
     check(c.undo_last().empty(), "undo on empty history returns empty");
 }
 
+static void test_context_budget() {
+    std::cout << "context token budget" << std::endl;
+    agent::Conversation c;
+    c.set_system(std::string(400, 's')); // ~100 tokens
+    for ( int i = 0; i < 20; ++i )
+        c.add_user(std::string(400, 'u')); // ~100 tokens each
+
+    check(c.within_token_budget(0).size() == c.messages().size(), "budget 0 keeps everything");
+
+    auto trimmed = c.within_token_budget(400); // system + a few recent messages
+    check(trimmed.size() < c.messages().size(), "budget trims older messages");
+    check(trimmed.front().role == agent::Role::SYSTEM, "system message is kept");
+    check(!trimmed.empty() && trimmed.back().content == std::string(400, 'u'), "newest message is kept");
+
+    auto tiny = c.within_token_budget(1); // still keeps system + latest
+    check(tiny.size() >= 2 && tiny.front().role == agent::Role::SYSTEM, "tiny budget keeps system + latest");
+}
+
 static void test_conversation_corrupt() {
     std::cout << "corrupt conversation handling" << std::endl;
     std::string path = "/tmp/ai_conv_bad.json";
@@ -430,6 +448,7 @@ int main() {
 
     test_conversation_save_load();
     test_conversation_undo();
+    test_context_budget();
     test_conversation_corrupt();
     test_expand_tilde();
     test_memory_loading();
