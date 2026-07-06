@@ -69,6 +69,12 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **`fetch_url`**: fetch an http/https page and return its text — HTML reduced to
+  readable text (`html_to_text`: drop script/style/comments, block tags → line
+  breaks, tags stripped, named + numeric entities decoded, whitespace tidied).
+  Complements `web_search` (find a link, then read it) and is the offline-model's
+  way to read docs. Uses `Client::get`; gated by the same network toggle as
+  `web_search`; only http/https allowed.
 - **`run_command` options**: per-call `timeout` (seconds, clamped; default 120,
   max 600), `cwd` (runs inside `cd <dir> && ( ... )`), and `env` (extra vars for
   that command only, applied via `env_cpp`'s RAII `env_scope` so the parent
@@ -127,9 +133,8 @@ each list is roughly the current priority order.
 
 ### From the second Kimi review (assessed, top picks)
 
-- **Quick wins**: `fetch_url` (reuse `Client::get`, strip HTML → text) · bulk/array
-  `read_file` (line ranges already done via offset/limit). (`run_command`
-  timeout/cwd/env shipped — see Done.)
+- **Quick wins**: bulk/array `read_file` (line ranges already done via
+  offset/limit). (`run_command` timeout/cwd/env and `fetch_url` shipped — see Done.)
 - **Prompt caching** (Anthropic + Moonshot/Kimi): `cache_control: ephemeral` on the
   system prompt + tools + stable history prefix — cuts input cost ~90% and latency
   on cache hits. High value for heavy interactive use.

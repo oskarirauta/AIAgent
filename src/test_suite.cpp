@@ -27,6 +27,7 @@
 #include "agent/tools/registry.hpp"
 #include "agent/tools/find_symbol.hpp"
 #include "agent/tools/web_search.hpp"
+#include "agent/tools/fetch_url.hpp"
 #include "agent/tools/mcp_tool.hpp"
 #include "agent/mcp/client.hpp"
 #include "agent/tools/advisor.hpp"
@@ -331,6 +332,28 @@ static void test_mcp_tool_and_config() {
     check(c.load_config("/tmp/does_not_exist_mcp.json") == 0, "missing config -> 0 servers");
 
     std::filesystem::remove(path);
+}
+
+static void test_html_to_text() {
+    std::cout << "fetch_url html_to_text" << std::endl;
+    std::string html =
+        "<html><head><style>body{color:red}</style>"
+        "<script>alert('x')</script></head>"
+        "<body><h1>Title &amp; Stuff</h1>"
+        "<p>First para.</p>"
+        "<p>Second &lt;b&gt;bold&lt;/b&gt; &#39;quote&#39;.</p>"
+        "<div>DIVA</div><div>DIVB</div></body></html>";
+    std::string t = agent::tools::html_to_text(html);
+
+    check(t.find("alert") == std::string::npos, "script contents removed");
+    check(t.find("color:red") == std::string::npos, "style contents removed");
+    check(t.find("Title & Stuff") != std::string::npos, "entities decoded (&amp;)");
+    check(t.find("First para.") != std::string::npos, "text preserved");
+    check(t.find("Second <b>bold</b> 'quote'.") != std::string::npos, "numeric + named entities decoded");
+    check(t.find("<h1>") == std::string::npos && t.find("<p>") == std::string::npos, "tags stripped");
+    size_t ia = t.find("DIVA"), ib = t.find("DIVB");
+    check(ia != std::string::npos && ib != std::string::npos && ia < ib &&
+          t.substr(ia, ib - ia).find('\n') != std::string::npos, "block tags become line breaks");
 }
 
 static void test_web_search_parse() {
@@ -1059,6 +1082,7 @@ int main() {
     test_provider_capabilities();
     test_advisor_tool();
     test_mcp_tool_and_config();
+    test_html_to_text();
     test_web_search_parse();
     test_find_symbol();
     test_pricing_and_cost();

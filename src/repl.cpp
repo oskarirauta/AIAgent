@@ -20,6 +20,7 @@
 #include "agent/tools/advisor.hpp"
 #include "agent/tools/workflow_tool.hpp"
 #include "agent/tools/web_search.hpp"
+#include "agent/tools/fetch_url.hpp"
 #include "agent/tools/mcp_tool.hpp"
 
 namespace agent {
@@ -392,11 +393,16 @@ std::string Repl::mcp_command(const std::string& args) {
 }
 
 void Repl::sync_web_search_tool() {
+    // web_search and fetch_url are both network tools, gated by the same toggle.
     bool want = _config.tools_enabled && _config.web_search;
     if ( want && !_registry.has("web_search"))
         _registry.add(std::make_unique<tools::WebSearch>(_config.web_search_url));
     else if ( !want && _registry.has("web_search"))
         _registry.remove("web_search");
+    if ( want && !_registry.has("fetch_url"))
+        _registry.add(std::make_unique<tools::FetchUrl>());
+    else if ( !want && _registry.has("fetch_url"))
+        _registry.remove("fetch_url");
 }
 
 void Repl::sync_workflow_tool() {
