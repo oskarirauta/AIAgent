@@ -166,11 +166,19 @@ void Client::post_stream(const std::string& url, const std::string& auth_header,
         logger::debug["http"] << "no auth header added (header=" << auth_header << ", value empty=" << auth_value.empty() << ")" << std::endl;
     }
 
+    // Also accumulate the response (capped) so a non-2xx error body can be shown.
+    std::string error_body;
+    std::function<void(const std::string&)> sink = [&](const std::string& chunk) {
+        if ( error_body.size() < 65536 )
+            error_body += chunk;
+        callback(chunk);
+    };
+
     curl_easy_setopt(c, CURLOPT_URL, url.c_str());
     curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
     curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, stream_write_callback);
-    curl_easy_setopt(c, CURLOPT_WRITEDATA, &callback);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &sink);
     curl_easy_setopt(c, CURLOPT_TIMEOUT, 120L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
@@ -197,7 +205,7 @@ void Client::post_stream(const std::string& url, const std::string& auth_header,
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
 
     if ( http_code < 200 || http_code >= 300 )
-        throws << "http error " << http_code << std::endl;
+        throws << "http error " << http_code << ": " << format_api_error(error_body) << std::endl;
 }
 
 std::string Client::post_form(const std::string& url, const std::string& body, std::atomic<bool>* abort_flag) {
