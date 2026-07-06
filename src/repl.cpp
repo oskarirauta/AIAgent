@@ -103,8 +103,6 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
 
         if ( can_stream ) {
             request["stream"] = true;
-            if ( _provider->stream_wants_usage())
-                request["stream_options"] = JSON::Object{ { "include_usage", true } };
             std::string body = request.dump_minified();
             std::string buffer;
             bool done = false;
@@ -113,6 +111,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
 
             _client.post_stream(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body,
                 [&](const std::string& chunk) {
+                    logger::vverbose["http"] << "STREAM chunk\n" << chunk << std::endl;
                     providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
                     if ( _config.thinking_stream && !sc.reasoning.empty()) {
                         // \x01 opens a dim "thinking" region the renderer styles.
@@ -145,13 +144,20 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         if ( !resp.success )
             throws << "provider response error: " << resp.message << std::endl;
 
+        logger::debug["agent"] << "response: content=" << resp.message.size()
+                               << "b, thinking=" << resp.thinking.size()
+                               << "b, tool_calls=" << resp.tool_calls.size() << std::endl;
+
         std::string normalized = agent::normalize_text(resp.message);
 
         std::vector<agent::ToolCall> assistant_calls;
         for ( const auto& tc : resp.tool_calls ) {
             assistant_calls.push_back({ tc.id, tc.name, tc.arguments.dump_minified() });
         }
-        _conversation.add_assistant(normalized, assistant_calls);
+        // Don't record a degenerate empty assistant turn (no content, no tool
+        // calls) — sending it back next request makes some providers return 400.
+        if ( !normalized.empty() || !assistant_calls.empty())
+            _conversation.add_assistant(normalized, assistant_calls);
 
         if ( resp.tool_calls.empty()) {
             // In the streaming path the reasoning and answer already went to the
