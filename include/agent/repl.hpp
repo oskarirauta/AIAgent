@@ -44,6 +44,11 @@ private:
     // over (re-auth non-interactively). Returns text to display.
     std::string switch_provider(const std::string& name);
 
+    // Advisor: consult a stronger model (one-shot, non-streaming) and return its
+    // advice; register/unregister the consult_advisor tool to match the config.
+    std::string ask_advisor(const std::string& question);
+    void sync_advisor_tool();
+
     Config _config;
     api::Client _client;
     tools::Registry _registry;

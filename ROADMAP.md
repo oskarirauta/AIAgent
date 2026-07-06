@@ -38,6 +38,12 @@ each list is roughly the current priority order.
   Off by default; toggle with `/settings auto_compact on|off`. Inactive unless a
   context budget is known (`context: auto` or an explicit limit).
 - **SIGWINCH**: the live block redraws at the new width on terminal resize.
+- **`/advisor`** (claude only): exposes a `consult_advisor` tool so the main model
+  can ask a stronger sibling model (e.g. sonnet → opus) for a second opinion on a
+  hard problem. `/advisor <on|off|model <name>>`; the consult is a one-shot,
+  non-streaming call on the same OAuth session with the model temporarily swapped.
+  Gated by the `advisor` provider capability; the tool is registered only while
+  on and removed on a switch away from claude.
 - **`/btw <note>`** (alias `/note`): add a note to the context as a user message
   without asking for a reply — the model sees it on your next turn. Consecutive
   same-role messages are merged in the Anthropic request so this can't break
@@ -61,7 +67,6 @@ each list is roughly the current priority order.
   and under evaluation.
 - **`/workflows` command** for claude only
 - **`/rc` command** for claude only
-- **`/advisor` command** setting for claude only
 - **More proviers** We don't aim to support every provider, we aim to support enough, most
   common and most useful ones.
 

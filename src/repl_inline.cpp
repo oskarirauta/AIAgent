@@ -1531,6 +1531,8 @@ void InlineRepl::open_settings_menu() {
     _settings_rows.push_back({ "context", "context",
         first_word(cur.count("context") ? cur["context"] : "unlimited"), {} });
     _settings_rows.push_back({ "auto_compact", "compact", _config.auto_compact ? "on" : "off", { "off", "on" } });
+    if ( _config.provider == "claude" )
+        _settings_rows.push_back({ "advisor", "advisor", _config.advisor ? "on" : "off", { "off", "on" } });
     _settings_rows.push_back({ "multiline", "multiline", _config.multiline ? "on" : "off", { "off", "on" } });
     _settings_rows.push_back({ "paste_preview", "preview",
         _config.paste_preview == 0 ? "all" : std::to_string(_config.paste_preview), {} });

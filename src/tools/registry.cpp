@@ -27,6 +27,10 @@ void Registry::add(std::unique_ptr<Tool> tool) {
     _tools[tool->name()] = std::move(tool);
 }
 
+void Registry::remove(const std::string& name) {
+    _tools.erase(name);
+}
+
 void Registry::set_confirm_callback(confirm_cb_t cb) {
     _confirm_cb = std::move(cb);
 }

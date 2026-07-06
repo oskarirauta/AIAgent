@@ -15,6 +15,7 @@
 #include "agent/signal_handler.hpp"
 #include "agent/memory.hpp"
 #include "agent/text_utils.hpp"
+#include "agent/tools/advisor.hpp"
 
 namespace agent {
 
@@ -49,6 +50,61 @@ Repl::Repl(const Config& config)
     // always reflect the running config rather than whatever was saved earlier.
     _conversation.load(conversation_path());
     _conversation.set_system(base_system_prompt());
+
+    // Expose the advisor tool if it was left enabled and the provider supports it.
+    sync_advisor_tool();
+}
+
+void Repl::sync_advisor_tool() {
+    // The consult_advisor tool is available only when advisor mode is on, tools
+    // are enabled, and the provider can reach an advisor model (claude).
+    bool want = _config.advisor && _config.tools_enabled && provider_supports("advisor");
+    if ( want && !_registry.has("consult_advisor"))
+        _registry.add(std::make_unique<tools::AdvisorTool>(
+            [this](const std::string& q) { return ask_advisor(q); }));
+    else if ( !want && _registry.has("consult_advisor"))
+        _registry.remove("consult_advisor");
+}
+
+std::string Repl::ask_advisor(const std::string& question) {
+    if ( !_provider )
+        return "advisor unavailable: no provider";
+
+    // A self-contained one-shot consult (no tools, no streaming), sent to the
+    // advisor model by temporarily swapping the model on the active provider so
+    // it reuses the same authenticated session.
+    Conversation adv;
+    adv.set_system(
+        "You are a senior software engineer acting as an advisor to another AI coding "
+        "assistant that is stuck or wants a second opinion on a hard problem. Give "
+        "focused, correct, actionable guidance: the right approach, likely pitfalls, and "
+        "concrete next steps. You cannot run tools or see the repository, so reason from "
+        "what the question describes. Be concise and specific.");
+    adv.add_user(question);
+
+    std::string previous_model = _provider->model();
+    _provider->set_model(_config.advisor_model);
+    std::string advice;
+    try {
+        _provider->prepare_request(_client);
+        JSON req = _provider->build_request(adv, JSON::Array{});
+        std::string body = req.dump_minified();
+        std::string resp = _client.post(_provider->endpoint(), _provider->auth_header(),
+                                        _provider->auth_value(), _provider->extra_headers(),
+                                        body, &agent::turn_abort);
+        if ( agent::turn_abort.load(std::memory_order_relaxed) || resp.empty()) {
+            advice = "advisor consult cancelled";
+        } else {
+            auto parsed = _provider->parse_response(JSON::parse(resp));
+            advice = agent::normalize_text(parsed.message);
+            if ( advice.empty())
+                advice = "the advisor returned no advice";
+        }
+    } catch ( const std::exception& e ) {
+        advice = std::string("advisor error: ") + e.what();
+    }
+    _provider->set_model(previous_model);
+    return "Advice from " + _config.advisor_model + ":\n\n" + advice;
 }
 
 std::string Repl::base_system_prompt() const {
@@ -164,6 +220,7 @@ std::string Repl::switch_provider(const std::string& name) {
     _config = nc;
     _provider = std::move(np);
     _conversation.set_system(base_system_prompt());
+    sync_advisor_tool(); // advisor tool follows the provider (claude-only)
     save_conversation();
     Config::save_last_used(_config.home_dir, _config.provider, _config.model);
 
@@ -348,6 +405,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /provider [name]         switch provider mid-session (carries the conversation over)\n"
                "  /model [name]            show or change the model\n"
                "  /btw <note>              add a note to the context without asking for a reply (alias /note)\n"
+               "  /advisor <on|off|model N>   (claude) let the model consult a stronger advisor model\n"
                "  /tools <confirm|auto|insecure>   set the tool confirmation mode\n"
                "  /strict <on|off>         also confirm safe read-only commands\n"
                "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
@@ -447,6 +505,42 @@ std::string Repl::handle_command(const std::string& line) {
         return switch_provider(common::to_lower(common::trim_ws(args)));
     }
 
+    if ( cmd == "/advisor" ) {
+        if ( !provider_supports("advisor"))
+            return "advisor is only available with the claude provider "
+                   "(the model consults a stronger Claude model for a second opinion)";
+        std::istringstream iss(args);
+        std::string sub;
+        iss >> sub;
+        sub = common::to_lower(sub);
+        std::string rest;
+        std::getline(iss, rest);
+        rest = common::trim_ws(rest);
+
+        auto status = [this]() -> std::string {
+            std::string s = std::string("advisor: ") + ( _config.advisor ? "on" : "off" ) +
+                            "  (model: " + _config.advisor_model + ")";
+            if ( _config.advisor && !_config.tools_enabled )
+                s += "\nnote: tools are disabled, so the model cannot reach the advisor";
+            return s;
+        };
+
+        if ( sub.empty())
+            return status();
+        if ( sub == "on" || sub == "true" || sub == "yes" ) _config.advisor = true;
+        else if ( sub == "off" || sub == "false" || sub == "no" ) _config.advisor = false;
+        else if ( sub == "model" ) {
+            if ( rest.empty())
+                return "usage: /advisor model <name>  (e.g. claude-opus-4-8)";
+            _config.advisor_model = rest;
+        }
+        else return "usage: /advisor <on|off|model <name>>";
+
+        sync_advisor_tool();
+        save_conversation();
+        return status();
+    }
+
     if ( cmd == "/retry" ) {
         std::string last = _conversation.undo_last();
         if ( last.empty())
@@ -530,6 +624,8 @@ std::string Repl::handle_command(const std::string& line) {
                 return std::string("auto-compact: ") + ( _config.auto_compact ? "on" : "off" ) +
                        ( _config.auto_compact ? "  (at " + std::to_string(_config.auto_compact_pct) + "% of the context budget)" : "" );
             }
+            if ( key == "advisor" ) return handle_command("/advisor " + val);
+            if ( key == "advisor_model" ) return handle_command("/advisor model " + val);
             if ( key == "auto_compact_pct" ) {
                 size_t p = Config::parse_size_suffixed(val, _config.auto_compact_pct);
                 if ( p < 10 || p > 100 )
@@ -537,7 +633,7 @@ std::string Repl::handle_command(const std::string& line) {
                 _config.auto_compact_pct = p;
                 return "auto-compact threshold: " + std::to_string(_config.auto_compact_pct) + "% of the context budget";
             }
-            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, paste_preview, context, auto_compact, multiline; theme via /theme)";
+            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, paste_preview, context, auto_compact, advisor, multiline; theme via /theme)";
         }
 
         std::string tools = !_config.tools_enabled ? "off"
@@ -559,6 +655,9 @@ std::string Repl::handle_command(const std::string& line) {
         s += "context:   " + ctx + "\n";
         s += "auto_compact: " + std::string( _config.auto_compact ? "on" : "off" ) +
              ( _config.auto_compact ? "  (at " + std::to_string(_config.auto_compact_pct) + "%)" : "" ) + "\n";
+        if ( provider_supports("advisor"))
+            s += "advisor:   " + std::string( _config.advisor ? "on" : "off" ) +
+                 "  (model: " + _config.advisor_model + ")\n";
         s += "multiline: " + std::string( _config.multiline ? "on" : "off" ) + "\n";
         s += "preview:   " + ( _config.paste_preview == 0
                  ? std::string("all lines")

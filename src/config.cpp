@@ -192,6 +192,8 @@ void Config::load(const std::string& path) {
         }
         else if ( key == "auto_compact" ) auto_compact = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
         else if ( key == "auto_compact_pct" ) auto_compact_pct = parse_size(value, auto_compact_pct, key);
+        else if ( key == "advisor" ) advisor = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
+        else if ( key == "advisor_model" ) advisor_model = value;
         else if ( key == "paste_threshold_chars" ) paste_threshold_chars = parse_size(value, paste_threshold_chars, key);
         else if ( key == "paste_threshold_lines" ) paste_threshold_lines = parse_size(value, paste_threshold_lines, key);
         else if ( key == "paste_single_line_chars" ) paste_single_line_chars = parse_size(value, paste_single_line_chars, key);
@@ -292,6 +294,10 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.context_limit = static_cast<size_t>(static_cast<long long>(s["context_limit"]));
             if ( s.contains("auto_compact") && s["auto_compact"] == JSON::TYPE::BOOL )
                 last.auto_compact = s["auto_compact"].to_bool();
+            if ( s.contains("advisor") && s["advisor"] == JSON::TYPE::BOOL )
+                last.advisor = s["advisor"].to_bool();
+            if ( s.contains("advisor_model") && s["advisor_model"] == JSON::TYPE::STRING )
+                last.advisor_model = s["advisor_model"].to_string();
             if ( s.contains("paste_preview") && s["paste_preview"] == JSON::TYPE::INT )
                 last.paste_preview = static_cast<size_t>(static_cast<long long>(s["paste_preview"]));
         }
@@ -322,6 +328,8 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "context_auto", last.context_auto },
             { "context_limit", static_cast<long long>(last.context_limit) },
             { "auto_compact", last.auto_compact },
+            { "advisor", last.advisor },
+            { "advisor_model", last.advisor_model },
             { "paste_preview", static_cast<long long>(last.paste_preview) }
         };
     }
@@ -362,6 +370,8 @@ void Config::save_settings(const std::string& home_dir) const {
     last.context_auto = context_auto;
     last.context_limit = context_limit;
     last.auto_compact = auto_compact;
+    last.advisor = advisor;
+    last.advisor_model = advisor_model;
     last.paste_preview = paste_preview;
     write_state(home_dir, last);
 }
@@ -377,6 +387,9 @@ void Config::apply_settings(const LastUsed& last) {
     context_auto = last.context_auto;
     context_limit = last.context_limit;
     auto_compact = last.auto_compact;
+    advisor = last.advisor;
+    if ( !last.advisor_model.empty())
+        advisor_model = last.advisor_model;
     paste_preview = last.paste_preview;
 }
 

@@ -39,6 +39,7 @@ public:
 
     void register_defaults();
     void add(std::unique_ptr<Tool> tool);
+    void remove(const std::string& name); // drop a registered tool (e.g. the advisor)
     void set_confirm_callback(confirm_cb_t cb);
     void set_activity_callback(activity_cb_t cb) { _activity_cb = std::move(cb); }
     void set_mode(ConfirmMode mode) { _mode = mode; }

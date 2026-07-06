@@ -23,6 +23,7 @@
 #include "agent/providers/claude.hpp"
 #include "agent/auth/claude_oauth.hpp"
 #include "agent/tools/registry.hpp"
+#include "agent/tools/advisor.hpp"
 
 static int passed = 0;
 static int failed = 0;
@@ -241,6 +242,35 @@ static void test_provider_capabilities() {
     agent::providers::Kimi kimi(cfg);
     check(kimi.supports("model-command"), "kimi supports model-command");
     check(!kimi.supports("image-input"), "kimi does not claim image-input");
+
+    agent::providers::Claude claude(cfg);
+    check(claude.supports("advisor"), "claude supports advisor");
+    check(!openai.supports("advisor"), "openai does not claim advisor");
+}
+
+static void test_advisor_tool() {
+    std::cout << "advisor tool + registry add/remove" << std::endl;
+    std::string seen;
+    agent::tools::AdvisorTool tool([&seen](const std::string& q) {
+        seen = q;
+        return std::string("advice: try X");
+    });
+    check(tool.name() == "consult_advisor", "advisor tool name");
+    check(tool.parameters()["required"][0].to_string() == "question", "question is required");
+
+    std::string r = tool.execute(JSON::Object{ { "question", "how do I foo?" } });
+    check(seen == "how do I foo?", "handler receives the question");
+    check(r == "advice: try X", "execute returns the handler's advice");
+    check(tool.execute(JSON::Object{}) .rfind("error:", 0) == 0, "missing question is an error");
+
+    // Registry add/remove drives the schema (what the model is offered).
+    agent::tools::Registry reg;
+    reg.register_defaults();
+    check(!reg.has("consult_advisor"), "advisor not registered by default");
+    reg.add(std::make_unique<agent::tools::AdvisorTool>([](const std::string&) { return std::string("x"); }));
+    check(reg.has("consult_advisor"), "advisor registered after add");
+    reg.remove("consult_advisor");
+    check(!reg.has("consult_advisor"), "advisor gone after remove");
 }
 
 static void test_provider_options_config() {
@@ -431,6 +461,7 @@ static void test_settings_persistence() {
     c.thinking_collapse = true;
     c.context_auto = true; c.context_limit = 65536; c.paste_preview = 12;
     c.auto_compact = true;
+    c.advisor = true; c.advisor_model = "claude-sonnet-4-6";
     c.save_settings(home);
 
     auto last = agent::Config::load_last_used(home);
@@ -446,6 +477,8 @@ static void test_settings_persistence() {
     check(last.thinking_collapse, "thinking_collapse persisted");
     check(last.paste_preview == 12, "paste_preview persisted");
     check(last.auto_compact, "auto_compact persisted");
+    check(last.advisor, "advisor persisted");
+    check(last.advisor_model == "claude-sonnet-4-6", "advisor_model persisted");
 
     agent::Config c2;
     c2.apply_settings(last);
@@ -453,6 +486,7 @@ static void test_settings_persistence() {
           "apply_settings restores onto a fresh config");
     check(c2.thinking_collapse && c2.paste_preview == 12, "apply_settings restores collapse + paste_preview");
     check(c2.auto_compact, "apply_settings restores auto_compact");
+    check(c2.advisor && c2.advisor_model == "claude-sonnet-4-6", "apply_settings restores advisor + model");
 
     std::filesystem::remove_all(home);
 }
@@ -703,6 +737,7 @@ int main() {
     test_kimi_thinking_effort();
     test_anthropic_thinking();
     test_provider_capabilities();
+    test_advisor_tool();
     test_provider_options_config();
     test_claude_provider();
     test_claude_pkce();
