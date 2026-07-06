@@ -174,6 +174,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /strict <on|off>         also confirm safe read-only commands\n"
                "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
                "  /theme <dark|light|warm> switch the colour theme\n"
+               "  /memories [name]         list this provider's memory files, or view one\n"
                "  /history                 list the messages in the current context\n"
                "  /retry                   re-run your last message\n"
                "  /undo                    remove the last exchange from history\n"
@@ -201,6 +202,24 @@ std::string Repl::handle_command(const std::string& line) {
             return "(no messages yet)";
         s += "\n" + std::to_string(n) + " message(s) in context";
         return s;
+    }
+
+    if ( cmd == "/memories" ) {
+        if ( args.empty()) {
+            auto files = list_memories(_config.home_dir, _config.provider);
+            if ( files.empty())
+                return "no memory files for " + _config.provider + "\n(" +
+                       _config.home_dir + "/memories/" + _config.provider + ")";
+            std::string s = "memories for " + _config.provider + ":\n";
+            for ( const auto& f : files )
+                s += "  " + f.name + "  (" + std::to_string(f.lines) + " lines)\n";
+            s += "\nuse /memories <name> to view one";
+            return s;
+        }
+        std::string content = read_memory(_config.home_dir, _config.provider, args);
+        if ( content.empty())
+            return "no such memory: " + args;
+        return "── " + args + " ──\n" + content;
     }
 
     if ( cmd == "/undo" ) {

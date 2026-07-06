@@ -157,6 +157,7 @@ Slash commands run locally (never sent to the model):
 | `/tools <confirm\|auto\|insecure>` | Change the tool confirmation mode. |
 | `/thinking <on\|off\|low\|medium\|high\|xhigh\|max>` | Set the thinking level (alias `/effort`; applied by Kimi). |
 | `/theme <dark\|light\|warm>` | Switch the colour theme. |
+| `/memories [name]` | List this provider's memory files, or view one. |
 | `/history` | List the messages in the current context. |
 | `/retry` | Re-run your last message. |
 | `/undo` | Remove the last exchange from history. |

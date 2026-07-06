@@ -77,4 +77,54 @@ std::string load_memories(const std::string& home_dir, const std::string& provid
     return result;
 }
 
+std::vector<MemoryFile> list_memories(const std::string& home_dir, const std::string& provider) {
+    std::vector<MemoryFile> out;
+    std::string mem_dir = home_dir + "/memories/" + provider;
+    if ( !std::filesystem::exists(mem_dir) || !std::filesystem::is_directory(mem_dir))
+        return out;
+
+    for ( const auto& entry : std::filesystem::directory_iterator(mem_dir)) {
+        if ( !entry.is_regular_file())
+            continue;
+        std::string name = entry.path().filename().string();
+        if ( !is_memory_file(name))
+            continue;
+        MemoryFile mf;
+        mf.name = name;
+        std::ifstream ifd(entry.path(), std::ios::in);
+        if ( ifd.is_open()) {
+            std::stringstream ss;
+            ss << ifd.rdbuf();
+            std::string content = ss.str();
+            mf.bytes = content.size();
+            mf.lines = static_cast<size_t>(std::count(content.begin(), content.end(), '\n'));
+            if ( !content.empty() && content.back() != '\n' )
+                ++mf.lines;
+        }
+        out.push_back(mf);
+    }
+    std::sort(out.begin(), out.end(), [](const MemoryFile& a, const MemoryFile& b) { return a.name < b.name; });
+    return out;
+}
+
+std::string read_memory(const std::string& home_dir, const std::string& provider, const std::string& name) {
+    // Reject anything that could escape the provider's memory directory.
+    if ( name.empty() || name.find('/') != std::string::npos ||
+         name.find('\\') != std::string::npos || name.find("..") != std::string::npos )
+        return "";
+    if ( !is_memory_file(name))
+        return "";
+
+    std::string path = home_dir + "/memories/" + provider + "/" + name;
+    if ( !std::filesystem::exists(path) || !std::filesystem::is_regular_file(path))
+        return "";
+
+    std::ifstream ifd(path, std::ios::in);
+    if ( !ifd.is_open())
+        return "";
+    std::stringstream ss;
+    ss << ifd.rdbuf();
+    return ss.str();
+}
+
 } // namespace agent

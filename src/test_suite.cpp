@@ -70,6 +70,24 @@ static void test_memory_loading() {
     std::filesystem::remove_all(home);
 }
 
+static void test_memory_listing() {
+    std::cout << "memory listing" << std::endl;
+    std::string home = "/tmp/ai_agent_memlist_test";
+    std::filesystem::create_directories(home + "/memories/kimi");
+    { std::ofstream f(home + "/memories/kimi/a.md"); f << "line1\nline2\n"; }
+    { std::ofstream f(home + "/memories/kimi/b.md"); f << "one\n"; }
+
+    auto files = agent::list_memories(home, "kimi");
+    check(files.size() == 2, "lists two memory files");
+    check(!files.empty() && files[0].name == "a.md" && files[0].lines == 2, "name + line count, sorted");
+
+    check(agent::read_memory(home, "kimi", "a.md").find("line1") != std::string::npos, "reads a memory file");
+    check(agent::read_memory(home, "kimi", "../../etc/passwd").empty(), "rejects path traversal");
+    check(agent::read_memory(home, "kimi", "nope.md").empty(), "missing file returns empty");
+
+    std::filesystem::remove_all(home);
+}
+
 static void test_openai_request() {
     std::cout << "openai request format" << std::endl;
     agent::Config cfg;
@@ -452,6 +470,7 @@ int main() {
     test_conversation_corrupt();
     test_expand_tilde();
     test_memory_loading();
+    test_memory_listing();
     test_openai_request();
     test_ollama_request();
     test_anthropic_request();
