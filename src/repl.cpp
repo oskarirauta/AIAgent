@@ -103,6 +103,8 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
 
         if ( can_stream ) {
             request["stream"] = true;
+            if ( _provider->stream_wants_usage())
+                request["stream_options"] = JSON::Object{ { "include_usage", true } };
             std::string body = request.dump_minified();
             std::string buffer;
             bool done = false;

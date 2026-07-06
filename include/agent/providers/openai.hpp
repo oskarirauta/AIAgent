@@ -13,6 +13,7 @@ public:
     std::string endpoint() const override { return build_endpoint("/chat/completions"); }
     bool supports_streaming() const override { return true; }
 
+    bool stream_wants_usage() const override { return true; }
     void stream_reset() override;
     StreamChunk parse_stream(const std::string& chunk, std::string& buffer, bool& done) override;
     Response stream_result() override;
