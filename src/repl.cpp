@@ -46,13 +46,67 @@ Repl::Repl(const Config& config)
     // current system prompt so a provider's identity and freshly-loaded memories
     // always reflect the running config rather than whatever was saved earlier.
     _conversation.load(conversation_path());
+    _conversation.set_system(base_system_prompt());
+}
 
-    std::string system = config.system_prompt + current_date_line();
-    std::string memories = load_memories(config.home_dir, config.provider);
+std::string Repl::base_system_prompt() const {
+    std::string system = _config.system_prompt + current_date_line();
+    std::string memories = load_memories(_config.home_dir, _config.provider);
     if ( !memories.empty())
         system += memories;
+    return system;
+}
 
-    _conversation.set_system(system);
+std::string Repl::compact_history() {
+    const auto& msgs = _conversation.messages();
+    size_t count = 0;
+    for ( const auto& m : msgs )
+        if ( m.role != Role::SYSTEM ) ++count;
+    if ( count < 4 )
+        return "nothing to compact (conversation is already short)";
+
+    // Render the transcript for the summariser.
+    std::string transcript;
+    for ( const auto& m : msgs ) {
+        if ( m.role == Role::SYSTEM ) continue;
+        const char* who = m.role == Role::USER ? "User"
+                        : m.role == Role::ASSISTANT ? "Assistant" : "Tool";
+        if ( !m.content.empty())
+            transcript += std::string(who) + ": " + m.content + "\n";
+        for ( const auto& tc : m.tool_calls )
+            transcript += "Assistant (tool " + tc.name + "): " + tc.arguments + "\n";
+    }
+
+    // One-shot summarisation (no tools, no streaming).
+    Conversation summ;
+    summ.set_system("You compress a coding-assistant conversation into a concise briefing "
+        "the assistant can continue from. Preserve the user's goals, decisions made, key file "
+        "paths and code facts, and any unfinished tasks. Be faithful — do not invent details. "
+        "Output only the summary.");
+    summ.add_user("Summarise this conversation so it can replace the full history:\n\n" + transcript);
+
+    _provider->prepare_request(_client);
+    JSON req = _provider->build_request(summ, JSON::Array{});
+    std::string body = req.dump_minified();
+    std::string resp_str = _client.post(_provider->endpoint(), _provider->auth_header(),
+                                        _provider->auth_value(), _provider->extra_headers(), body,
+                                        &agent::turn_abort);
+    if ( agent::turn_abort.load(std::memory_order_relaxed) || resp_str.empty())
+        return "compact cancelled";
+    auto resp = _provider->parse_response(JSON::parse(resp_str));
+    std::string summary = agent::normalize_text(resp.message);
+    if ( !resp.success || summary.empty())
+        throws << "summarisation returned no content" << std::endl;
+
+    // Replace history with [system, user(summary), assistant(ack)] — a valid
+    // alternating start for every provider on the next turn.
+    _conversation.clear();
+    _conversation.set_system(base_system_prompt());
+    _conversation.add_user("Summary of our conversation so far — use this as context:\n\n" + summary);
+    _conversation.add_assistant("Understood — I'll continue with that context in mind.");
+    save_conversation();
+
+    return "compacted " + std::to_string(count) + " messages into a summary";
 }
 
 std::string Repl::conversation_path() const {
@@ -241,7 +295,8 @@ std::string Repl::handle_command(const std::string& line) {
                "  /history                 list the messages in the current context\n"
                "  /retry                   re-run your last message\n"
                "  /undo                    remove the last exchange from history\n"
-               "  /clear                   clear the conversation history\n"
+               "  /clear (/reset)          clear the conversation history\n"
+               "  /compact                 summarise the history to free up context\n"
                "  /exit, /quit             leave";
     }
 
@@ -474,15 +529,19 @@ std::string Repl::handle_command(const std::string& line) {
         return "thinking: " + _config.thinking + note;
     }
 
-    if ( cmd == "/clear" ) {
+    if ( cmd == "/clear" || cmd == "/reset" ) {
         _conversation.clear();
-        std::string system = _config.system_prompt + current_date_line();
-        std::string memories = load_memories(_config.home_dir, _config.provider);
-        if ( !memories.empty())
-            system += memories;
-        _conversation.set_system(system);
+        _conversation.set_system(base_system_prompt());
         save_conversation();
         return "conversation history cleared";
+    }
+
+    if ( cmd == "/compact" ) {
+        try {
+            return compact_history();
+        } catch ( const std::exception& e ) {
+            return std::string("compact failed: ") + e.what();
+        }
     }
 
     return "unknown command: " + cmd + " (try /help)";

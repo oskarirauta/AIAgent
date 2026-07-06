@@ -36,6 +36,11 @@ private:
     // Handle a slash command (e.g. /settings, /model). Returns text to display.
     std::string handle_command(const std::string& line);
 
+    // Rebuild the system prompt (config + current date + memories).
+    std::string base_system_prompt() const;
+    // Summarise the conversation via one LLM call and replace history with it.
+    std::string compact_history();
+
     Config _config;
     api::Client _client;
     tools::Registry _registry;

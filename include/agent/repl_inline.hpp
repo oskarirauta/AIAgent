@@ -80,8 +80,10 @@ private:
     // Turn lifecycle (worker thread + main-thread event loop).
     void on_enter();
     void start_turn(const std::string& line, const std::string& display);
+    void start_async_command(const std::string& cmd, const std::string& activity); // run a slow command off-thread
     void poll_worker();
     void finish_turn();
+    void finish_async_command();
     void flush_lines();  // emit complete lines from _line_buf (block already erased)
     void emit_reply_line(const std::string& line); // one reply line, trimming blank edges
     void route_stream_chunk(const std::string& chunk); // split think preview vs answer in collapse mode
@@ -204,6 +206,8 @@ private:
 
     // Main-thread turn state.
     bool _turn_running = false;
+    bool _async_command = false;        // the worker is running a slow slash command, not a turn
+    std::string _async_cmd_line;        // the command line, echoed with its result on completion
     bool _confirming = false;
     int _confirm_selection = 0;   // highlighted option (0 = Deny, the safe default)
     int _confirm_menu_lines = 0;  // option lines currently drawn (for in-place redraw)

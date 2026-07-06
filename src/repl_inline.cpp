@@ -1108,6 +1108,58 @@ void InlineRepl::start_turn(const std::string& line, const std::string& display)
     draw_live();
 }
 
+void InlineRepl::start_async_command(const std::string& cmd, const std::string& activity) {
+    // A slow slash command (e.g. /compact) runs on the worker thread so the UI
+    // keeps animating a spinner instead of freezing during the LLM call.
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        while ( !_out_chunks.empty()) _out_chunks.pop();
+        _turn_done = false;
+        _turn_reply.clear();
+        _turn_streamed = false;
+        _activity = activity;
+    }
+    _turn_running = true;
+    _async_command = true;
+    _async_cmd_line = cmd;
+    _spin = 0;
+    _turn_start = std::chrono::steady_clock::now();
+
+    agent::turn_active.store(true, std::memory_order_relaxed);
+    agent::turn_abort.store(false, std::memory_order_relaxed);
+
+    _worker = std::thread([this, cmd]() {
+        std::string result = _command_cb ? _command_cb(cmd) : ("unknown command: " + cmd);
+        std::lock_guard<std::mutex> lk(_mx);
+        _turn_reply = result;
+        _turn_done = true;
+        agent::turn_active.store(false, std::memory_order_relaxed);
+        _cv.notify_all();
+    });
+
+    draw_live();
+}
+
+void InlineRepl::finish_async_command() {
+    if ( _worker.joinable())
+        _worker.join();
+    std::string result;
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        result = _turn_reply;
+        _activity.clear();
+    }
+    erase_live();
+    _turn_running = false;
+    _async_command = false;
+    agent::turn_active.store(false, std::memory_order_relaxed);
+    render_command(_async_cmd_line, result);
+    if ( !_pending.empty())
+        drain_pending();
+    else
+        draw_live();
+}
+
 void InlineRepl::poll_worker() {
     if ( !_turn_running )
         return;
@@ -1148,8 +1200,12 @@ void InlineRepl::poll_worker() {
         draw_live();
     }
 
-    if ( done && !_confirming )
-        finish_turn();
+    if ( done && !_confirming ) {
+        if ( _async_command )
+            finish_async_command();
+        else
+            finish_turn();
+    }
 }
 
 void InlineRepl::finish_turn() {
@@ -1299,6 +1355,11 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
     }
     if ( trimmed == "/context" ) {
         render_context();
+        return;
+    }
+    if ( trimmed == "/compact" ) {
+        // Slow LLM call — run it off-thread with a spinner instead of blocking.
+        start_async_command(trimmed, "compacting");
         return;
     }
     std::string result;
