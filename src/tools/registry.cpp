@@ -383,6 +383,8 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
     std::string exact_key = is_shell ? command : summary;
 
     auto run = [&]() -> std::string {
+        if ( _pre_run_cb )
+            _pre_run_cb(name, args);
         if ( _activity_cb )
             _activity_cb(is_shell ? ("running: " + command) : ("running " + name));
         logger::info["tool"] << "executing " << name << std::endl;

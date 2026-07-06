@@ -40,6 +40,13 @@ private:
 
     // Rebuild the system prompt (config + current date + memories).
     std::string base_system_prompt() const;
+
+    // Session change tracking for write_file (transparency + revert).
+    struct FileChange { bool existed = false; std::string original; bool tracked = true; };
+    std::map<std::string, FileChange> _changes; // absolute path -> pre-write state
+    void record_file_change(const std::string& tool, const JSON& args); // pre-run hook
+    std::string changes_command(const std::string& args);
+    std::string export_transcript(const std::string& path);
     // Summarise the conversation via one LLM call and replace history with it.
     std::string compact_history();
     // Switch the active provider mid-session, carrying the current conversation

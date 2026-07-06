@@ -69,6 +69,15 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **`/export [file]`**: write the whole conversation to a Markdown file (system /
+  you / assistant / tool-result sections, assistant tool calls noted) for bug
+  reports, sharing and docs. Defaults to `agent-export-<timestamp>.md`.
+- **Change tracking (`/changes` + revert)**: a Registry pre-run hook snapshots a
+  file's pre-write content (session-start state, size-capped) before `write_file`
+  overwrites it. `/changes` lists created/modified/reverted files with a line
+  delta; `/changes diff <path>` shows a block diff; `/changes revert <path|all>`
+  restores the original (or removes a session-new file). The useful core of the
+  "snapshot" idea without full filesystem snapshots.
 - **MCP (Model Context Protocol) support**: connect to MCP servers defined in
   `mcp.json` / `.mcp.json` — **stdio** (`{command,args,env}`, own fork/exec +
   persistent-pipe transport) and **HTTP** (`{url,headers}`, Streamable HTTP with
@@ -123,16 +132,6 @@ each list is roughly the current priority order.
 - **word splitting to prompt** when multi-line mode is used, try to avoid cutting
   to next line mid-word
 - **skills** support skills
-
-### From the Kimi feature review (assessed)
-
-- **`/export <file>`** — write the transcript to Markdown for bug reports, sharing
-  and docs. Trivial to build (the conversation is already in memory); small,
-  occasional real value.
-- **Change tracking (`/changes` + revert)** — keep the pre-write contents of files
-  `write_file` overwrites during a session; show a diff on confirm, `/changes`
-  lists what changed, and offer a revert. This is the useful core of the
-  "snapshot" idea without a full filesystem snapshot.
 
 ## Considered / out of scope
 

@@ -36,12 +36,16 @@ class Registry {
 public:
     using confirm_cb_t = std::function<Decision(const ConfirmRequest&)>;
     using activity_cb_t = std::function<void(const std::string&)>;
+    // Invoked just before a tool actually runs (after any confirmation), so the
+    // app can observe it — e.g. snapshot a file before write_file overwrites it.
+    using pre_run_cb_t = std::function<void(const std::string& name, const JSON& args)>;
 
     void register_defaults();
     void add(std::unique_ptr<Tool> tool);
     void remove(const std::string& name); // drop a registered tool (e.g. the advisor)
     void set_confirm_callback(confirm_cb_t cb);
     void set_activity_callback(activity_cb_t cb) { _activity_cb = std::move(cb); }
+    void set_pre_run_callback(pre_run_cb_t cb) { _pre_run_cb = std::move(cb); }
     void set_mode(ConfirmMode mode) { _mode = mode; }
     void set_strict(bool strict) { _strict = strict; } // ignore the safe-command list when true
 
@@ -67,6 +71,7 @@ private:
     std::map<std::string, std::unique_ptr<Tool>> _tools;
     confirm_cb_t _confirm_cb;
     activity_cb_t _activity_cb;
+    pre_run_cb_t _pre_run_cb;
     ConfirmMode _mode = ConfirmMode::confirm;
     bool _strict = false;
 

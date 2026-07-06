@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <vector>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include "json.hpp"
 #include "logger.hpp"
 #include "common.hpp"
@@ -59,6 +61,198 @@ Repl::Repl(const Config& config)
     sync_workflow_tool();
     sync_web_search_tool();
     connect_mcp();
+
+    // Snapshot files before write_file overwrites them, for /changes + revert.
+    _registry.set_pre_run_callback([this](const std::string& n, const JSON& a) {
+        record_file_change(n, a);
+    });
+}
+
+void Repl::record_file_change(const std::string& tool, const JSON& args) {
+    if ( tool != "write_file" || args != JSON::TYPE::OBJECT || !args.contains("path"))
+        return;
+    std::string p = common::trim_ws(args["path"].to_string());
+    if ( p.empty())
+        return;
+    std::string abs;
+    try { abs = std::filesystem::absolute(p).string(); } catch ( ... ) { abs = p; }
+    if ( _changes.count(abs))
+        return; // keep the earliest (session-start) snapshot
+
+    FileChange fc;
+    std::error_code ec;
+    if ( std::filesystem::is_regular_file(abs, ec)) {
+        fc.existed = true;
+        auto sz = std::filesystem::file_size(abs, ec);
+        if ( !ec && sz <= 5 * 1024 * 1024 ) {
+            std::ifstream ifd(abs, std::ios::binary);
+            std::stringstream ss; ss << ifd.rdbuf();
+            fc.original = ss.str();
+            fc.tracked = true;
+        } else {
+            fc.tracked = false; // too large to snapshot for revert
+        }
+    } else {
+        fc.existed = false; // brand-new file
+        fc.tracked = true;
+    }
+    _changes[abs] = fc;
+}
+
+// Read a file's current content, or nullopt if it doesn't exist.
+static std::optional<std::string> read_current(const std::string& path) {
+    std::error_code ec;
+    if ( !std::filesystem::is_regular_file(path, ec))
+        return std::nullopt;
+    std::ifstream ifd(path, std::ios::binary);
+    if ( !ifd.is_open())
+        return std::nullopt;
+    std::stringstream ss; ss << ifd.rdbuf();
+    return ss.str();
+}
+
+static size_t count_lines(const std::string& s) {
+    if ( s.empty()) return 0;
+    size_t n = static_cast<size_t>(std::count(s.begin(), s.end(), '\n'));
+    if ( s.back() != '\n' ) ++n;
+    return n;
+}
+
+// A compact block diff: trim the common leading/trailing lines and show the rest
+// as -old / +new with a little context.
+static std::string block_diff(const std::string& oldc, const std::string& newc) {
+    auto split = [](const std::string& s) {
+        std::vector<std::string> v; std::string line; std::istringstream is(s);
+        while ( std::getline(is, line)) v.push_back(line);
+        return v;
+    };
+    std::vector<std::string> o = split(oldc), n = split(newc);
+    size_t p = 0;
+    while ( p < o.size() && p < n.size() && o[p] == n[p] ) ++p;
+    size_t s = 0;
+    while ( s < o.size() - p && s < n.size() - p && o[o.size() - 1 - s] == n[n.size() - 1 - s] ) ++s;
+
+    std::string out = "--- original\n+++ current\n";
+    size_t ctx_start = p > 2 ? p - 2 : 0;
+    for ( size_t i = ctx_start; i < p; ++i ) out += "  " + o[i] + "\n";
+    size_t shown = 0;
+    for ( size_t i = p; i < o.size() - s && shown < 200; ++i, ++shown ) out += "- " + o[i] + "\n";
+    shown = 0;
+    for ( size_t i = p; i < n.size() - s && shown < 200; ++i, ++shown ) out += "+ " + n[i] + "\n";
+    size_t ctx_end = std::min(o.size(), ( o.size() - s ) + 2 );
+    for ( size_t i = o.size() - s; i < ctx_end; ++i ) out += "  " + o[i] + "\n";
+    return out;
+}
+
+std::string Repl::changes_command(const std::string& args) {
+    std::istringstream iss(args);
+    std::string sub, target;
+    iss >> sub; { std::string rest; std::getline(iss, rest); target = common::trim_ws(rest); }
+    sub = common::to_lower(sub);
+
+    if ( sub == "revert" ) {
+        if ( target.empty())
+            return "usage: /changes revert <path|all>";
+        auto revert_one = [this](const std::string& abs, FileChange& fc) -> std::string {
+            if ( !fc.tracked )
+                return "skip " + abs + " (too large to snapshot)";
+            std::error_code ec;
+            if ( fc.existed ) {
+                std::ofstream ofd(abs, std::ios::binary | std::ios::trunc);
+                ofd << fc.original;
+                return "reverted " + abs;
+            }
+            std::filesystem::remove(abs, ec);
+            return "removed " + abs + " (did not exist at session start)";
+        };
+        if ( common::to_lower(target) == "all" ) {
+            if ( _changes.empty()) return "no changes to revert";
+            std::string s;
+            for ( auto& [abs, fc] : _changes ) s += revert_one(abs, fc) + "\n";
+            _changes.clear();
+            return s;
+        }
+        std::string abs;
+        try { abs = std::filesystem::absolute(target).string(); } catch ( ... ) { abs = target; }
+        auto it = _changes.find(abs);
+        if ( it == _changes.end())
+            return "no tracked change for " + target;
+        std::string r = revert_one(abs, it->second);
+        _changes.erase(it);
+        return r;
+    }
+
+    if ( sub == "diff" ) {
+        if ( target.empty())
+            return "usage: /changes diff <path>";
+        std::string abs;
+        try { abs = std::filesystem::absolute(target).string(); } catch ( ... ) { abs = target; }
+        auto it = _changes.find(abs);
+        if ( it == _changes.end())
+            return "no tracked change for " + target;
+        if ( !it->second.tracked )
+            return target + " was too large to snapshot; no diff available";
+        auto cur = read_current(abs);
+        if ( !it->second.existed )
+            return target + " was created this session (" +
+                   std::to_string(count_lines(cur.value_or(""))) + " lines)";
+        return block_diff(it->second.original, cur.value_or(""));
+    }
+
+    if ( _changes.empty())
+        return "no files changed this session";
+
+    std::string s = "files changed this session:\n";
+    for ( const auto& [abs, fc] : _changes ) {
+        auto cur = read_current(abs);
+        std::string status;
+        if ( !fc.existed && cur ) status = "created";
+        else if ( fc.existed && !cur ) status = "deleted";
+        else if ( fc.tracked && cur && *cur == fc.original ) status = "reverted/unchanged";
+        else status = "modified";
+
+        s += "\n  " + status + "  " + abs;
+        if ( fc.tracked && fc.existed && cur && status == "modified" ) {
+            long d = static_cast<long>(count_lines(*cur)) - static_cast<long>(count_lines(fc.original));
+            s += std::string("  (") + ( d >= 0 ? "+" : "" ) + std::to_string(d) + " lines)";
+        }
+    }
+    s += "\n\n/changes diff <path> · /changes revert <path|all>";
+    return s;
+}
+
+std::string Repl::export_transcript(const std::string& path) {
+    const auto& msgs = _conversation.messages();
+    std::string md = "# Conversation export\n\n";
+    std::string date = current_date_line();
+    if ( date.size() > 2 ) date = " — " + date.substr(2);
+    md += "*" + _config.provider + " · " + _config.model + date + "*\n";
+
+    int n = 0;
+    for ( const auto& m : msgs ) {
+        std::string heading;
+        switch ( m.role ) {
+            case Role::SYSTEM:    heading = "## System"; break;
+            case Role::USER:      heading = "## You"; break;
+            case Role::ASSISTANT: heading = "## Assistant"; break;
+            case Role::TOOL:      heading = "### Tool result" +
+                                   ( m.name ? ( " (" + *m.name + ")" ) : std::string()); break;
+        }
+        md += "\n" + heading + "\n\n";
+        if ( !m.content.empty())
+            md += m.content + "\n";
+        for ( const auto& tc : m.tool_calls )
+            md += "\n- calls `" + tc.name + "(" + tc.arguments + ")`\n";
+        ++n;
+    }
+
+    std::ofstream ofd(path, std::ios::out | std::ios::trunc);
+    if ( !ofd.is_open())
+        return "error: cannot write " + path;
+    ofd << md;
+    ofd.flush();
+    return "exported " + std::to_string(n) + " message(s) to " + path +
+           " (" + std::to_string(md.size()) + " bytes)";
 }
 
 void Repl::connect_mcp() {
@@ -668,6 +862,8 @@ std::string Repl::handle_command(const std::string& line) {
                "  /history                 list the messages in the current context\n"
                "  /retry                   re-run your last message\n"
                "  /undo                    remove the last exchange from history\n"
+               "  /changes [diff|revert <path|all>]   files the agent changed this session\n"
+               "  /export [file]           write the conversation to a Markdown file\n"
                "  /clear (/reset)          clear the conversation history\n"
                "  /compact                 summarise the history to free up context\n"
                "  /settings auto_compact <on|off>   auto-compact when the context nears its budget\n"
@@ -795,6 +991,23 @@ std::string Repl::handle_command(const std::string& line) {
             return "nothing to undo";
         save_conversation();
         return "removed the last exchange";
+    }
+
+    if ( cmd == "/changes" ) {
+        return changes_command(args);
+    }
+
+    if ( cmd == "/export" ) {
+        std::string path = common::trim_ws(args);
+        if ( path.empty()) {
+            std::time_t t = std::time(nullptr);
+            std::tm tm{};
+            char buf[32] = "export";
+            if ( localtime_r(&t, &tm))
+                std::strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", &tm);
+            path = "agent-export-" + std::string(buf) + ".md";
+        }
+        return export_transcript(path);
     }
 
     if ( cmd == "/btw" || cmd == "/note" ) {
