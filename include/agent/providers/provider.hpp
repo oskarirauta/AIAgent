@@ -52,6 +52,10 @@ public:
     // Override in subclasses that expose custom settings.
     virtual void apply_provider_options(const JSON& options) { (void)options; }
 
+    // Change the active model at runtime (used by the /model slash command).
+    void set_model(const std::string& model) { _config.model = model; }
+    const std::string& model() const { return _config.model; }
+
     // Extra HTTP headers to add to every request. Override in subclasses that need
     // provider-specific headers (e.g. Anthropic's anthropic-version).
     virtual std::vector<std::pair<std::string, std::string>> extra_headers() const { return {}; }

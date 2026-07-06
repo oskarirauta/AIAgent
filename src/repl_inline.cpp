@@ -782,6 +782,22 @@ void InlineRepl::on_enter() {
         return;
     }
 
+    // Slash commands run locally (never sent to the model), even mid-turn.
+    if ( trimmed[0] == '/' ) {
+        _prompt_history.push_back(trimmed);
+        _history_index = _prompt_history.size();
+        _stashed_input.clear();
+        _input.clear();
+        _cursor = 0;
+        _input_window_start = 0;
+        _pastes.clear();
+
+        std::string result = _command_cb ? _command_cb(trimmed)
+                                         : ("unknown command: " + trimmed);
+        render_command(trimmed, result);
+        return;
+    }
+
     _prompt_history.push_back(line);
     _history_index = _prompt_history.size();
     _stashed_input.clear();
@@ -950,6 +966,21 @@ void InlineRepl::draw_confirm_menu(const tools::ConfirmRequest& req, bool redraw
     }
     wr(out);
     _confirm_menu_lines = n;
+}
+
+void InlineRepl::render_command(const std::string& cmd, const std::string& result) {
+    erase_live();
+    // A system message: the command echoed with a ⚙ marker, then its result.
+    wr("\n\033[1;35m⚙\033[0m " + cmd + "\n");
+    int width = term_cols() - 4;
+    if ( width < 8 ) width = 8;
+    std::istringstream ls(result);
+    std::string line;
+    while ( std::getline(ls, line))
+        for ( const auto& seg : word_wrap(line, width))
+            wr("  " + seg + "\n");
+    wr("\n");
+    draw_live();
 }
 
 void InlineRepl::render_confirm_dialog(const tools::ConfirmRequest& req) {

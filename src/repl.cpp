@@ -155,6 +155,84 @@ tools::ConfirmMode Repl::tool_mode() const {
                                  : tools::ConfirmMode::automatic;
 }
 
+std::string Repl::handle_command(const std::string& line) {
+    std::string cmd, args;
+    {
+        std::istringstream iss(line);
+        iss >> cmd;
+        std::getline(iss, args);
+        args = common::trim_ws(args);
+    }
+
+    if ( cmd == "/help" ) {
+        return "commands:\n"
+               "  /help                    show this help\n"
+               "  /settings                show current settings\n"
+               "  /model [name]            show or change the model\n"
+               "  /tools <confirm|auto|insecure>   set the tool confirmation mode\n"
+               "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
+               "  /clear                   clear the conversation history\n"
+               "  /exit, /quit             leave";
+    }
+
+    if ( cmd == "/settings" ) {
+        std::string tools = !_config.tools_enabled ? "off"
+                          : ( _config.insecure ? "insecure"
+                          : ( _config.confirm_tools ? "confirm" : "auto" ));
+        std::string s;
+        s += "provider:  " + _config.provider + "\n";
+        s += "model:     " + _config.model + "\n";
+        s += "tools:     " + tools + "\n";
+        s += "thinking:  " + ( _thinking.empty() ? std::string("(provider default)") : _thinking ) + "\n";
+        s += "home:      " + _config.home_dir + "\n";
+        s += "tokens:    ctx " + std::to_string(_stats.context_tokens.load()) +
+             ", session " + std::to_string(_stats.session_total());
+        return s;
+    }
+
+    if ( cmd == "/model" ) {
+        if ( args.empty())
+            return "model: " + _config.model;
+        _config.model = args;
+        if ( _provider )
+            _provider->set_model(args);
+        return "model set to " + args;
+    }
+
+    if ( cmd == "/tools" ) {
+        std::string m = common::to_lower(args);
+        if ( m == "confirm" ) { _config.confirm_tools = true; _config.insecure = false; }
+        else if ( m == "auto" || m == "yes" ) { _config.confirm_tools = false; _config.insecure = false; m = "auto"; }
+        else if ( m == "insecure" ) { _config.insecure = true; }
+        else return "usage: /tools <confirm|auto|insecure>";
+        _registry.set_mode(tool_mode());
+        return "tool mode: " + m;
+    }
+
+    if ( cmd == "/thinking" || cmd == "/effort" ) {
+        if ( args.empty())
+            return "thinking: " + ( _thinking.empty() ? std::string("(provider default)") : _thinking );
+        _thinking = common::to_lower(args);
+        if ( _provider )
+            _provider->apply_provider_options(JSON::Object{{ "thinking", _thinking }});
+        std::string note = ( _config.provider == "kimi" ) ? "" : "  (only Kimi applies thinking currently)";
+        return "thinking: " + _thinking + note;
+    }
+
+    if ( cmd == "/clear" ) {
+        _conversation.clear();
+        std::string system = _config.system_prompt;
+        std::string memories = load_memories(_config.home_dir, _config.provider);
+        if ( !memories.empty())
+            system += memories;
+        _conversation.set_system(system);
+        save_conversation();
+        return "conversation history cleared";
+    }
+
+    return "unknown command: " + cmd + " (try /help)";
+}
+
 void Repl::run_plain() {
 
     std::cout << "agent ready. Type /exit or /quit to leave.\n" << std::endl;
@@ -232,6 +310,7 @@ void Repl::run_tty() {
     if ( _config.tools_enabled ) {
         _registry.set_activity_callback([&inline_repl](const std::string& a) { inline_repl.set_activity(a); });
     }
+    inline_repl.set_command_callback([this](const std::string& cmd) { return handle_command(cmd); });
 
     inline_repl.run();
 }

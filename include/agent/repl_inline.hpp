@@ -30,6 +30,7 @@ class Conversation;
 class InlineRepl {
 public:
     using callback_t = std::function<std::string(const std::string&, std::function<void(const std::string&)>, std::atomic<bool>*)>;
+    using command_cb_t = std::function<std::string(const std::string&)>; // slash command -> result text
 
     struct PasteItem {
         std::string placeholder; // token shown inline in the input
@@ -48,6 +49,10 @@ public:
     // Publish what the worker is currently doing (e.g. a running command) so the
     // status line can show it. Thread-safe.
     void set_activity(const std::string& activity);
+
+    // Handler for slash commands (other than /exit and /quit), run locally on the
+    // main thread; returns text to show as a system message.
+    void set_command_callback(command_cb_t cb) { _command_cb = std::move(cb); }
 
     // Restore the terminal from raw mode. Safe to call more than once.
     void teardown();
@@ -78,6 +83,7 @@ private:
     void finish_turn();
     void flush_lines();  // emit complete lines from _line_buf (block already erased)
     void emit_reply_line(const std::string& line); // one reply line, trimming blank edges
+    void render_command(const std::string& cmd, const std::string& result);
     void render_confirm_dialog(const tools::ConfirmRequest& req);
     void draw_confirm_menu(const tools::ConfirmRequest& req, bool redraw);
     void handle_confirm_key(int c);
@@ -107,6 +113,7 @@ private:
     void drop_paste(const std::string& placeholder); // forget a removed paste
 
     callback_t _callback;
+    command_cb_t _command_cb;
     const Config& _config;
     const Conversation& _conversation;
     const TokenStats& _stats;

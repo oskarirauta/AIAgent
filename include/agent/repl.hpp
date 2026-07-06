@@ -33,12 +33,16 @@ private:
     std::string conversation_path() const;
     tools::ConfirmMode tool_mode() const;
 
+    // Handle a slash command (e.g. /settings, /model). Returns text to display.
+    std::string handle_command(const std::string& line);
+
     Config _config;
     api::Client _client;
     tools::Registry _registry;
     std::unique_ptr<providers::Provider> _provider;
     Conversation _conversation;
     TokenStats _stats;
+    std::string _thinking; // last thinking/effort set via /thinking (for display)
 };
 
 } // namespace agent

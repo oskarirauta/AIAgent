@@ -140,9 +140,22 @@ If you launch without `-p`, the last provider is reused; without `-m`, that prov
 - Transcript is printed to the terminal's normal buffer — scroll and select/copy with your terminal/mouse as usual.
 - A dim separator divides the transcript from the input; a status line shows provider · model · directory · tool mode.
 - Line editing: Left/Right, Home/End (or Ctrl-A / Ctrl-E), Up/Down for history, Backspace/Delete.
-- **Enter** sends; **Ctrl-J** inserts a newline for multi-line prompts (shown inline as a `↵` glyph).
-- **Paste** (bracketed): small pastes are inserted inline; large ones collapse into an atomic `[paste #N: L lines]` box. Boxes and newline glyphs behave as single units for cursor movement and deletion.
+- **Enter** sends; **Alt+Enter** inserts a newline for multi-line prompts (shown inline as a `↵` glyph).
+- **Paste** (bracketed): small pastes are inserted inline; large ones collapse into an atomic `[paste #N: L lines]` box in the input, and expand into a framed block in the transcript. Boxes and newline glyphs behave as single units for cursor movement and deletion.
+- Messages are marked so speakers are easy to tell apart: `›` (you), `●` (AI), `⚙` (a command).
 - **Ctrl-C** interrupts the current turn (or quits when idle); **Ctrl-D** or `/exit` / `/quit` leaves.
+
+Slash commands run locally (never sent to the model):
+
+| Command | Effect |
+|---------|--------|
+| `/help` | List the commands. |
+| `/settings` | Show provider, model, tool mode, thinking, home, token usage. |
+| `/model [name]` | Show or change the active model. |
+| `/tools <confirm\|auto\|insecure>` | Change the tool confirmation mode. |
+| `/thinking <on\|off\|low\|medium\|high\|xhigh\|max>` | Set the thinking level (alias `/effort`; applied by Kimi). |
+| `/clear` | Clear the conversation history (context). |
+| `/exit`, `/quit` | Leave. |
 
 ## Security
 
