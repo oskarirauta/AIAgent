@@ -53,6 +53,7 @@ THROWS_DIR:=throws
 JSON_DIR:=json
 SIGNAL_DIR:=signal
 PROCESS_DIR:=process
+ENV_DIR:=env
 
 include $(USAGECPP_DIR)/Makefile.inc
 include $(COMMON_DIR)/Makefile.inc
@@ -61,6 +62,7 @@ include $(THROWS_DIR)/Makefile.inc
 include $(JSON_DIR)/Makefile.inc
 include $(SIGNAL_DIR)/Makefile.inc
 include $(PROCESS_DIR)/Makefile.inc
+include $(ENV_DIR)/Makefile.inc
 
 #LDFLAGS += -lcurl -lncurses
 
@@ -133,12 +135,12 @@ objs/tools_web_search.o: src/tools/web_search.cpp
 objs/test_suite.o: src/test_suite.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 
-agent: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(OBJS)
+agent: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(ENV_OBJS) $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@ $(LIBS);
 
 TEST_OBJS:= $(filter-out objs/main.o,$(OBJS)) objs/test_suite.o
 
-test: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(TEST_OBJS)
+test: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(ENV_OBJS) $(TEST_OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o test_runner $(LIBS);
 	./test_runner
 

@@ -69,6 +69,12 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **`run_command` options**: per-call `timeout` (seconds, clamped; default 120,
+  max 600), `cwd` (runs inside `cd <dir> && ( ... )`), and `env` (extra vars for
+  that command only, applied via `env_cpp`'s RAII `env_scope` so the parent
+  environment is restored afterwards). Pulls in **`env_cpp`** (oskarirauta/env_cpp
+  v1.0.0) as a submodule — a small read/write environment library with a
+  json_cpp-style subscript API.
 - **`edit_file`**: targeted edit tool — replace an exact `old_string` with
   `new_string` in an existing file (`replace_all` optional; unique-match enforced
   otherwise). Cheaper/safer than rewriting the whole file; danger-classified and
@@ -121,9 +127,9 @@ each list is roughly the current priority order.
 
 ### From the second Kimi review (assessed, top picks)
 
-- **Quick wins**: `fetch_url` (reuse `Client::get`, strip HTML → text) · `run_command`
-  per-call `timeout` (process_t supports it) + `cwd` + `env` · bulk/array `read_file`
-  (line ranges already done via offset/limit).
+- **Quick wins**: `fetch_url` (reuse `Client::get`, strip HTML → text) · bulk/array
+  `read_file` (line ranges already done via offset/limit). (`run_command`
+  timeout/cwd/env shipped — see Done.)
 - **Prompt caching** (Anthropic + Moonshot/Kimi): `cache_control: ephemeral` on the
   system prompt + tools + stable history prefix — cuts input cost ~90% and latency
   on cache hits. High value for heavy interactive use.

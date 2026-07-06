@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <thread>
 #include <chrono>
+#include <cstdlib>
 
 #include "agent/signal_handler.hpp"
 
@@ -858,6 +859,23 @@ static void test_read_file_robustness() {
     std::filesystem::remove("/tmp/ai_rf_empty.txt");
 }
 
+static void test_run_command_options() {
+    std::cout << "run_command cwd/env/timeout" << std::endl;
+    agent::tools::RunCommand rc;
+
+    std::string pwd = rc.execute(JSON::Object{ { "command", "pwd" }, { "cwd", "/tmp" } });
+    check(pwd.find("/tmp") != std::string::npos, "cwd runs the command in the given directory");
+
+    std::string ev = rc.execute(JSON::Object{
+        { "command", "echo $AI_TEST_VAR" },
+        { "env", JSON::Object{ { "AI_TEST_VAR", "hello123" } } } });
+    check(ev.find("hello123") != std::string::npos, "env var is visible to the command");
+    check(std::getenv("AI_TEST_VAR") == nullptr, "env var is restored (unset) after the command");
+
+    std::string to = rc.execute(JSON::Object{ { "command", "sleep 5" }, { "timeout", 1 } });
+    check(to.find("timed out") != std::string::npos, "timeout kills a long-running command");
+}
+
 static void test_edit_file() {
     std::cout << "edit_file targeted edits" << std::endl;
     agent::tools::EditFile ef;
@@ -1055,6 +1073,7 @@ int main() {
     test_tools();
     test_run_command_robustness();
     test_read_file_robustness();
+    test_run_command_options();
     test_edit_file();
     test_grep_robustness();
     test_token_usage();

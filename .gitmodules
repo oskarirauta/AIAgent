@@ -19,3 +19,6 @@
 [submodule "process"]
 	path = process
 	url = https://github.com/oskarirauta/process_cpp.git
+[submodule "env"]
+	path = env
+	url = https://github.com/oskarirauta/env_cpp.git
