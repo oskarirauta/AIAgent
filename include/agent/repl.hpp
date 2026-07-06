@@ -10,6 +10,7 @@
 #include "agent/tools/registry.hpp"
 #include "agent/token_stats.hpp"
 #include "agent/workflow.hpp"
+#include "agent/mcp/client.hpp"
 
 namespace agent {
 
@@ -59,6 +60,10 @@ private:
     // Register/unregister the web_search tool to match the config.
     void sync_web_search_tool();
 
+    // Connect configured MCP servers and register their tools; render /mcp.
+    void connect_mcp();
+    std::string mcp_command(const std::string& args);
+
     Config _config;
     api::Client _client;
     tools::Registry _registry;
@@ -66,6 +71,7 @@ private:
     Conversation _conversation;
     TokenStats _stats;
     WorkflowManager _workflows;
+    mcp::Client _mcp;
 };
 
 } // namespace agent

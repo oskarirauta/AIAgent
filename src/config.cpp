@@ -216,6 +216,7 @@ void Config::load(const std::string& path) {
         else if ( key == "budget_tokens" ) budget_tokens = parse_size(value, budget_tokens, key);
         else if ( key == "web_search" ) web_search = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
         else if ( key == "web_search_url" ) web_search_url = value;
+        else if ( key == "mcp_config" ) mcp_config = expand_tilde(value);
         else if ( key == "budget_usd" ) {
             try { budget_usd = std::stod(common::trim_ws(value)); }
             catch ( ... ) { logger::warning["config"] << "invalid budget_usd: " << value << std::endl; }

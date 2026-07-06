@@ -18,6 +18,7 @@
 #include "agent/tools/advisor.hpp"
 #include "agent/tools/workflow_tool.hpp"
 #include "agent/tools/web_search.hpp"
+#include "agent/tools/mcp_tool.hpp"
 
 namespace agent {
 
@@ -57,6 +58,60 @@ Repl::Repl(const Config& config)
     sync_advisor_tool();
     sync_workflow_tool();
     sync_web_search_tool();
+    connect_mcp();
+}
+
+void Repl::connect_mcp() {
+    if ( !_config.tools_enabled )
+        return; // no point spawning servers if their tools can't be called
+
+    int n = 0;
+    if ( !_config.mcp_config.empty()) {
+        n = _mcp.load_config(_config.mcp_config);
+    } else {
+        n += _mcp.load_config(_config.home_dir + "/mcp.json");
+        n += _mcp.load_config(".mcp.json"); // project-local
+    }
+    if ( n == 0 )
+        return;
+
+    _mcp.connect_all();
+    for ( const auto& t : _mcp.tools()) {
+        _registry.add(std::make_unique<tools::McpTool>(
+            t.registered, t.description, t.input_schema, t.server, t.tool,
+            [this](const std::string& s, const std::string& tool, const JSON& a) {
+                return _mcp.call_tool(s, tool, a);
+            }));
+    }
+}
+
+std::string Repl::mcp_command(const std::string& args) {
+    (void)args;
+    if ( !_mcp.any_configured())
+        return "no MCP servers configured\n"
+               "add them to " + _config.home_dir + "/mcp.json or ./.mcp.json, e.g.\n"
+               "  {\"mcpServers\": {\"filesystem\": {\"command\": \"npx\", "
+               "\"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"]}}}";
+
+    auto st = _mcp.status();
+    std::string s = "MCP servers:\n";
+    for ( const auto& si : st ) {
+        s += std::string("\n  ") + ( si.connected ? "✓" : "✗" ) + " " + si.name;
+        if ( si.connected ) {
+            s += "  (" + std::to_string(si.tool_names.size()) + " tool" +
+                 ( si.tool_names.size() == 1 ? "" : "s" );
+            if ( !si.tool_names.empty()) {
+                s += ": ";
+                for ( size_t i = 0; i < si.tool_names.size(); ++i )
+                    s += ( i ? ", " : "" ) + si.tool_names[i];
+            }
+            s += ")";
+        } else {
+            s += "  — " + ( si.error.empty() ? std::string("not connected") : si.error );
+        }
+    }
+    s += "\n\nthe model calls these as mcp__<server>__<tool>";
+    return s;
 }
 
 void Repl::sync_web_search_tool() {
@@ -519,6 +574,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /btw <note>              add a note to the context without asking for a reply (alias /note)\n"
                "  /advisor <on|off|model N>   (claude) let the model consult a stronger advisor model\n"
                "  /workflows [id]          (claude) view background workflow runs the model started\n"
+               "  /mcp                     list connected MCP servers and their tools\n"
                "  /tools <confirm|auto|insecure>   set the tool confirmation mode\n"
                "  /strict <on|off>         also confirm safe read-only commands\n"
                "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
@@ -672,6 +728,10 @@ std::string Repl::handle_command(const std::string& line) {
             return "provider: " + _config.provider +
                    "\nusage: /provider <openai|ollama|anthropic|moonshot|kimi|claude>";
         return switch_provider(common::to_lower(common::trim_ws(args)));
+    }
+
+    if ( cmd == "/mcp" ) {
+        return mcp_command(args);
     }
 
     if ( cmd == "/workflows" || cmd == "/workflow" ) {

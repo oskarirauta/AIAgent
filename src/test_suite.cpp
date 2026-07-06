@@ -25,6 +25,8 @@
 #include "agent/tools/registry.hpp"
 #include "agent/tools/find_symbol.hpp"
 #include "agent/tools/web_search.hpp"
+#include "agent/tools/mcp_tool.hpp"
+#include "agent/mcp/client.hpp"
 #include "agent/tools/advisor.hpp"
 #include "agent/tools/workflow_tool.hpp"
 #include "agent/workflow.hpp"
@@ -275,6 +277,51 @@ static void test_advisor_tool() {
     check(reg.has("consult_advisor"), "advisor registered after add");
     reg.remove("consult_advisor");
     check(!reg.has("consult_advisor"), "advisor gone after remove");
+}
+
+static void test_mcp_tool_and_config() {
+    std::cout << "mcp proxy tool + config parse" << std::endl;
+
+    // Proxy routing: execute() forwards (server, tool, args) to the handler.
+    std::string gotS, gotT; JSON gotA;
+    agent::tools::McpTool tool(
+        "mcp__srv__do", "does a thing",
+        JSON::Object{ { "type", "object" }, { "properties", JSON::Object{} } },
+        "srv", "do",
+        [&](const std::string& s, const std::string& t, const JSON& a) {
+            gotS = s; gotT = t; gotA = a; return std::string("ok:result");
+        });
+    check(tool.name() == "mcp__srv__do", "proxy uses the namespaced name");
+    check(tool.parameters()["type"].to_string() == "object", "proxy exposes the server schema");
+    std::string r = tool.execute(JSON::Object{ { "x", static_cast<long long>(1) } });
+    check(gotS == "srv" && gotT == "do", "proxy routes server + raw tool name");
+    check(r == "ok:result", "proxy returns the handler result");
+
+    // Config parse (no spawn): servers are listed with their command, not connected.
+    std::string path = "/tmp/ai_agent_mcp_test.json";
+    {
+        std::ofstream ofd(path);
+        ofd << "{\"mcpServers\":{"
+               "\"alpha\":{\"command\":\"/bin/true\",\"args\":[\"--x\"]},"
+               "\"beta\":{\"command\":\"/bin/false\"}}}";
+    }
+    agent::mcp::Client c;
+    int n = c.load_config(path);
+    check(n == 2, "load_config counts two servers");
+    auto st = c.status();
+    check(st.size() == 2, "status lists two servers");
+    bool found_alpha = false;
+    for ( const auto& si : st ) {
+        if ( si.name == "alpha" ) {
+            found_alpha = true;
+            check(si.command == "/bin/true", "server command parsed");
+            check(!si.connected, "not connected before connect_all");
+        }
+    }
+    check(found_alpha, "alpha server present");
+    check(c.load_config("/tmp/does_not_exist_mcp.json") == 0, "missing config -> 0 servers");
+
+    std::filesystem::remove(path);
 }
 
 static void test_web_search_parse() {
@@ -945,6 +992,7 @@ int main() {
     test_anthropic_thinking();
     test_provider_capabilities();
     test_advisor_tool();
+    test_mcp_tool_and_config();
     test_web_search_parse();
     test_find_symbol();
     test_pricing_and_cost();

@@ -69,6 +69,14 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **MCP (Model Context Protocol) support** (v1, stdio): connect to MCP servers
+  defined in `mcp.json` / `.mcp.json` (`{"mcpServers": {name: {command,args,env}}}`),
+  run the JSON-RPC 2.0 initialize handshake + `tools/list`, and expose each server
+  tool to the model as `mcp__<server>__<tool>` (schema passed through). Tool calls
+  proxy to `tools/call`. `/mcp` lists servers + tools + status. Own stdio transport
+  (fork/exec + persistent pipes + poll-timeout reads) since `process_t` is
+  one-shot; servers spawned at startup, killed/reaped on exit. Scope: stdio +
+  tools only (HTTP/SSE, resources, prompts are follow-ups).
 - **`web_search` tool**: queries DuckDuckGo (html endpoint) and returns the top
   results (title, URL, snippet) for the model to read and cite. Especially useful
   for **local models (Ollama/llama.cpp)** with no MCP search server — it gives an
@@ -113,12 +121,9 @@ each list is roughly the current priority order.
 
 ### From the Kimi feature review (assessed)
 
-- **MCP (Model Context Protocol) support** — big but high value: connect to MCP
-  servers (filesystem, Postgres, GitHub, Brave Search, …) and expose their tools
-  to the model, translating MCP tool schemas to ours. A standardised way to extend
-  the agent without writing each integration in C++. Scope is comparable to (or
-  larger than) `/workflows`: JSON-RPC over stdio/SSE, server lifecycle, tool
-  discovery. Major undertaking; worth it for the ecosystem it unlocks.
+- **MCP enhancements**: HTTP/SSE transport (v1 is stdio only); resources and
+  prompts (v1 exposes tools only); lazy/async connect (v1 connects at startup);
+  live tool-list refresh on `notifications/tools/list_changed`.
 - **`/export <file>`** — write the transcript to Markdown for bug reports, sharing
   and docs. Trivial to build (the conversation is already in memory); small,
   occasional real value.
