@@ -90,11 +90,53 @@ each list is roughly the current priority order.
   to next line mid-word
 - **skills** support skills
 
+### From the Kimi feature review (assessed)
+
+- **MCP (Model Context Protocol) support** — big but high value: connect to MCP
+  servers (filesystem, Postgres, GitHub, Brave Search, …) and expose their tools
+  to the model, translating MCP tool schemas to ours. A standardised way to extend
+  the agent without writing each integration in C++. Scope is comparable to (or
+  larger than) `/workflows`: JSON-RPC over stdio/SSE, server lifecycle, tool
+  discovery. Major undertaking; worth it for the ecosystem it unlocks.
+- **Cost / token budget** — track estimated spend per session and warn near a
+  limit. `TokenStats` already has input/output/session totals; add per-model
+  pricing in config → estimated `$` for pay-as-you-go (OpenAI) and a warning
+  threshold. Caveat: Claude/Kimi are flat-rate subscriptions, so for those show
+  *usage* rather than dollars. Medium effort, good visibility.
+- **`web_search` tool** — capable models will use it when they lack current info
+  (docs, library versions, API changes). Needs a real backend (DuckDuckGo HTML or
+  a search API) plus result summarisation; medium value for a coding agent, and it
+  adds a network/parse dependency. (An MCP search server would give this for free
+  once MCP lands.)
+- **Codebase symbol index** — a light ctags-style index (functions/classes/symbols
+  → file:line) the model can query for navigation. Models already use `grep` +
+  `read_file` well, so this is an *incremental* speed-up, not a gap; the light
+  symbol-index form is worth it, full embeddings/vector search is not (big build,
+  unclear ROI over grep).
+- **`/export <file>`** — write the transcript to Markdown for bug reports, sharing
+  and docs. Trivial to build (the conversation is already in memory); small,
+  occasional real value.
+- **Change tracking (`/changes` + revert)** — keep the pre-write contents of files
+  `write_file` overwrites during a session; show a diff on confirm, `/changes`
+  lists what changed, and offer a revert. This is the useful core of the
+  "snapshot" idea without a full filesystem snapshot.
 
 ## Considered / out of scope
 
-- **Multi-agent orchestration** ("ultra"/workflows, cloud code review) — these are
-  harness features, not provider capabilities; building them here would be a large
-  separate project.
+- **Multi-agent orchestration** (cloud code review, hundreds of agents) — the local
+  `/workflows` is the lightweight take; full cloud orchestration is a large
+  separate project, out of scope.
 - **Internal commands** replacing busybox coreutils — high effort, uncertain model
   uptake; prefer clean errors + date-in-context instead.
+- **Filesystem snapshots before dangerous ops** — overkill; per-session change
+  tracking (`/changes` + revert, above) covers the useful part far more cheaply.
+- **Custom tools defined in config** — largely covered by `run_command` (the model
+  can already run `make test`, `build`, etc.), so a config `tools:` section is
+  mostly sugar; low marginal value.
+- **Automated test run after edits** — better expressed as a project instruction
+  in `AGENTS.md` ("run `make test` before finishing") which the model then does via
+  `run_command`; not worth a hard-coded hook.
+- **Named session save/load** — history is already auto-saved per provider *and*
+  per project directory; named parallel sessions would be a minor enhancement, low
+  priority.
+- **Image input** — provider-dependent and of little use in a text CLI.
