@@ -35,7 +35,7 @@ static usage_t make_usage(int argc, char **argv) {
             { "help", { "h", "help", "show usage help" }},
             { "version", { "v", "version", "show version" }},
             { "config", { "c", "config", "path to config file", usage_t::OPTIONAL }},
-            { "provider", { "p", "provider", "ai provider: openai, ollama, anthropic, moonshot, kimi or claude", usage_t::OPTIONAL }},
+            { "provider", { "p", "provider", "ai provider: openai, ollama, anthropic, moonshot, openrouter, kimi or claude", usage_t::OPTIONAL }},
             { "model", { "m", "model", "model name", usage_t::OPTIONAL }},
             { "api_url", { "u", "api-url", "api endpoint url", usage_t::OPTIONAL }},
             { "api_key", { "k", "api-key", "api key / token", usage_t::OPTIONAL }},
@@ -121,8 +121,9 @@ int main(int argc, char **argv) {
 
     if ( config.provider != "openai" && config.provider != "ollama" &&
          config.provider != "anthropic" && config.provider != "moonshot" &&
+         config.provider != "openrouter" &&
          config.provider != "kimi" && config.provider != "claude" ) {
-        logger::error << "unsupported provider: " << config.provider << ". use openai, ollama, anthropic, moonshot, kimi or claude." << std::endl;
+        logger::error << "unsupported provider: " << config.provider << ". use openai, ollama, anthropic, moonshot, openrouter, kimi or claude." << std::endl;
         return 1;
     }
 

@@ -626,10 +626,10 @@ std::string Repl::compact_history() {
 
 std::string Repl::switch_provider(const std::string& name) {
     static const std::vector<std::string> supported =
-        { "openai", "ollama", "anthropic", "moonshot", "kimi", "claude" };
+        { "openai", "ollama", "anthropic", "moonshot", "openrouter", "kimi", "claude" };
     if ( std::find(supported.begin(), supported.end(), name) == supported.end())
         return "unknown provider: " + name +
-               "  (openai, ollama, anthropic, moonshot, kimi, claude)";
+               "  (openai, ollama, anthropic, moonshot, openrouter, kimi, claude)";
     if ( name == _config.provider )
         return "already using " + name;
 
@@ -1074,7 +1074,7 @@ std::string Repl::handle_command(const std::string& line) {
     if ( cmd == "/provider" ) {
         if ( args.empty())
             return "provider: " + _config.provider +
-                   "\nusage: /provider <openai|ollama|anthropic|moonshot|kimi|claude>";
+                   "\nusage: /provider <openai|ollama|anthropic|moonshot|openrouter|kimi|claude>";
         return switch_provider(common::to_lower(common::trim_ws(args)));
     }
 

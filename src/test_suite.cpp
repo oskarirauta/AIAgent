@@ -21,6 +21,7 @@
 #include "agent/providers/ollama.hpp"
 #include "agent/providers/anthropic.hpp"
 #include "agent/providers/moonshot.hpp"
+#include "agent/providers/openrouter.hpp"
 #include "agent/providers/kimi.hpp"
 #include "agent/providers/claude.hpp"
 #include "agent/auth/claude_oauth.hpp"
@@ -134,6 +135,29 @@ static void test_reasoning_content() {
     agent::providers::Kimi k(cfg); // inherits the OpenAI parse
     auto rk = k.parse_response(resp);
     check(rk.thinking == "let me think...", "kimi captures reasoning_content");
+}
+
+static void test_openrouter_provider() {
+    std::cout << "openrouter provider" << std::endl;
+    agent::Config cfg; cfg.provider = "openrouter";
+    agent::providers::OpenRouter p(cfg);
+    check(p.name() == "openrouter", "name is openrouter");
+    check(p.config().api_url == "https://openrouter.ai/api/v1", "defaults to the openrouter endpoint");
+    check(p.endpoint().find("openrouter.ai/api/v1/chat/completions") != std::string::npos, "chat-completions endpoint");
+    bool has_referer = false, has_title = false;
+    for ( const auto& [k, v] : p.extra_headers()) {
+        if ( k == "HTTP-Referer" ) has_referer = true;
+        if ( k == "X-Title" ) has_title = true;
+    }
+    check(has_referer && has_title, "sends OpenRouter attribution headers");
+
+    agent::Conversation c; c.set_system("s"); c.add_user("hi");
+    JSON req = p.build_request(c, JSON::Array{});
+    check(req.contains("model") && req.contains("messages"), "builds an OpenAI-style request");
+
+    agent::Config cfg2; cfg2.provider = "openrouter"; cfg2.api_url = "http://localhost:9/v1";
+    agent::providers::OpenRouter p2(cfg2);
+    check(p2.config().api_url == "http://localhost:9/v1", "an explicit api_url is kept");
 }
 
 static void test_ollama_request() {
@@ -1233,6 +1257,7 @@ int main() {
     test_memory_listing();
     test_openai_request();
     test_reasoning_content();
+    test_openrouter_provider();
     test_ollama_request();
     test_anthropic_request();
     test_prompt_caching();

@@ -31,6 +31,7 @@ OBJS:= \
 	objs/ollama.o \
 	objs/anthropic.o \
 	objs/moonshot.o \
+	objs/openrouter.o \
 	objs/kimi_token.o \
 	objs/kimi_oauth.o \
 	objs/kimi_provider.o \
@@ -101,6 +102,8 @@ objs/ollama.o: src/providers/ollama.cpp
 objs/anthropic.o: src/providers/anthropic.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/moonshot.o: src/providers/moonshot.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/openrouter.o: src/providers/openrouter.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/kimi_token.o: src/auth/kimi_token.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;

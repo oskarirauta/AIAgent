@@ -4,6 +4,7 @@
 #include "agent/providers/ollama.hpp"
 #include "agent/providers/anthropic.hpp"
 #include "agent/providers/moonshot.hpp"
+#include "agent/providers/openrouter.hpp"
 #include "agent/providers/kimi.hpp"
 #include "agent/providers/claude.hpp"
 #include "throws.hpp"
@@ -20,6 +21,8 @@ std::unique_ptr<Provider> create(const Config& cfg) {
         provider = std::make_unique<Anthropic>(cfg);
     else if ( cfg.provider == "moonshot" )
         provider = std::make_unique<Moonshot>(cfg);
+    else if ( cfg.provider == "openrouter" )
+        provider = std::make_unique<OpenRouter>(cfg);
     else if ( cfg.provider == "kimi" )
         provider = std::make_unique<Kimi>(cfg);
     else if ( cfg.provider == "claude" )

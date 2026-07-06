@@ -69,6 +69,11 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **OpenRouter provider**: OpenAI-compatible gateway to many models
+  (`vendor/model`, incl. `:free` variants). A thin `OpenAI` subclass — default
+  endpoint `https://openrouter.ai/api/v1`, Bearer auth, plus OpenRouter's optional
+  `HTTP-Referer`/`X-Title` attribution headers. (DeepSeek/Gemini still deferred —
+  no key here to test against.)
 - **Diff preview in the confirmation dialog**: `write_file`/`edit_file` confirms
   show what would change — a block diff of the file vs the new content (write_file)
   or the -old/+new snippets (edit_file, each multi-edit entry), coloured like a
@@ -167,8 +172,6 @@ each list is roughly the current priority order.
 Roughly in priority order for real coding use. Kept only what is genuinely useful
 *and* buildable well; the rest is dropped below.
 
-- **OpenRouter provider**: OpenAI-compatible → small, and testable on its free
-  tier. (DeepSeek/Gemini deferred — no subscription here to test against.)
 - **Config-extensible danger/safe command lists**: let a project add its own
   safe/danger rules instead of the hard-coded lists only.
 - **Project map**: parse the build/manifest files present (`Makefile`,
