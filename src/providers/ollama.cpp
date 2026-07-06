@@ -89,9 +89,15 @@ JSON Ollama::make_tool_result(const std::string& tool_call_id, const std::string
     };
 }
 
-std::string Ollama::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
+void Ollama::stream_reset() {
+    _s_content.clear();
+    _s_reasoning.clear();
+    _s_tools.clear();
+}
+
+StreamChunk Ollama::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
     buffer += chunk;
-    std::string out;
+    StreamChunk out;
     size_t pos;
     while ((pos = buffer.find("\n\n")) != std::string::npos) {
         std::string frame = buffer.substr(0, pos);
@@ -104,20 +110,51 @@ std::string Ollama::parse_stream(const std::string& chunk, std::string& buffer, 
         std::string data = frame.substr(data_pos + 6);
         try {
             JSON j = JSON::parse(data);
-            if ( j.contains("done") && j["done"].to_bool()) {
-                done = true;
-                continue;
-            }
             if ( j.contains("message")) {
                 JSON msg = j["message"];
-                if ( msg.contains("content") && msg["content"] != nullptr )
-                    out += msg["content"].to_string();
+                if ( msg.contains("content") && msg["content"] == JSON::TYPE::STRING ) {
+                    std::string c = msg["content"].to_string();
+                    _s_content += c;
+                    out.content += c;
+                }
+                if ( msg.contains("thinking") && msg["thinking"] == JSON::TYPE::STRING ) {
+                    std::string t = msg["thinking"].to_string();
+                    _s_reasoning += t;
+                    out.reasoning += t;
+                }
+                // Ollama emits complete tool_calls (not fragmented across chunks).
+                if ( msg.contains("tool_calls") && msg["tool_calls"] == JSON::TYPE::ARRAY ) {
+                    for ( size_t i = 0; i < msg["tool_calls"].size(); ++i ) {
+                        JSON tc = msg["tool_calls"][i];
+                        if ( !tc.contains("function")) continue;
+                        JSON fn = tc["function"];
+                        ToolCall call;
+                        call.id = tc.contains("id") ? tc["id"].to_string()
+                                                    : ( "call_" + std::to_string(_s_tools.size()));
+                        if ( fn.contains("name")) call.name = fn["name"].to_string();
+                        if ( fn.contains("arguments")) {
+                            JSON args = fn["arguments"];
+                            call.arguments = ( args == JSON::TYPE::STRING ) ? JSON::parse(args.to_string()) : args;
+                        }
+                        _s_tools.push_back(call);
+                    }
+                }
             }
+            if ( j.contains("done") && j["done"].to_bool())
+                done = true;
         } catch ( const std::exception& e ) {
             // ignore malformed chunks
         }
     }
     return out;
+}
+
+Response Ollama::stream_result() {
+    Response r;
+    r.message = _s_content;
+    r.thinking = _s_reasoning;
+    r.tool_calls = _s_tools;
+    return r;
 }
 
 } // namespace agent::providers

@@ -130,9 +130,17 @@ JSON OpenAI::make_tool_result(const std::string& tool_call_id, const std::string
     };
 }
 
-std::string OpenAI::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
+void OpenAI::stream_reset() {
+    _s_content.clear();
+    _s_reasoning.clear();
+    _s_tools.clear();
+    _s_input_tokens = 0;
+    _s_output_tokens = 0;
+}
+
+StreamChunk OpenAI::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
     buffer += chunk;
-    std::string out;
+    StreamChunk out;
     size_t pos;
     while ((pos = buffer.find("\n\n")) != std::string::npos) {
         std::string frame = buffer.substr(0, pos);
@@ -150,16 +158,74 @@ std::string OpenAI::parse_stream(const std::string& chunk, std::string& buffer, 
 
         try {
             JSON j = JSON::parse(data);
-            if ( j.contains("choices") && j["choices"] == JSON::TYPE::ARRAY && j["choices"].size() > 0 ) {
-                JSON delta = j["choices"][0]["delta"];
-                if ( delta.contains("content") && delta["content"] != nullptr )
-                    out += delta["content"].to_string();
+            if ( j.contains("usage") && j["usage"] == JSON::TYPE::OBJECT ) {
+                JSON u = j["usage"];
+                if ( u.contains("prompt_tokens")) _s_input_tokens = json_long(u["prompt_tokens"]);
+                if ( u.contains("completion_tokens")) _s_output_tokens = json_long(u["completion_tokens"]);
+            }
+            if ( !( j.contains("choices") && j["choices"] == JSON::TYPE::ARRAY && j["choices"].size() > 0 ))
+                continue;
+            JSON delta = j["choices"][0]["delta"];
+
+            if ( delta.contains("content") && delta["content"] == JSON::TYPE::STRING ) {
+                std::string c = delta["content"].to_string();
+                _s_content += c;
+                out.content += c;
+            }
+            // reasoning_content (DeepSeek/Qwen/Moonshot-Kimi convention); some use `reasoning`.
+            for ( const char* key : { "reasoning_content", "reasoning" } ) {
+                if ( delta.contains(key) && delta[key] == JSON::TYPE::STRING ) {
+                    std::string rc = delta[key].to_string();
+                    _s_reasoning += rc;
+                    out.reasoning += rc;
+                    break;
+                }
+            }
+            // Tool calls arrive in fragments keyed by `index`; id/name come once,
+            // arguments accumulate across deltas.
+            if ( delta.contains("tool_calls") && delta["tool_calls"] == JSON::TYPE::ARRAY ) {
+                for ( size_t i = 0; i < delta["tool_calls"].size(); ++i ) {
+                    JSON tc = delta["tool_calls"][i];
+                    int idx = tc.contains("index") ? static_cast<int>(json_long(tc["index"])) : 0;
+                    PartialToolCall& p = _s_tools[idx];
+                    if ( tc.contains("id") && tc["id"] == JSON::TYPE::STRING )
+                        p.id = tc["id"].to_string();
+                    if ( tc.contains("function") && tc["function"] == JSON::TYPE::OBJECT ) {
+                        JSON fn = tc["function"];
+                        if ( fn.contains("name") && fn["name"] == JSON::TYPE::STRING )
+                            p.name = fn["name"].to_string();
+                        if ( fn.contains("arguments") && fn["arguments"] == JSON::TYPE::STRING )
+                            p.arguments += fn["arguments"].to_string();
+                    }
+                }
             }
         } catch ( const std::exception& e ) {
             // ignore malformed chunks
         }
     }
     return out;
+}
+
+Response OpenAI::stream_result() {
+    Response r;
+    r.message = _s_content;
+    r.thinking = _s_reasoning;
+    r.input_tokens = _s_input_tokens;
+    r.output_tokens = _s_output_tokens;
+    for ( const auto& [idx, p] : _s_tools ) {
+        if ( p.name.empty())
+            continue;
+        ToolCall call;
+        call.id = p.id;
+        call.name = p.name;
+        try {
+            call.arguments = p.arguments.empty() ? JSON::Object{} : JSON::parse(p.arguments);
+        } catch ( const std::exception& ) {
+            call.arguments = JSON::Object{};
+        }
+        r.tool_calls.push_back(call);
+    }
+    return r;
 }
 
 } // namespace agent::providers

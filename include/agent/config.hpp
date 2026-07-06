@@ -22,6 +22,7 @@ public:
     std::string theme = "dark"; // colour theme: dark | light | warm
     bool multiline = false;     // multi-line prompt: show long input wrapped across lines
     std::string thinking;       // thinking/effort level (empty = provider default); applied by Kimi
+    bool thinking_stream = true; // stream the model's reasoning live into the transcript
     bool tools_enabled = true;
     bool confirm_tools = true;  // ask before confirmation-requiring tools
     bool insecure = false;      // run every tool without asking (implies no danger warnings)

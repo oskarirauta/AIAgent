@@ -84,41 +84,46 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         JSON tools = _registry.schema();
         JSON request = _provider->build_request(_conversation, tools);
 
-        // Use streaming when supported, requested, and no tools are registered
-        bool can_stream = stream_cb && _provider->supports_streaming() &&
-                          ( tools != JSON::TYPE::ARRAY || tools.empty());
+        // Stream whenever the caller can render live chunks and the provider
+        // supports it — including with tools, so reasoning/answer flow live and
+        // tool calls are assembled from the stream.
+        bool can_stream = stream_cb && _provider->supports_streaming();
+        providers::Response resp;
 
         if ( can_stream ) {
             request["stream"] = true;
             std::string body = request.dump_minified();
             std::string buffer;
             bool done = false;
-            std::string full_reply;
+            _provider->stream_reset();
+            bool thinking_open = false, content_open = false;
 
             _client.post_stream(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body,
                 [&](const std::string& chunk) {
-                    std::string text = agent::normalize_text(_provider->parse_stream(chunk, buffer, done));
-                    if ( !text.empty()) {
-                        full_reply += text;
-                        stream_cb(text);
+                    providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
+                    if ( _config.thinking_stream && !sc.reasoning.empty()) {
+                        if ( !thinking_open ) { stream_cb("💭 "); thinking_open = true; }
+                        stream_cb(sc.reasoning);
+                    }
+                    if ( !sc.content.empty()) {
+                        if ( thinking_open && !content_open ) { stream_cb("\n\n"); content_open = true; }
+                        stream_cb(agent::normalize_text(sc.content));
                     }
                 }, abort_flag);
 
             if ( abort_flag && abort_flag->load(std::memory_order_relaxed))
                 return "";
 
-            _conversation.add_assistant(full_reply);
-            return full_reply;
+            resp = _provider->stream_result();
+        } else {
+            std::string body = request.dump_minified();
+            std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body, abort_flag);
+
+            if ( abort_flag && abort_flag->load(std::memory_order_relaxed))
+                return "";
+
+            resp = _provider->parse_response(JSON::parse(response_str));
         }
-
-        std::string body = request.dump_minified();
-        std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body, abort_flag);
-
-        if ( abort_flag && abort_flag->load(std::memory_order_relaxed))
-            return "";
-
-        JSON response = JSON::parse(response_str);
-        providers::Response resp = _provider->parse_response(response);
 
         _stats.record(resp.input_tokens, resp.output_tokens);
 
@@ -134,12 +139,11 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         _conversation.add_assistant(normalized, assistant_calls);
 
         if ( resp.tool_calls.empty()) {
-            // Show the model's reasoning (if any) above the answer. It is display
-            // only — the saved assistant message keeps just the answer.
-            if ( !resp.thinking.empty()) {
-                std::string think = agent::normalize_text(resp.thinking);
-                return "💭 " + think + "\n\n" + normalized;
-            }
+            // In the streaming path the reasoning and answer already went to the
+            // live callback. Only the non-streaming fallback prepends the reasoning
+            // block here (display only — the saved message keeps just the answer).
+            if ( !can_stream && !resp.thinking.empty())
+                return "💭 " + agent::normalize_text(resp.thinking) + "\n\n" + normalized;
             return normalized;
         }
 

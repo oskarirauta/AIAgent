@@ -258,20 +258,58 @@ static void test_stream_parsers() {
     agent::Config cfg;
 
     agent::providers::OpenAI openai(cfg);
+    openai.stream_reset();
     std::string buf;
     bool done = false;
-    std::string out = openai.parse_stream("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\ndata: [DONE]\n\n", buf, done);
-    check(out == "Hello" && done, "openai stream parser");
+    auto oc = openai.parse_stream("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\ndata: [DONE]\n\n", buf, done);
+    check(oc.content == "Hello" && done, "openai stream parser");
 
     agent::providers::Ollama ollama(cfg);
+    ollama.stream_reset();
     buf.clear(); done = false;
-    out = ollama.parse_stream("data: {\"message\":{\"content\":\"world\"}}\n\ndata: {\"done\":true}\n\n", buf, done);
-    check(out == "world" && done, "ollama stream parser");
+    auto olc = ollama.parse_stream("data: {\"message\":{\"content\":\"world\"}}\n\ndata: {\"done\":true}\n\n", buf, done);
+    check(olc.content == "world" && done, "ollama stream parser");
 
     agent::providers::Anthropic anthropic(cfg);
+    anthropic.stream_reset();
     buf.clear(); done = false;
-    out = anthropic.parse_stream("event: content_block_delta\ndata: {\"delta\":{\"type\":\"text_delta\",\"text\":\"!\"}}\n\nevent: message_stop\ndata: {}\n\n", buf, done);
-    check(out == "!" && done, "anthropic stream parser");
+    auto ac = anthropic.parse_stream(
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"!\"}}\n\n"
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", buf, done);
+    check(ac.content == "!" && done, "anthropic stream parser");
+}
+
+static void test_stream_tool_calls() {
+    std::cout << "streamed tool calls" << std::endl;
+    agent::Config cfg;
+    std::string buf;
+    bool done = false;
+
+    // OpenAI: a tool call fragmented across two deltas (arguments accumulate).
+    agent::providers::OpenAI o(cfg);
+    o.stream_reset();
+    o.parse_stream(R"(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\"path\":"}}]}}]})"
+                   "\n\n", buf, done);
+    o.parse_stream(R"(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"a.txt\"}"}}]}}]})"
+                   "\n\ndata: [DONE]\n\n", buf, done);
+    auto ro = o.stream_result();
+    check(ro.tool_calls.size() == 1, "openai: one tool call assembled");
+    check(!ro.tool_calls.empty() && ro.tool_calls[0].name == "read_file", "openai: tool name");
+    check(!ro.tool_calls.empty() && ro.tool_calls[0].arguments["path"].to_string() == "a.txt",
+          "openai: arguments assembled from fragments");
+
+    // Anthropic: tool_use block with input_json_delta fragments + a thinking block.
+    agent::providers::Anthropic a(cfg);
+    a.stream_reset();
+    buf.clear(); done = false;
+    a.parse_stream(R"(data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking"}})""\n\n", buf, done);
+    a.parse_stream(R"(data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}})""\n\n", buf, done);
+    a.parse_stream(R"(data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu_1","name":"grep"}})""\n\n", buf, done);
+    a.parse_stream(R"(data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"pattern\":\"x\"}"}})""\n\n", buf, done);
+    auto ra = a.stream_result();
+    check(ra.thinking == "hmm", "anthropic: thinking accumulated");
+    check(ra.tool_calls.size() == 1 && ra.tool_calls[0].name == "grep", "anthropic: tool_use assembled");
+    check(!ra.tool_calls.empty() && ra.tool_calls[0].arguments["pattern"].to_string() == "x", "anthropic: input json assembled");
 }
 
 static void test_tools() {
@@ -613,6 +651,7 @@ int main() {
     test_claude_provider();
     test_claude_pkce();
     test_stream_parsers();
+    test_stream_tool_calls();
     test_tools();
     test_run_command_robustness();
     test_read_file_robustness();

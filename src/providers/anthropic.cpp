@@ -226,18 +226,24 @@ JSON Anthropic::make_tool_result(const std::string& tool_call_id, const std::str
     };
 }
 
-std::string Anthropic::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
+void Anthropic::stream_reset() {
+    _s_content.clear();
+    _s_reasoning.clear();
+    _s_blocks.clear();
+    _s_input_tokens = 0;
+    _s_output_tokens = 0;
+}
+
+StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
     buffer += chunk;
-    std::string out;
+    StreamChunk out;
     size_t pos;
     while ((pos = buffer.find("\n\n")) != std::string::npos) {
         std::string frame = buffer.substr(0, pos);
         buffer.erase(0, pos + 2);
 
-        if ( frame.find("event: message_stop") != std::string::npos ) {
+        if ( frame.find("event: message_stop") != std::string::npos )
             done = true;
-            continue;
-        }
 
         size_t data_pos = frame.find("data: ");
         if ( data_pos == std::string::npos )
@@ -246,16 +252,65 @@ std::string Anthropic::parse_stream(const std::string& chunk, std::string& buffe
         std::string data = frame.substr(data_pos + 6);
         try {
             JSON j = JSON::parse(data);
-            if ( j.contains("delta")) {
-                JSON delta = j["delta"];
-                if ( delta.contains("type") && delta["type"].to_string() == "text_delta" && delta.contains("text"))
-                    out += delta["text"].to_string();
+            std::string type = j.contains("type") ? j["type"].to_string() : "";
+
+            if ( type == "message_start" && j.contains("message")) {
+                JSON u = j["message"]["usage"];
+                if ( u == JSON::TYPE::OBJECT && u.contains("input_tokens"))
+                    _s_input_tokens = json_long(u["input_tokens"]);
+            } else if ( type == "content_block_start" && j.contains("index") && j.contains("content_block")) {
+                int idx = static_cast<int>(json_long(j["index"]));
+                JSON b = j["content_block"];
+                StreamBlock& blk = _s_blocks[idx];
+                blk.type = b.contains("type") ? b["type"].to_string() : "";
+                if ( b.contains("id")) blk.id = b["id"].to_string();
+                if ( b.contains("name")) blk.name = b["name"].to_string();
+            } else if ( type == "content_block_delta" && j.contains("index") && j.contains("delta")) {
+                int idx = static_cast<int>(json_long(j["index"]));
+                JSON d = j["delta"];
+                std::string dt = d.contains("type") ? d["type"].to_string() : "";
+                if ( dt == "text_delta" && d.contains("text")) {
+                    std::string t = d["text"].to_string();
+                    _s_content += t;
+                    out.content += t;
+                } else if ( dt == "thinking_delta" && d.contains("thinking")) {
+                    std::string t = d["thinking"].to_string();
+                    _s_reasoning += t;
+                    out.reasoning += t;
+                } else if ( dt == "input_json_delta" && d.contains("partial_json")) {
+                    _s_blocks[idx].json += d["partial_json"].to_string();
+                }
+            } else if ( type == "message_delta" && j.contains("usage")) {
+                JSON u = j["usage"];
+                if ( u.contains("output_tokens")) _s_output_tokens = json_long(u["output_tokens"]);
             }
         } catch ( const std::exception& e ) {
             // ignore malformed chunks
         }
     }
     return out;
+}
+
+Response Anthropic::stream_result() {
+    Response r;
+    r.message = _s_content;
+    r.thinking = _s_reasoning;
+    r.input_tokens = _s_input_tokens;
+    r.output_tokens = _s_output_tokens;
+    for ( const auto& [idx, blk] : _s_blocks ) {
+        if ( blk.type != "tool_use" || blk.name.empty())
+            continue;
+        ToolCall call;
+        call.id = blk.id;
+        call.name = blk.name;
+        try {
+            call.arguments = blk.json.empty() ? JSON::Object{} : JSON::parse(blk.json);
+        } catch ( const std::exception& ) {
+            call.arguments = JSON::Object{};
+        }
+        r.tool_calls.push_back(call);
+    }
+    return r;
 }
 
 } // namespace agent::providers

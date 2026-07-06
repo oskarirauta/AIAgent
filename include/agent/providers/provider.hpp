@@ -26,6 +26,13 @@ struct Response {
     long output_tokens = 0;  // generated tokens reported by the provider (0 if unknown)
 };
 
+// Visible deltas produced by one streamed chunk. Content and reasoning are
+// accumulated internally by the provider too (see stream_result()).
+struct StreamChunk {
+    std::string content;   // answer text delta
+    std::string reasoning; // thinking/reasoning delta
+};
+
 class Provider {
 public:
     virtual ~Provider() = default;
@@ -37,7 +44,15 @@ public:
     virtual void prepare_request(api::Client& client) { (void)client; }
     virtual bool authenticate(api::Client& client, bool force = false) { (void)client; (void)force; return true; }
     virtual bool supports_streaming() const { return false; }
-    virtual std::string parse_stream(const std::string& chunk, std::string& buffer, bool& done) { return ""; }
+
+    // Streaming: reset per-turn accumulation, parse one SSE chunk (returning the
+    // visible deltas while accumulating content/reasoning/tool_calls internally),
+    // and assemble the full Response once the stream is done. Providers that can
+    // stream tool calls override all three; others only produce content.
+    virtual void stream_reset() {}
+    virtual StreamChunk parse_stream(const std::string& chunk, std::string& buffer, bool& done) { (void)chunk; (void)buffer; (void)done; return {}; }
+    virtual Response stream_result() { return Response{}; }
+
     virtual JSON build_request(const Conversation& conv, const JSON& tools_schema) = 0;
     virtual Response parse_response(const JSON& response) = 0;
     virtual JSON make_tool_result(const std::string& tool_call_id, const std::string& result) = 0;
