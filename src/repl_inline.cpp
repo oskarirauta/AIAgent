@@ -27,7 +27,6 @@ namespace agent {
 // ── terminal state, shared with the signal handler's emergency restore ──
 static struct termios g_orig_termios;
 static bool g_termios_saved = false;
-static InlineRepl* g_instance = nullptr;
 
 static void wr(const std::string& s) {
     if ( !s.empty())
@@ -99,7 +98,6 @@ static std::vector<std::string> word_wrap(const std::string& line, int width) {
 InlineRepl::InlineRepl(callback_t cb, const Config& config, const Conversation& conversation, const TokenStats& stats)
     : _callback(std::move(cb)), _config(config), _conversation(conversation), _stats(stats) {
     _theme = theme_by_name(config.theme);
-    g_instance = this;
 }
 
 std::string InlineRepl::apply_theme_command(const std::string& line) {
@@ -120,7 +118,6 @@ std::string InlineRepl::apply_theme_command(const std::string& line) {
 
 InlineRepl::~InlineRepl() {
     teardown();
-    g_instance = nullptr;
 }
 
 void InlineRepl::setup() {
