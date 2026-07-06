@@ -69,7 +69,8 @@ Repl::Repl(const Config& config)
 }
 
 void Repl::record_file_change(const std::string& tool, const JSON& args) {
-    if ( tool != "write_file" || args != JSON::TYPE::OBJECT || !args.contains("path"))
+    if (( tool != "write_file" && tool != "edit_file" ) || args != JSON::TYPE::OBJECT ||
+        !args.contains("path"))
         return;
     std::string p = common::trim_ws(args["path"].to_string());
     if ( p.empty())

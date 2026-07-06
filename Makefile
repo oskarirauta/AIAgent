@@ -39,6 +39,7 @@ OBJS:= \
 	objs/tools_registry.o \
 	objs/tools_read_file.o \
 	objs/tools_write_file.o \
+	objs/tools_edit_file.o \
 	objs/tools_run_command.o \
 	objs/tools_list_directory.o \
 	objs/tools_grep.o \
@@ -116,6 +117,8 @@ objs/tools_registry.o: src/tools/registry.cpp
 objs/tools_read_file.o: src/tools/read_file.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/tools_write_file.o: src/tools/write_file.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/tools_edit_file.o: src/tools/edit_file.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/tools_run_command.o: src/tools/run_command.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;

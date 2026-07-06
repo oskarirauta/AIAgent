@@ -69,6 +69,10 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **`edit_file`**: targeted edit tool — replace an exact `old_string` with
+  `new_string` in an existing file (`replace_all` optional; unique-match enforced
+  otherwise). Cheaper/safer than rewriting the whole file; danger-classified and
+  change-tracked like `write_file`. (Prefer over write_file for edits.)
 - **`/export [file]`**: write the whole conversation to a Markdown file (system /
   you / assistant / tool-result sections, assistant tool calls noted) for bug
   reports, sharing and docs. Defaults to `agent-export-<timestamp>.md`.
@@ -114,6 +118,22 @@ each list is roughly the current priority order.
   so nothing goes stale.
 
 ## Planned
+
+### From the second Kimi review (assessed, top picks)
+
+- **Quick wins**: `fetch_url` (reuse `Client::get`, strip HTML → text) · `run_command`
+  per-call `timeout` (process_t supports it) + `cwd` + `env` · bulk/array `read_file`
+  (line ranges already done via offset/limit).
+- **Prompt caching** (Anthropic + Moonshot/Kimi): `cache_control: ephemeral` on the
+  system prompt + tools + stable history prefix — cuts input cost ~90% and latency
+  on cache hits. High value for heavy interactive use.
+- **Parallel tool calls**: run independent read-only tool calls concurrently in
+  `process_turn` (writes/commands stay serial).
+- **DeepSeek + OpenRouter providers**: both OpenAI-compatible → small.
+- **Native git tools** (`git_status/diff/log/show`, commit-with-confirm) — partly
+  redundant with the auto-safe `run_command`, but gives structured output.
+- Assessed low/covered: format/lint (→ run_command/MCP), code interpreters
+  (→ run_command), file-watch, image input (CLI out of scope), command macros.
 
 - **Autocomplete**: slash commands and file paths.
 - **Settable paste thresholds** in `/settings` (the char/line/ms thresholds exist in

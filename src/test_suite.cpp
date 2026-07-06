@@ -14,6 +14,7 @@
 #include "agent/tools/run_command.hpp"
 #include "agent/tools/read_file.hpp"
 #include "agent/tools/grep.hpp"
+#include "agent/tools/edit_file.hpp"
 #include "agent/providers/provider.hpp"
 #include "agent/providers/openai.hpp"
 #include "agent/providers/ollama.hpp"
@@ -857,6 +858,46 @@ static void test_read_file_robustness() {
     std::filesystem::remove("/tmp/ai_rf_empty.txt");
 }
 
+static void test_edit_file() {
+    std::cout << "edit_file targeted edits" << std::endl;
+    agent::tools::EditFile ef;
+    std::string path = "/tmp/ai_edit.txt";
+
+    auto write = [&](const std::string& s) { std::ofstream o(path, std::ios::binary); o << s; };
+    auto read = [&]() { std::ifstream i(path, std::ios::binary); std::stringstream ss; ss << i.rdbuf(); return ss.str(); };
+
+    // Unique replacement.
+    write("alpha\nbeta\ngamma\n");
+    std::string r = ef.execute(JSON::Object{{ "path", path }, { "old_string", "beta" }, { "new_string", "BETA" }});
+    check(r.rfind("ok:", 0) == 0, "unique edit succeeds");
+    check(read() == "alpha\nBETA\ngamma\n", "unique edit applied");
+
+    // Ambiguous match without replace_all is refused.
+    write("x\nx\nx\n");
+    std::string amb = ef.execute(JSON::Object{{ "path", path }, { "old_string", "x" }, { "new_string", "y" }});
+    check(amb.rfind("error:", 0) == 0 && amb.find("appears 3 times") != std::string::npos, "ambiguous edit refused");
+    check(read() == "x\nx\nx\n", "ambiguous edit does not modify the file");
+
+    // replace_all.
+    std::string all = ef.execute(JSON::Object{{ "path", path }, { "old_string", "x" }, { "new_string", "y" }, { "replace_all", true }});
+    check(all.find("3 replacements") != std::string::npos, "replace_all replaces every occurrence");
+    check(read() == "y\ny\ny\n", "replace_all applied");
+
+    // Not found.
+    std::string nf = ef.execute(JSON::Object{{ "path", path }, { "old_string", "zzz" }, { "new_string", "q" }});
+    check(nf.find("not found") != std::string::npos, "missing old_string reported");
+
+    // Identical old/new.
+    std::string id = ef.execute(JSON::Object{{ "path", path }, { "old_string", "y" }, { "new_string", "y" }, { "replace_all", true }});
+    check(id.find("identical") != std::string::npos, "identical old/new refused");
+
+    // Missing file.
+    std::string mf = ef.execute(JSON::Object{{ "path", "/tmp/does_not_exist_edit.txt" }, { "old_string", "a" }, { "new_string", "b" }});
+    check(mf.find("does not exist") != std::string::npos, "editing a missing file refused");
+
+    std::filesystem::remove(path);
+}
+
 static void test_grep_robustness() {
     std::cout << "grep robustness" << std::endl;
     agent::tools::Grep g;
@@ -1014,6 +1055,7 @@ int main() {
     test_tools();
     test_run_command_robustness();
     test_read_file_robustness();
+    test_edit_file();
     test_grep_robustness();
     test_token_usage();
     test_danger_list();

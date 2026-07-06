@@ -9,6 +9,7 @@
 #include "common.hpp"
 #include "agent/tools/read_file.hpp"
 #include "agent/tools/write_file.hpp"
+#include "agent/tools/edit_file.hpp"
 #include "agent/tools/run_command.hpp"
 #include "agent/tools/list_directory.hpp"
 #include "agent/tools/grep.hpp"
@@ -19,6 +20,7 @@ namespace agent::tools {
 void Registry::register_defaults() {
     add(std::make_unique<ReadFile>());
     add(std::make_unique<WriteFile>());
+    add(std::make_unique<EditFile>());
     add(std::make_unique<RunCommand>());
     add(std::make_unique<ListDirectory>());
     add(std::make_unique<Grep>());
@@ -370,7 +372,7 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
     std::string danger;
     if ( is_shell )
         danger = classify_danger(command);
-    else if ( name == "write_file" && args.contains("path"))
+    else if (( name == "write_file" || name == "edit_file" ) && args.contains("path"))
         danger = classify_path_danger(args["path"].to_string());
 
     // Program / key used for "allow session" and "allow similar".
