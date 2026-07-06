@@ -480,11 +480,11 @@ void InlineRepl::set_activity(const std::string& activity) {
 }
 
 void InlineRepl::erase_live() {
-    // The cursor rests on the prompt line, which sits one line below the
-    // separator at the top of the block — step up to the separator before
-    // clearing so the whole block (separator + prompt + status) is removed.
+    // The cursor rests on the input line, two lines below the block top (blank
+    // spacer + separator) — step up two lines before clearing so the whole block
+    // is removed.
     if ( _live_lines > 0 )
-        wr("\r\033[1A\033[J");
+        wr("\r\033[2A\033[J");
     else
         wr("\r\033[J");
     _live_lines = 0;
@@ -558,21 +558,22 @@ void InlineRepl::draw_live() {
     for ( int i = 0; i < cols; ++i )
         sep += "─"; // ─
 
-    // Reposition to the top of the block: on a redraw the cursor is on the prompt
-    // line (one below the separator); on a fresh draw the block does not exist yet.
-    // Input line sits between two separators (transcript above, status below) so
-    // the status text is never mistaken for the user's own typing.
-    std::string out = ( _live_lines > 0 ) ? "\r\033[1A\033[J" : "\r\033[J";
+    // The live block is 5 lines: a blank spacer, the transcript|input separator,
+    // the input line, the input|status separator, and the status. A leading blank
+    // gives breathing room between the transcript and the separator. The cursor
+    // rests on the input line, two lines below the block top.
+    std::string out = ( _live_lines > 0 ) ? "\r\033[2A\033[J" : "\r\033[J";
+    out += "\r\n";                           // blank spacer above the separator
     out += _theme.dim + sep + "\033[0m\r\n"; // separator: transcript | input
     out += prompt;
     out += "\r\n";
     out += _theme.dim + sep + "\033[0m\r\n"; // separator: input | status
     out += status_prestyled ? status : (_theme.dim + status + "\033[0m"); // status
-    out += "\033[2A\r";                      // back up to the prompt line
+    out += "\033[2A\r";                      // back up to the input line
     if ( cursor_col > 0 )
         out += "\033[" + std::to_string(cursor_col) + "C";
     wr(out);
-    _live_lines = 4;
+    _live_lines = 5;
 }
 
 // ── input editing ───────────────────────────────────────────────────────
@@ -727,7 +728,7 @@ void InlineRepl::run() {
     wr("\033[H\033[2J\033[3J");
 
     wr("\033[1magent\033[0m — " + _config.provider + " · " + _config.model + "\n");
-    wr(_theme.dim + "Type your message. /exit or /quit to leave, Ctrl-C to interrupt." + Theme::reset + "\n\n");
+    wr(_theme.dim + "Type your message. /exit or /quit to leave, Ctrl-C to interrupt." + Theme::reset + "\n");
 
     _history_index = _prompt_history.size();
     draw_live();
@@ -1036,7 +1037,7 @@ void InlineRepl::commit_confirm(tools::Decision d, const std::string& label) {
     // Erase the menu and record the choice in the transcript.
     if ( _confirm_menu_lines > 0 )
         wr("\r\033[" + std::to_string(_confirm_menu_lines) + "A\033[J");
-    wr("\033[1m→ " + label + "\033[0m\n\n");
+    wr("\033[1m→ " + label + "\033[0m\n");
     _confirm_menu_lines = 0;
 
     {
