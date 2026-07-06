@@ -24,14 +24,19 @@ each list is roughly the current priority order.
 - **Tool safety**: confirm / auto / insecure modes, danger list, chain-aware safe
   list, `strict` mode.
 - **Persistence**: per-provider + per-project history and memories; UI settings
-  (theme, multiline, thinking, thinking_stream/collapse, context, paste_preview)
-  saved to `state.json`.
+  (theme, multiline, thinking, thinking_stream/collapse, context, auto_compact,
+  paste_preview) saved to `state.json`.
 - **Paste preview**: `paste_preview` trims a framed paste's echo to the first N
   lines + "… N more lines" (full text still sent to the model).
 - **Slash commands**: `/about /settings /model /tools /strict /thinking /theme
   /stream /history /retry /undo /memories /context /compact /clear (/reset) /help`.
 - **`/compact`**: one LLM call summarises the history and replaces it; runs async
   with a "compacting" spinner (Ctrl-C cancels).
+- **Auto-compact**: when a turn leaves the context at/above `auto_compact_pct`
+  (default 80%) of the context budget, the history is summarised automatically
+  (same async path as `/compact`, labelled "auto-compact" in the transcript).
+  Off by default; toggle with `/settings auto_compact on|off`. Inactive unless a
+  context budget is known (`context: auto` or an explicit limit).
 - **SIGWINCH**: the live block redraws at the new width on terminal resize.
 
 ## Planned

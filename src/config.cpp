@@ -190,6 +190,8 @@ void Config::load(const std::string& path) {
             if ( common::to_lower(value) == "auto" ) { context_auto = true; }
             else { context_auto = false; context_limit = parse_size(value, context_limit, key); }
         }
+        else if ( key == "auto_compact" ) auto_compact = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
+        else if ( key == "auto_compact_pct" ) auto_compact_pct = parse_size(value, auto_compact_pct, key);
         else if ( key == "paste_threshold_chars" ) paste_threshold_chars = parse_size(value, paste_threshold_chars, key);
         else if ( key == "paste_threshold_lines" ) paste_threshold_lines = parse_size(value, paste_threshold_lines, key);
         else if ( key == "paste_single_line_chars" ) paste_single_line_chars = parse_size(value, paste_single_line_chars, key);
@@ -288,6 +290,8 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.context_auto = s["context_auto"].to_bool();
             if ( s.contains("context_limit") && s["context_limit"] == JSON::TYPE::INT )
                 last.context_limit = static_cast<size_t>(static_cast<long long>(s["context_limit"]));
+            if ( s.contains("auto_compact") && s["auto_compact"] == JSON::TYPE::BOOL )
+                last.auto_compact = s["auto_compact"].to_bool();
             if ( s.contains("paste_preview") && s["paste_preview"] == JSON::TYPE::INT )
                 last.paste_preview = static_cast<size_t>(static_cast<long long>(s["paste_preview"]));
         }
@@ -317,6 +321,7 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "thinking_collapse", last.thinking_collapse },
             { "context_auto", last.context_auto },
             { "context_limit", static_cast<long long>(last.context_limit) },
+            { "auto_compact", last.auto_compact },
             { "paste_preview", static_cast<long long>(last.paste_preview) }
         };
     }
@@ -356,6 +361,7 @@ void Config::save_settings(const std::string& home_dir) const {
     last.thinking_collapse = thinking_collapse;
     last.context_auto = context_auto;
     last.context_limit = context_limit;
+    last.auto_compact = auto_compact;
     last.paste_preview = paste_preview;
     write_state(home_dir, last);
 }
@@ -370,6 +376,7 @@ void Config::apply_settings(const LastUsed& last) {
     thinking_collapse = last.thinking_collapse;
     context_auto = last.context_auto;
     context_limit = last.context_limit;
+    auto_compact = last.auto_compact;
     paste_preview = last.paste_preview;
 }
 

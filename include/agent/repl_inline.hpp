@@ -80,7 +80,9 @@ private:
     // Turn lifecycle (worker thread + main-thread event loop).
     void on_enter();
     void start_turn(const std::string& line, const std::string& display);
-    void start_async_command(const std::string& cmd, const std::string& activity); // run a slow command off-thread
+    void start_async_command(const std::string& cmd, const std::string& activity,
+                             const std::string& echo_label = ""); // run a slow command off-thread
+    bool maybe_auto_compact(); // auto-summarise history when it nears the context budget; true if started
     void poll_worker();
     void finish_turn();
     void finish_async_command();

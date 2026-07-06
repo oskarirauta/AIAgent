@@ -1108,9 +1108,12 @@ void InlineRepl::start_turn(const std::string& line, const std::string& display)
     draw_live();
 }
 
-void InlineRepl::start_async_command(const std::string& cmd, const std::string& activity) {
+void InlineRepl::start_async_command(const std::string& cmd, const std::string& activity,
+                                     const std::string& echo_label) {
     // A slow slash command (e.g. /compact) runs on the worker thread so the UI
-    // keeps animating a spinner instead of freezing during the LLM call.
+    // keeps animating a spinner instead of freezing during the LLM call. The
+    // worker runs `cmd`; the transcript echoes `echo_label` (defaulting to `cmd`),
+    // so an automatic invocation can be labelled differently from a typed one.
     {
         std::lock_guard<std::mutex> lk(_mx);
         while ( !_out_chunks.empty()) _out_chunks.pop();
@@ -1121,7 +1124,7 @@ void InlineRepl::start_async_command(const std::string& cmd, const std::string& 
     }
     _turn_running = true;
     _async_command = true;
-    _async_cmd_line = cmd;
+    _async_cmd_line = echo_label.empty() ? cmd : echo_label;
     _spin = 0;
     _turn_start = std::chrono::steady_clock::now();
 
@@ -1250,8 +1253,41 @@ void InlineRepl::finish_turn() {
     _turn_running = false;
     _in_reply = false;
 
+    // If the context is now near its budget, summarise it before anything else
+    // (so queued messages run against the smaller history). The async compaction
+    // drains the pending queue itself when it finishes.
+    if ( maybe_auto_compact())
+        return;
+
     // Run whatever was queued while the turn was in flight.
     drain_pending();
+}
+
+bool InlineRepl::maybe_auto_compact() {
+    if ( !_config.auto_compact )
+        return false;
+    size_t budget = _config.context_budget();
+    if ( budget == 0 )
+        return false; // no known budget (unlimited / unknown window) — nothing to measure against
+    long ctx = _stats.context_tokens.load(std::memory_order_relaxed);
+    if ( ctx <= 0 )
+        return false; // no usage reported yet
+    size_t pct = ( _config.auto_compact_pct >= 10 && _config.auto_compact_pct <= 100 )
+               ? _config.auto_compact_pct : 80;
+    if ( static_cast<size_t>(ctx) < budget * pct / 100 )
+        return false;
+    // Need at least a couple of exchanges to be worth summarising; compact_history
+    // itself declines a near-empty history, but avoid the spinner flash for it.
+    int non_system = 0;
+    for ( const auto& m : _conversation.messages())
+        if ( m.role != Role::SYSTEM ) ++non_system;
+    if ( non_system < 4 )
+        return false;
+
+    int used = static_cast<int>(static_cast<long long>(ctx) * 100 / static_cast<long long>(budget));
+    start_async_command("/compact", "auto-compacting",
+                        "auto-compact (context " + std::to_string(used) + "% of budget)");
+    return true;
 }
 
 static std::vector<std::string> confirm_options(const tools::ConfirmRequest& req) {
@@ -1494,6 +1530,7 @@ void InlineRepl::open_settings_menu() {
         { "off", "on", "collapse" } });
     _settings_rows.push_back({ "context", "context",
         first_word(cur.count("context") ? cur["context"] : "unlimited"), {} });
+    _settings_rows.push_back({ "auto_compact", "compact", _config.auto_compact ? "on" : "off", { "off", "on" } });
     _settings_rows.push_back({ "multiline", "multiline", _config.multiline ? "on" : "off", { "off", "on" } });
     _settings_rows.push_back({ "paste_preview", "preview",
         _config.paste_preview == 0 ? "all" : std::to_string(_config.paste_preview), {} });

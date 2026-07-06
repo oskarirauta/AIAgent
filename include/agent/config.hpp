@@ -30,6 +30,8 @@ public:
     bool strict = false;        // in confirm mode, ignore the safe-command allowlist
     size_t context_limit = 0;   // approx token budget for history sent to the model (0 = unlimited)
     bool context_auto = false;  // derive the budget from the model's known context window
+    bool auto_compact = false;  // summarise history automatically when it nears the context budget
+    size_t auto_compact_pct = 80; // trigger threshold as a percentage of context_budget()
 
     // ncurses paste detection thresholds
     size_t paste_threshold_chars = 500;        // characters for multi-line paste
@@ -70,6 +72,7 @@ public:
         bool thinking_collapse = false;
         size_t context_limit = 0;
         bool context_auto = false;
+        bool auto_compact = false;
         size_t paste_preview = 0;
     };
     static LastUsed load_last_used(const std::string& home_dir);

@@ -297,6 +297,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /undo                    remove the last exchange from history\n"
                "  /clear (/reset)          clear the conversation history\n"
                "  /compact                 summarise the history to free up context\n"
+               "  /settings auto_compact <on|off>   auto-compact when the context nears its budget\n"
                "  /exit, /quit             leave";
     }
 
@@ -441,7 +442,24 @@ std::string Repl::handle_command(const std::string& line) {
                      ? std::string("paste preview: all lines")
                      : "paste preview: first " + std::to_string(_config.paste_preview) + " lines";
             }
-            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, paste_preview, context, multiline; theme via /theme)";
+            if ( key == "auto_compact" || key == "autocompact" ) {
+                std::string v = common::to_lower(val);
+                if ( v == "on" || v == "true" || v == "1" || v == "yes" ) _config.auto_compact = true;
+                else if ( v == "off" || v == "false" || v == "0" || v == "no" ) _config.auto_compact = false;
+                else return "usage: /settings auto_compact <on|off>";
+                if ( _config.auto_compact && _config.context_budget() == 0 )
+                    return "auto-compact: on  (inactive: set a context limit — /settings context auto)";
+                return std::string("auto-compact: ") + ( _config.auto_compact ? "on" : "off" ) +
+                       ( _config.auto_compact ? "  (at " + std::to_string(_config.auto_compact_pct) + "% of the context budget)" : "" );
+            }
+            if ( key == "auto_compact_pct" ) {
+                size_t p = Config::parse_size_suffixed(val, _config.auto_compact_pct);
+                if ( p < 10 || p > 100 )
+                    return "usage: /settings auto_compact_pct <10-100>";
+                _config.auto_compact_pct = p;
+                return "auto-compact threshold: " + std::to_string(_config.auto_compact_pct) + "% of the context budget";
+            }
+            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, paste_preview, context, auto_compact, multiline; theme via /theme)";
         }
 
         std::string tools = !_config.tools_enabled ? "off"
@@ -461,6 +479,8 @@ std::string Repl::handle_command(const std::string& line) {
             ctx = _config.context_limit == 0 ? "unlimited" : std::to_string(_config.context_limit) + " tokens";
         }
         s += "context:   " + ctx + "\n";
+        s += "auto_compact: " + std::string( _config.auto_compact ? "on" : "off" ) +
+             ( _config.auto_compact ? "  (at " + std::to_string(_config.auto_compact_pct) + "%)" : "" ) + "\n";
         s += "multiline: " + std::string( _config.multiline ? "on" : "off" ) + "\n";
         s += "preview:   " + ( _config.paste_preview == 0
                  ? std::string("all lines")
