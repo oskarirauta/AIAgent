@@ -4,6 +4,7 @@
 #include <thread>
 #include <chrono>
 #include <random>
+#include <fstream>
 #include "agent/auth/claude_oauth.hpp"
 #include "logger.hpp"
 #include "throws.hpp"
@@ -12,15 +13,29 @@ namespace agent::providers {
 
 static constexpr const char* CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
+// OAuth state (CSRF token): secure randomness from /dev/urandom, not mt19937.
 static std::string random_state(size_t length) {
     static const char alphabet[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    static std::mt19937 gen{std::random_device{}()};
-    std::uniform_int_distribution<size_t> dist(0, sizeof(alphabet) - 2);
+    const int n = static_cast<int>(sizeof(alphabet) - 1);
+    const int limit = 256 - (256 % n);
+
+    std::ifstream urandom("/dev/urandom", std::ios::binary);
+    std::random_device rd;
     std::string s;
     s.reserve(length);
-    for ( size_t i = 0; i < length; ++i )
-        s += alphabet[dist(gen)];
+    while ( s.size() < length ) {
+        int b = -1;
+        if ( urandom ) {
+            unsigned char byte;
+            if ( urandom.read(reinterpret_cast<char*>(&byte), 1))
+                b = byte;
+        }
+        if ( b < 0 )
+            b = static_cast<int>(rd() & 0xff);
+        if ( b < limit )
+            s += alphabet[b % n];
+    }
     return s;
 }
 

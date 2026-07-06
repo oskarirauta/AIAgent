@@ -2,6 +2,7 @@
 
 #include <curl/curl.h>
 #include <random>
+#include <fstream>
 #include <sstream>
 #include <iomanip>
 #include <array>
@@ -135,15 +136,32 @@ static std::string base64_url_encode(const std::string& input) {
     return out;
 }
 
+// Cryptographically-secure random token (PKCE verifier / OAuth state). Reads
+// /dev/urandom directly — mt19937 has only 32 bits of state and is predictable,
+// which is unacceptable for security-critical values. Rejection sampling removes
+// the modulo bias; std::random_device is a per-byte fallback.
 static std::string random_string(size_t length) {
     static const char alphabet[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    static std::mt19937 gen{std::random_device{}()};
-    std::uniform_int_distribution<size_t> dist(0, sizeof(alphabet) - 2);
+    const int n = static_cast<int>(sizeof(alphabet) - 1); // 62
+    const int limit = 256 - (256 % n);                    // reject bytes >= 248
+
+    std::ifstream urandom("/dev/urandom", std::ios::binary);
+    std::random_device rd;
     std::string s;
     s.reserve(length);
-    for ( size_t i = 0; i < length; ++i )
-        s += alphabet[dist(gen)];
+    while ( s.size() < length ) {
+        int b = -1;
+        if ( urandom ) {
+            unsigned char byte;
+            if ( urandom.read(reinterpret_cast<char*>(&byte), 1))
+                b = byte;
+        }
+        if ( b < 0 )
+            b = static_cast<int>(rd() & 0xff);
+        if ( b < limit )
+            s += alphabet[b % n];
+    }
     return s;
 }
 

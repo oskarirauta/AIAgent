@@ -44,6 +44,10 @@ each list is roughly the current priority order.
 - **Config-extensible danger/safe command lists**.
 - **`/btw`** (mid-turn note) and **`/tasks`** (agent todo list) — Claude Code-style
   harness features; provider-agnostic if built as app features, sizeable.
+- **paste-block settings** Currently whole block is displayed, we should also support
+  a setting that suppresses paste-block to certain amount of lines in chat history,
+  giving a preview of X lines and dimming to end with note of X lines more..
+- **`/workflows` command** for claude only
 
 ## Considered / out of scope
 
