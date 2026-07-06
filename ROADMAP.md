@@ -69,6 +69,11 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **Parallel tool calls**: when a model turn batches several read-only tools
+  (read_file / grep / find_symbol / list_directory) they run concurrently on a
+  bounded thread pool; results are recorded in the model's original order. Any
+  write / command / side-effecting call in the batch forces the whole batch back
+  to serial. `parallel_tools` config, default on.
 - **Prompt caching**: Anthropic/Claude requests mark `cache_control: ephemeral`
   breakpoints on the stable prefix — the tools, the system prompt and the last
   message (incremental multi-turn caching) — so repeat context is cheap (~10%) and
@@ -163,6 +168,7 @@ each list is roughly the current priority order.
 - **`/workflows` enhancements**: parallel steps, live push notifications on
   completion, and cancel/retry of a run.
 - **`/rc` command** for claude only
+- **`/plan` command** for plan mode
 - **More proviers** We don't aim to support every provider, we aim to support enough, most
   common and most useful ones.
 - **word splitting to prompt** when multi-line mode is used, try to avoid cutting

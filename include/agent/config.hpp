@@ -59,6 +59,10 @@ public:
     // the Anthropic requests. On by default.
     bool prompt_cache = true;
 
+    // Run independent read-only tool calls (read_file/grep/find_symbol/
+    // list_directory) from one model turn concurrently. On by default.
+    bool parallel_tools = true;
+
     // Path to an MCP servers config ({"mcpServers": {...}}). Empty = look in the
     // default locations (<home>/mcp.json and ./.mcp.json).
     std::string mcp_config;

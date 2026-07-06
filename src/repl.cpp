@@ -6,6 +6,8 @@
 #include <ctime>
 #include <algorithm>
 #include <vector>
+#include <set>
+#include <thread>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -814,17 +816,46 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             return normalized;
         }
 
-        for ( const auto& tc : resp.tool_calls ) {
+        // Run the tool calls. When the model batches several read-only tools
+        // (the common "read these files / grep these" case) they run concurrently;
+        // anything that writes, runs a command or has side effects stays serial.
+        static const std::set<std::string> parallel_safe = {
+            "read_file", "grep", "find_symbol", "list_directory"
+        };
+        bool run_parallel = _config.parallel_tools && resp.tool_calls.size() > 1;
+        for ( const auto& tc : resp.tool_calls )
+            if ( !parallel_safe.count(tc.name)) { run_parallel = false; break; }
 
-            std::string result;
+        std::vector<std::string> results(resp.tool_calls.size());
+        auto run_one = [&](size_t i) {
             try {
-                result = _registry.execute(tc.name, tc.arguments);
+                results[i] = _registry.execute(resp.tool_calls[i].name, resp.tool_calls[i].arguments);
             } catch ( const std::exception& e ) {
-                result = std::string("error: ") + e.what();
+                results[i] = std::string("error: ") + e.what();
             }
+        };
 
-            logger::info["tool"] << tc.name << " -> " << result.substr(0, 200) << std::endl;
-            _conversation.add_tool_result(tc.id, tc.name, result);
+        if ( run_parallel ) {
+            std::atomic<size_t> next{ 0 };
+            size_t nthreads = std::min<size_t>(resp.tool_calls.size(), 8);
+            std::vector<std::thread> pool;
+            for ( size_t t = 0; t < nthreads; ++t )
+                pool.emplace_back([&]() {
+                    for ( size_t i = next.fetch_add(1); i < resp.tool_calls.size(); i = next.fetch_add(1))
+                        run_one(i);
+                });
+            for ( auto& th : pool )
+                th.join();
+        } else {
+            for ( size_t i = 0; i < resp.tool_calls.size(); ++i )
+                run_one(i);
+        }
+
+        // Record the results in the model's original order.
+        for ( size_t i = 0; i < resp.tool_calls.size(); ++i ) {
+            const auto& tc = resp.tool_calls[i];
+            logger::info["tool"] << tc.name << " -> " << results[i].substr(0, 200) << std::endl;
+            _conversation.add_tool_result(tc.id, tc.name, results[i]);
         }
 
         // loop back to send tool results to model

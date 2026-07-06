@@ -217,6 +217,7 @@ void Config::load(const std::string& path) {
         else if ( key == "web_search" ) web_search = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
         else if ( key == "web_search_url" ) web_search_url = value;
         else if ( key == "prompt_cache" ) prompt_cache = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
+        else if ( key == "parallel_tools" ) parallel_tools = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
         else if ( key == "mcp_config" ) mcp_config = expand_tilde(value);
         else if ( key == "budget_usd" ) {
             try { budget_usd = std::stod(common::trim_ws(value)); }

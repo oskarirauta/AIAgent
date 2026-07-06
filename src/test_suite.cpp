@@ -939,6 +939,33 @@ static void test_read_file_robustness() {
     std::filesystem::remove("/tmp/ai_rf_b.txt");
 }
 
+static void test_parallel_tool_safety() {
+    std::cout << "parallel read-only tool execution" << std::endl;
+    for ( int i = 1; i <= 4; ++i ) {
+        std::ofstream o("/tmp/ai_par_" + std::to_string(i) + ".txt");
+        o << "CONTENT" << i << "\n";
+    }
+    agent::tools::Registry reg;
+    reg.register_defaults();
+    reg.set_mode(agent::tools::ConfirmMode::automatic);
+
+    std::vector<std::string> res(4);
+    std::vector<std::thread> th;
+    for ( int i = 0; i < 4; ++i )
+        th.emplace_back([&reg, &res, i]() {
+            res[i] = reg.execute("read_file", JSON::Object{ { "path", "/tmp/ai_par_" + std::to_string(i + 1) + ".txt" } });
+        });
+    for ( auto& t : th ) t.join();
+
+    bool ok = true;
+    for ( int i = 0; i < 4; ++i )
+        if ( res[i].find("CONTENT" + std::to_string(i + 1)) == std::string::npos ) ok = false;
+    check(ok, "concurrent read_file returns each file's content correctly (no cross-talk)");
+
+    for ( int i = 1; i <= 4; ++i )
+        std::filesystem::remove("/tmp/ai_par_" + std::to_string(i) + ".txt");
+}
+
 static void test_run_command_options() {
     std::cout << "run_command cwd/env/timeout" << std::endl;
     agent::tools::RunCommand rc;
@@ -1155,6 +1182,7 @@ int main() {
     test_tools();
     test_run_command_robustness();
     test_read_file_robustness();
+    test_parallel_tool_safety();
     test_run_command_options();
     test_edit_file();
     test_grep_robustness();
