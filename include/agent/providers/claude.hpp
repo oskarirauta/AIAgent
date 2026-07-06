@@ -23,6 +23,15 @@ public:
 
     // Anthropic's OAuth beta header is required for the access token to be
     // accepted against /v1/messages, alongside the usual API version header.
+    //
+    // NOTE: the subscription (OAuth) API redacts extended-thinking TEXT — a
+    // thinking block streams only a `signature_delta` (an opaque signed blob),
+    // never `thinking_delta`, so `Response::thinking` is always empty for Claude.
+    // The model still reasons (and answers better); the plaintext just is not
+    // returned over this channel. Verified against forced computation with the
+    // claude-code / interleaved-thinking betas added — none unlock the text. So
+    // do not expect a live thinking transcript for Claude the way Kimi provides
+    // one. The signature must still be preserved across tool calls (see build_request).
     std::vector<std::pair<std::string, std::string>> extra_headers() const override {
         return {
             { "anthropic-version", "2023-06-01" },

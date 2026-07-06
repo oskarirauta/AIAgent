@@ -48,6 +48,7 @@ each list is roughly the current priority order.
   a setting that suppresses paste-block to certain amount of lines in chat history,
   giving a preview of X lines and dimming to end with note of X lines more..
 - **`/workflows` command** for claude only
+- **`/advisor` command** setting for claude only
 - **More proviers** We don't aim to support every provider, we aim to support enough, most
   common and most useful ones.
 
