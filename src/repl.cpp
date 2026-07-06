@@ -17,6 +17,7 @@
 #include "agent/text_utils.hpp"
 #include "agent/tools/advisor.hpp"
 #include "agent/tools/workflow_tool.hpp"
+#include "agent/tools/web_search.hpp"
 
 namespace agent {
 
@@ -55,6 +56,15 @@ Repl::Repl(const Config& config)
     // Expose the advisor tool if it was left enabled and the provider supports it.
     sync_advisor_tool();
     sync_workflow_tool();
+    sync_web_search_tool();
+}
+
+void Repl::sync_web_search_tool() {
+    bool want = _config.tools_enabled && _config.web_search;
+    if ( want && !_registry.has("web_search"))
+        _registry.add(std::make_unique<tools::WebSearch>(_config.web_search_url));
+    else if ( !want && _registry.has("web_search"))
+        _registry.remove("web_search");
 }
 
 void Repl::sync_workflow_tool() {
@@ -795,6 +805,14 @@ std::string Repl::handle_command(const std::string& line) {
                 return std::string("auto-compact: ") + ( _config.auto_compact ? "on" : "off" ) +
                        ( _config.auto_compact ? "  (at " + std::to_string(_config.auto_compact_pct) + "% of the context budget)" : "" );
             }
+            if ( key == "web_search" || key == "websearch" ) {
+                std::string v = common::to_lower(val);
+                if ( v == "on" || v == "true" || v == "1" || v == "yes" ) _config.web_search = true;
+                else if ( v == "off" || v == "false" || v == "0" || v == "no" ) _config.web_search = false;
+                else return "usage: /settings web_search <on|off>";
+                sync_web_search_tool();
+                return std::string("web_search: ") + ( _config.web_search ? "on" : "off" );
+            }
             if ( key == "advisor" ) return handle_command("/advisor " + val);
             if ( key == "advisor_model" ) return handle_command("/advisor model " + val);
             if ( key == "auto_compact_pct" ) {
@@ -804,7 +822,7 @@ std::string Repl::handle_command(const std::string& line) {
                 _config.auto_compact_pct = p;
                 return "auto-compact threshold: " + std::to_string(_config.auto_compact_pct) + "% of the context budget";
             }
-            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, paste_preview, context, auto_compact, advisor, multiline; theme via /theme)";
+            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, paste_preview, context, auto_compact, advisor, web_search, multiline; theme via /theme)";
         }
 
         std::string tools = !_config.tools_enabled ? "off"
@@ -830,6 +848,7 @@ std::string Repl::handle_command(const std::string& line) {
             s += "advisor:   " + std::string( _config.advisor ? "on" : "off" ) +
                  "  (model: " + _config.advisor_model + ")\n";
         s += "multiline: " + std::string( _config.multiline ? "on" : "off" ) + "\n";
+        s += "web_search: " + std::string( _config.web_search ? "on" : "off" ) + "\n";
         s += "preview:   " + ( _config.paste_preview == 0
                  ? std::string("all lines")
                  : "first " + std::to_string(_config.paste_preview) + " lines" ) + "\n";

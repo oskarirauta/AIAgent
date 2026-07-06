@@ -213,6 +213,57 @@ void Client::post_stream(const std::string& url, const std::string& auth_header,
         throws << "http error " << http_code << ": " << format_api_error(error_body) << std::endl;
 }
 
+std::string Client::get(const std::string& url,
+                        const std::vector<std::pair<std::string, std::string>>& extra_headers,
+                        std::atomic<bool>* abort_flag) {
+    CURL* c = static_cast<CURL*>(curl);
+    std::string response;
+    curl_easy_reset(c);
+
+    struct curl_slist* headers = nullptr;
+    for ( const auto& h : extra_headers ) {
+        std::string header = h.first + ": " + h.second;
+        headers = curl_slist_append(headers, header.c_str());
+    }
+
+    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(c, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(c, CURLOPT_MAXREDIRS, 5L);
+    if ( headers )
+        curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
+
+    if ( abort_flag ) {
+        curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, progress_callback);
+        curl_easy_setopt(c, CURLOPT_XFERINFODATA, abort_flag);
+    }
+
+    logger::vverbose["http"] << "GET " << url << std::endl;
+
+    CURLcode res = curl_easy_perform(c);
+    if ( headers )
+        curl_slist_free_all(headers);
+
+    if ( res == CURLE_ABORTED_BY_CALLBACK )
+        return "";
+    if ( res != CURLE_OK )
+        throws << "http request failed: " << curl_easy_strerror(res) << std::endl;
+
+    long http_code = 0;
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
+    if ( http_code < 200 || http_code >= 300 )
+        throws << "http error " << http_code << std::endl;
+
+    return response;
+}
+
 std::string Client::post_form(const std::string& url, const std::string& body, std::atomic<bool>* abort_flag) {
     return post_form(url, {}, body, abort_flag);
 }

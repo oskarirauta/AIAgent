@@ -24,6 +24,7 @@
 #include "agent/auth/claude_oauth.hpp"
 #include "agent/tools/registry.hpp"
 #include "agent/tools/find_symbol.hpp"
+#include "agent/tools/web_search.hpp"
 #include "agent/tools/advisor.hpp"
 #include "agent/tools/workflow_tool.hpp"
 #include "agent/workflow.hpp"
@@ -274,6 +275,36 @@ static void test_advisor_tool() {
     check(reg.has("consult_advisor"), "advisor registered after add");
     reg.remove("consult_advisor");
     check(!reg.has("consult_advisor"), "advisor gone after remove");
+}
+
+static void test_web_search_parse() {
+    std::cout << "web_search DDG html parser" << std::endl;
+    std::string html =
+        "<div class=\"result results_links web-result\">"
+        "<h2 class=\"result__title\">"
+        "<a rel=\"nofollow\" class=\"result__a\" "
+        "href=\"//duckduckgo.com/l/?uddg=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FCurl&amp;rut=abc\">"
+        "cURL &amp; libcurl - Wikipedia</a></h2>"
+        "<a class=\"result__snippet\" href=\"//x\">cURL is a <b>command-line</b> tool for transferring data.</a>"
+        "</div>"
+        "<div class=\"result\">"
+        "<a rel=\"nofollow\" class=\"result__a\" "
+        "href=\"//duckduckgo.com/l/?uddg=https%3A%2F%2Fcurl.se%2F&amp;rut=x\">curl.se home</a>"
+        "<a class=\"result__snippet\">The official <b>curl</b> site &amp; downloads.</a>"
+        "</div>";
+
+    auto r = agent::tools::parse_ddg_html(html, 5);
+    check(r.size() == 2, "parses two results");
+    check(r[0].url == "https://en.wikipedia.org/wiki/Curl", "decodes uddg redirect to real url");
+    check(r[0].title == "cURL & libcurl - Wikipedia", "title tags stripped + entities decoded");
+    check(r[0].snippet.find("command-line tool for transferring") != std::string::npos, "snippet tags stripped");
+    check(r[1].url == "https://curl.se/", "second result url decoded");
+    check(r[1].snippet == "The official curl site & downloads.", "second snippet decoded");
+
+    auto r1 = agent::tools::parse_ddg_html(html, 1);
+    check(r1.size() == 1, "max_results is respected");
+
+    check(agent::tools::parse_ddg_html("<html>no results here</html>", 5).empty(), "no results -> empty");
 }
 
 static void test_find_symbol() {
@@ -914,6 +945,7 @@ int main() {
     test_anthropic_thinking();
     test_provider_capabilities();
     test_advisor_tool();
+    test_web_search_parse();
     test_find_symbol();
     test_pricing_and_cost();
     test_project_instructions();

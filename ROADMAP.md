@@ -69,6 +69,15 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **`web_search` tool**: queries DuckDuckGo (html endpoint) and returns the top
+  results (title, URL, snippet) for the model to read and cite. Especially useful
+  for **local models (Ollama/llama.cpp)** with no MCP search server — it gives an
+  otherwise-offline model a way to fetch facts beyond its training data and the
+  project files. On by default; `web_search: false` (config) or `/settings
+  web_search off` disables it; `web_search_url` overrides the endpoint. Added
+  `Client::get` (follows redirects) for it; parser is HTML-scrape based (decodes
+  the `uddg=` redirect, strips tags/entities). (Once MCP lands, an MCP search
+  server can also provide this.)
 - **`find_symbol` tool** (light codebase search): a definition-aware, tree-wide
   symbol search — give an identifier and it returns where it is *defined*
   (class/struct/enum/def/fn/type or a C-family `NAME(...)` opening), skipping call
@@ -110,13 +119,6 @@ each list is roughly the current priority order.
   the agent without writing each integration in C++. Scope is comparable to (or
   larger than) `/workflows`: JSON-RPC over stdio/SSE, server lifecycle, tool
   discovery. Major undertaking; worth it for the ecosystem it unlocks.
-- **`web_search` tool** — capable models will use it when they lack current info
-  (docs, library versions, API changes). Needs a real backend (DuckDuckGo HTML or
-  a search API) plus result summarisation; adds a network/parse dependency.
-  Especially valuable for **local models (Ollama/llama.cpp)** where no MCP search
-  server is configured — it gives an otherwise-offline model a way to fetch facts
-  outside its training data and the project files. (Once MCP lands, an MCP search
-  server can also provide this, but the built-in tool covers the no-MCP case.)
 - **`/export <file>`** — write the transcript to Markdown for bug reports, sharing
   and docs. Trivial to build (the conversation is already in memory); small,
   occasional real value.

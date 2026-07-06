@@ -48,6 +48,11 @@ public:
     double budget_usd = 0.0;    // warn when the session's estimated cost nears this (0 = off)
     size_t budget_tokens = 0;   // warn when the session's total tokens near this (0 = off)
 
+    // web_search tool: lets the model look things up online (esp. useful for local
+    // models with no MCP search server). Default on; disable for offline/private use.
+    bool web_search = true;
+    std::string web_search_url = "https://html.duckduckgo.com/html/";
+
     // ncurses paste detection thresholds
     size_t paste_threshold_chars = 500;        // characters for multi-line paste
     size_t paste_threshold_lines = 10;         // line breaks for multi-line paste

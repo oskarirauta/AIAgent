@@ -56,6 +56,9 @@ private:
     std::string workflows_command(const std::string& args);
     void deliver_workflow_results();
 
+    // Register/unregister the web_search tool to match the config.
+    void sync_web_search_tool();
+
     Config _config;
     api::Client _client;
     tools::Registry _registry;
