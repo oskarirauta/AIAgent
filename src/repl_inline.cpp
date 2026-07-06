@@ -1438,6 +1438,16 @@ void InlineRepl::handle_byte(int c) {
             draw_live();
             return;
         case 0x1b: { // ESC: control sequence
+            // Peek for a follow-up byte. A bare ESC has none, and a blocking read
+            // here would freeze the whole event loop (streaming + spinner) until
+            // the next keypress. Escape sequences arrive as one burst, so if
+            // nothing is waiting within a short window it was a lone ESC — ignore.
+            fd_set fds;
+            FD_ZERO(&fds);
+            FD_SET(STDIN_FILENO, &fds);
+            struct timeval tv { 0, 40 * 1000 };
+            if ( select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) <= 0 )
+                return; // lone ESC
             int b1 = read_byte();
             if ( b1 == '\r' || b1 == '\n' ) { // Alt+Enter inserts a newline
                 insert_text("\n");
