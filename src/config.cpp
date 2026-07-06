@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <sys/stat.h>
 #include "common.hpp"
 #include "logger.hpp"
 
@@ -345,6 +346,9 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
         ofd << j.dump_minified() << "\n";
         ofd.flush();
     }
+    // Restrict to the owner before publishing: the state file is per-user and
+    // there is no reason for it to be world-readable (matches the token file).
+    chmod(tmp.c_str(), 0600);
     std::filesystem::rename(tmp, path);
 }
 
