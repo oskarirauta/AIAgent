@@ -16,6 +16,7 @@
 
 #include "agent/config.hpp"
 #include "agent/conversation.hpp"
+#include "agent/memory.hpp"
 #include "agent/signal_handler.hpp"
 #include "agent/text_utils.hpp"
 #include "common.hpp"
@@ -1059,6 +1060,10 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         open_settings_menu();
         return;
     }
+    if ( trimmed == "/context" ) {
+        render_context();
+        return;
+    }
     std::string result;
     if ( trimmed == "/theme" || trimmed.rfind("/theme ", 0) == 0 )
         result = apply_theme_command(trimmed); // UI-local: only touches this renderer
@@ -1083,6 +1088,68 @@ void InlineRepl::drain_pending() {
             return;
         }
     }
+    draw_live();
+}
+
+// ── visual /context breakdown ───────────────────────────────────────────
+
+void InlineRepl::render_context() {
+    erase_live();
+
+    auto fmt = [](size_t n) -> std::string {
+        if ( n >= 1000 ) {
+            std::string s = std::to_string(n / 1000) + "." + std::to_string((n % 1000) / 100) + "k";
+            return s;
+        }
+        return std::to_string(n);
+    };
+
+    // Rough estimate: 4 chars ≈ 1 token (matches the context-budget trimming).
+    size_t sys = 0, msg = 0;
+    for ( const auto& m : _conversation.messages()) {
+        size_t t = m.content.size() / 4;
+        for ( const auto& tc : m.tool_calls )
+            t += ( tc.arguments.size() + tc.name.size()) / 4;
+        if ( m.role == Role::SYSTEM ) sys += t;
+        else                          msg += t;
+    }
+    size_t mem = load_memories(_config.home_dir, _config.provider).size() / 4;
+    size_t total = sys + msg;
+    long actual = _stats.context_tokens.load(std::memory_order_relaxed);
+
+    auto pct = [total](size_t n) -> std::string {
+        if ( total == 0 ) return "0%";
+        return std::to_string(static_cast<int>((100.0 * n / total) + 0.5)) + "%";
+    };
+
+    wr("\n" + _theme.command + "⚙ context" + Theme::reset + "\n\n");
+
+    // Composition bar: system segment then conversation segment.
+    const int barw = 46;
+    int sysc = ( total > 0 ) ? static_cast<int>(( double(sys) / total ) * barw + 0.5) : 0;
+    if ( sysc > barw ) sysc = barw;
+    int msgc = barw - sysc;
+    std::string blocks_sys, blocks_msg;
+    for ( int i = 0; i < sysc; ++i ) blocks_sys += "█";
+    for ( int i = 0; i < msgc; ++i ) blocks_msg += "█";
+    wr("  " + _theme.ai + blocks_sys + _theme.command + blocks_msg + Theme::reset +
+       "  " + _theme.dim + "~" + fmt(total) + " tokens" + Theme::reset + "\n\n");
+
+    wr("  " + _theme.ai + "●" + Theme::reset + " system prompt   " + fmt(sys) + "  " +
+       _theme.dim + "(" + pct(sys) + ")" + Theme::reset + "\n");
+    wr("  " + _theme.command + "●" + Theme::reset + " conversation    " + fmt(msg) + "  " +
+       _theme.dim + "(" + pct(msg) + ")" + Theme::reset + "\n");
+    if ( mem > 0 )
+        wr("    " + _theme.dim + "└ memories      " + fmt(mem) + Theme::reset + "\n");
+
+    std::string footer = "  " + _theme.dim + "context limit: " +
+                         ( _config.context_limit == 0 ? std::string("unlimited")
+                                                      : fmt(_config.context_limit) + " tokens" );
+    if ( actual > 0 )
+        footer += " · last turn reported " + fmt(static_cast<size_t>(actual));
+    footer += Theme::reset + std::string("\n");
+    wr(footer);
+
     draw_live();
 }
 

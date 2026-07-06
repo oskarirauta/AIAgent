@@ -175,6 +175,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
                "  /theme <dark|light|warm> switch the colour theme\n"
                "  /memories [name]         list this provider's memory files, or view one\n"
+               "  /context                 show context usage (system, conversation, limit)\n"
                "  /history                 list the messages in the current context\n"
                "  /retry                   re-run your last message\n"
                "  /undo                    remove the last exchange from history\n"
@@ -201,6 +202,25 @@ std::string Repl::handle_command(const std::string& line) {
         if ( n == 0 )
             return "(no messages yet)";
         s += "\n" + std::to_string(n) + " message(s) in context";
+        return s;
+    }
+
+    if ( cmd == "/context" ) {
+        // The interactive REPL intercepts /context for a visual breakdown; this
+        // is the plain-text fallback (non-interactive runs).
+        size_t sys = 0, msg = 0;
+        for ( const auto& m : _conversation.messages()) {
+            size_t t = m.content.size() / 4;
+            if ( m.role == Role::SYSTEM ) sys += t; else msg += t;
+        }
+        std::string s = "context (estimated tokens):\n";
+        s += "  system prompt: " + std::to_string(sys) + "\n";
+        s += "  conversation:  " + std::to_string(msg) + "\n";
+        s += "  total:         " + std::to_string(sys + msg) + "\n";
+        s += "  limit:         " + ( _config.context_limit == 0 ? std::string("unlimited")
+                                                                : std::to_string(_config.context_limit));
+        if ( _stats.context_tokens.load() > 0 )
+            s += "\n  last turn:     " + std::to_string(_stats.context_tokens.load());
         return s;
     }
 

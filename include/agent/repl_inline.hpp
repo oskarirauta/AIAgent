@@ -99,6 +99,7 @@ private:
     };
     void run_command_line(const std::string& trimmed); // execute a slash command (called when idle)
     void drain_pending();                               // run queued commands/messages after a turn
+    void render_context();                              // visual /context usage breakdown
     void open_settings_menu();
     void draw_settings_menu(bool redraw);
     void handle_settings_key(int c);
