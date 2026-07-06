@@ -88,6 +88,10 @@ const std::vector<DangerRule>& danger_rules() {
         { "sudo",     {},                                        "runs a command as root" },
         { "doas",     {},                                        "runs a command as root" },
         { "su",       {},                                        "switches user / privilege" },
+        { "passwd",   {},                                        "changes an account password" },
+        { "chpasswd", {},                                        "changes account passwords" },
+        { "usermod",  {},                                        "modifies a user account" },
+        { "userdel",  {},                                        "deletes a user account" },
         { "chmod",    { "-R", "--recursive", "777" },            "recursive or world-writable permission change" },
         { "chown",    { "-R", "--recursive" },                   "recursive ownership change" },
         { "git",      { "push" },                                "pushes to a remote (verify branch/force)" },
@@ -118,6 +122,24 @@ std::string Registry::classify_danger(const std::string& command) {
     // Fork bomb.
     if ( command.find(":(){") != std::string::npos )
         return "looks like a fork bomb";
+
+    // Sensitive system files / block devices, referenced by any command.
+    static const std::vector<std::string> sensitive_exact = {
+        "/etc/passwd", "/etc/shadow", "/etc/gshadow", "/etc/group",
+        "/etc/sudoers", "/etc/fstab", "/etc/hosts"
+    };
+    static const std::vector<std::string> sensitive_prefix = {
+        "/dev/sd", "/dev/nvme", "/dev/hd", "/dev/mapper/", "/dev/disk/",
+        "/etc/sudoers.d/", "/boot/"
+    };
+    for ( size_t i = 1; i < tokens.size(); ++i ) {
+        for ( const auto& p : sensitive_exact )
+            if ( tokens[i] == p )
+                return "touches a sensitive system file (" + p + ")";
+        for ( const auto& p : sensitive_prefix )
+            if ( tokens[i].rfind(p, 0) == 0 )
+                return "touches a sensitive system path (" + p + "…)";
+    }
 
     for ( const auto& rule : danger_rules()) {
         if ( rule.program != program )
@@ -171,6 +193,120 @@ std::string Registry::classify_path_danger(const std::string& path) {
     return "writes outside the working directory";
 }
 
+bool Registry::classify_safe(const std::string& command) {
+    // Only a single, simple command can be vouched for. Anything with a shell
+    // operator (redirection, pipe, chaining, subshell) is not classified safe.
+    for ( char c : command ) {
+        if ( c == '>' || c == '<' || c == '|' || c == ';' || c == '&' ||
+             c == '`' || c == '\n' || c == '\r' )
+            return false;
+    }
+    if ( command.find("$(") != std::string::npos )
+        return false;
+
+    std::vector<std::string> tokens = tokenize(command);
+    if ( tokens.empty())
+        return false;
+    std::string prog = basename_of(tokens[0]);
+
+    // Read-only commands with no side effects.
+    static const std::vector<std::string> safe = {
+        "date", "cal", "pwd", "whoami", "hostname", "id", "uname", "which",
+        "ls", "cat", "head", "tail", "df", "free", "echo", "printenv", "env",
+        "wc", "file", "stat", "true", "false", "tty", "groups", "uptime",
+        "arch", "nproc", "basename", "dirname", "realpath", "readlink", "locale",
+        "pkg-config", "type", "whereis"
+    };
+    if ( std::find(safe.begin(), safe.end(), prog) != safe.end()) {
+        // `tail -f` / `--follow` would block until the timeout — not classified
+        // safe so it still asks before tying up the turn.
+        if ( prog == "tail" ) {
+            for ( size_t i = 1; i < tokens.size(); ++i )
+                if ( tokens[i] == "-f" || tokens[i] == "-F" || tokens[i] == "--follow" )
+                    return false;
+        }
+        return true;
+    }
+
+    // `command -v/-V NAME` (a lookup, not an execution).
+    if ( prog == "command" ) {
+        for ( size_t i = 1; i < tokens.size(); ++i )
+            if ( tokens[i] == "-v" || tokens[i] == "-V" )
+                return true;
+        return false;
+    }
+
+    // Compilers/toolchain: safe only in a version/info form (no sources/output).
+    static const std::vector<std::string> compilers = {
+        "gcc", "g++", "clang", "clang++", "cc", "c++", "cpp", "ld", "as"
+    };
+    if ( std::find(compilers.begin(), compilers.end(), prog) != compilers.end()) {
+        static const std::vector<std::string> info_flags = {
+            "-v", "--version", "-V", "-dumpversion", "-dumpmachine",
+            "-dumpfullversion", "-dumpspecs", "--help", "-print-search-dirs"
+        };
+        if ( tokens.size() < 2 )
+            return false; // bare `gcc` reads stdin
+        for ( size_t i = 1; i < tokens.size(); ++i )
+            if ( std::find(info_flags.begin(), info_flags.end(), tokens[i]) == info_flags.end())
+                return false;
+        return true;
+    }
+
+    // git: read-only subcommands only.
+    if ( prog == "git" ) {
+        if ( tokens.size() < 2 )
+            return false;
+        const std::string& sub = tokens[1];
+        // These only read, so any arguments are fine.
+        static const std::vector<std::string> ro_any = {
+            "status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree",
+            "blame", "shortlog", "whatchanged", "cat-file", "for-each-ref",
+            "reflog", "describe"
+        };
+        if ( std::find(ro_any.begin(), ro_any.end(), sub) != ro_any.end())
+            return true;
+        // These list when given no positional argument, but create/modify when
+        // given one (e.g. `git branch foo` creates a branch) — safe only as a
+        // listing (flags allowed, no bare argument, no mutating flag).
+        static const std::vector<std::string> listing = { "branch", "tag", "remote" };
+        if ( std::find(listing.begin(), listing.end(), sub) != listing.end()) {
+            static const std::vector<std::string> mutating = {
+                "-d", "-D", "-m", "-M", "-f", "--delete", "--force", "--move",
+                "--add", "--set", "--unset", "--edit", "--create", "--set-url",
+                "--prune", "--set-head", "-c", "-C"
+            };
+            for ( size_t i = 2; i < tokens.size(); ++i ) {
+                if ( tokens[i].empty() || tokens[i][0] != '-' )
+                    return false; // a positional argument names something to create/modify
+                if ( std::find(mutating.begin(), mutating.end(), tokens[i]) != mutating.end())
+                    return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    // make: safe only in a dry-run / query / version form (bare `make` runs).
+    if ( prog == "make" ) {
+        static const std::vector<std::string> dry = {
+            "-n", "--dry-run", "--just-print", "--recon",
+            "-p", "--print-data-base", "-q", "--question", "--version", "--help"
+        };
+        for ( size_t i = 1; i < tokens.size(); ++i )
+            if ( std::find(dry.begin(), dry.end(), tokens[i]) != dry.end())
+                return true;
+        return false;
+    }
+
+    // Any program invoked purely to print its version / help is harmless.
+    if ( tokens.size() == 2 &&
+         ( tokens[1] == "--version" || tokens[1] == "--help" || tokens[1] == "-version" ))
+        return true;
+
+    return false;
+}
+
 // ── execution with confirmation policy ──────────────────────────────────
 
 std::string Registry::execute(const std::string& name, const JSON& args) {
@@ -220,6 +356,12 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
     if ( !needs_confirm )
         return run();
     if ( _mode == ConfirmMode::automatic && danger.empty())
+        return run();
+
+    // In confirm mode, a known read-only command runs without asking — unless
+    // strict mode is on, or the command is danger-listed.
+    if ( _mode == ConfirmMode::confirm && is_shell && danger.empty() &&
+         !_strict && classify_safe(command))
         return run();
 
     // Previously granted this session?

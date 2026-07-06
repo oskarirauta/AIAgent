@@ -23,6 +23,7 @@ public:
     bool tools_enabled = true;
     bool confirm_tools = true;  // ask before confirmation-requiring tools
     bool insecure = false;      // run every tool without asking (implies no danger warnings)
+    bool strict = false;        // in confirm mode, ignore the safe-command allowlist
 
     // ncurses paste detection thresholds
     size_t paste_threshold_chars = 500;        // characters for multi-line paste

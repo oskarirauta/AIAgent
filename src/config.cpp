@@ -138,6 +138,7 @@ void Config::load(const std::string& path) {
         else if ( key == "system_prompt" ) system_prompt = value;
         else if ( key == "home_dir" ) home_dir = expand_tilde(value);
         else if ( key == "tools_enabled" ) tools_enabled = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
+        else if ( key == "strict" ) strict = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
         else if ( key == "paste_threshold_chars" ) paste_threshold_chars = parse_size(value, paste_threshold_chars, key);
         else if ( key == "paste_threshold_lines" ) paste_threshold_lines = parse_size(value, paste_threshold_lines, key);
         else if ( key == "paste_single_line_chars" ) paste_single_line_chars = parse_size(value, paste_single_line_chars, key);

@@ -171,6 +171,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /settings                show current settings\n"
                "  /model [name]            show or change the model\n"
                "  /tools <confirm|auto|insecure>   set the tool confirmation mode\n"
+               "  /strict <on|off>         also confirm safe read-only commands\n"
                "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
                "  /theme <dark|light|warm> switch the colour theme\n"
                "  /history                 list the messages in the current context\n"
@@ -238,7 +239,7 @@ std::string Repl::handle_command(const std::string& line) {
         std::string s;
         s += "provider:  " + _config.provider + "\n";
         s += "model:     " + _config.model + "\n";
-        s += "tools:     " + tools + "\n";
+        s += "tools:     " + tools + ( _config.strict ? " (strict)" : "" ) + "\n";
         s += "thinking:  " + ( _thinking.empty() ? std::string("(provider default)") : _thinking ) + "\n";
         s += "home:      " + _config.home_dir + "\n";
         s += "tokens:    ctx " + std::to_string(_stats.context_tokens.load()) +
@@ -262,7 +263,20 @@ std::string Repl::handle_command(const std::string& line) {
         else if ( m == "insecure" ) { _config.insecure = true; }
         else return "usage: /tools <confirm|auto|insecure>";
         _registry.set_mode(tool_mode());
+        _registry.set_strict(_config.strict);
         return "tool mode: " + m;
+    }
+
+    if ( cmd == "/strict" ) {
+        std::string m = common::to_lower(args);
+        if ( m.empty())
+            return std::string("strict: ") + ( _config.strict ? "on" : "off" );
+        if ( m == "on" || m == "true" ) _config.strict = true;
+        else if ( m == "off" || m == "false" ) _config.strict = false;
+        else return "usage: /strict <on|off>";
+        _registry.set_strict(_config.strict);
+        return std::string("strict: ") + ( _config.strict ? "on" : "off" ) +
+               ( _config.strict ? "  (safe read-only commands now also ask)" : "" );
     }
 
     if ( cmd == "/thinking" || cmd == "/effort" ) {
@@ -294,6 +308,7 @@ void Repl::run_plain() {
     std::cout << "agent ready. Type /exit or /quit to leave.\n" << std::endl;
 
     _registry.set_mode(tool_mode());
+    _registry.set_strict(_config.strict);
     if ( _config.tools_enabled && tool_mode() != tools::ConfirmMode::insecure ) {
         _registry.set_confirm_callback([](const tools::ConfirmRequest& req) -> tools::Decision {
             if ( !req.danger.empty())
@@ -360,6 +375,7 @@ void Repl::run_tty() {
         _config, _conversation, _stats);
 
     _registry.set_mode(tool_mode());
+    _registry.set_strict(_config.strict);
     if ( _config.tools_enabled && tool_mode() != tools::ConfirmMode::insecure ) {
         _registry.set_confirm_callback([&inline_repl](const tools::ConfirmRequest& req) { return inline_repl.confirm(req); });
     }
@@ -384,6 +400,7 @@ void Repl::run_once(const std::string& prompt) {
     // Non-interactive: no prompt UI. Only insecure/automatic modes can run tools;
     // otherwise confirmation-required tools fail safe (deny).
     _registry.set_mode(tool_mode());
+    _registry.set_strict(_config.strict);
 
     try {
         std::string reply = process_turn(prompt, [](const std::string& chunk) {

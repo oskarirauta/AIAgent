@@ -389,6 +389,40 @@ static void test_danger_list() {
     check(Registry::classify_path_danger("notes.md").empty(), "in-project write not flagged");
     check(Registry::classify_path_danger("sub/dir/x.txt").empty(), "in-project subdir not flagged");
     check(Registry::classify_path_danger("/tmp/scratch").empty(), "/tmp write not flagged");
+
+    // passwd + sensitive system files/devices flagged.
+    check(!Registry::classify_danger("passwd").empty(), "passwd flagged");
+    check(!Registry::classify_danger("cat /etc/shadow").empty(), "reading /etc/shadow flagged");
+    check(!Registry::classify_danger("echo x > /etc/passwd").empty(), "writing /etc/passwd flagged");
+    check(!Registry::classify_danger("cat /dev/sda").empty(), "block device flagged");
+}
+
+static void test_safe_commands() {
+    std::cout << "safe command list" << std::endl;
+    using agent::tools::Registry;
+    // Read-only / side-effect-free commands.
+    check(Registry::classify_safe("ls -la"), "ls safe");
+    check(Registry::classify_safe("pwd"), "pwd safe");
+    check(Registry::classify_safe("git status"), "git status safe");
+    check(Registry::classify_safe("git log --oneline"), "git log safe");
+    check(Registry::classify_safe("git branch"), "git branch (list) safe");
+    check(Registry::classify_safe("gcc -v"), "gcc -v safe");
+    check(Registry::classify_safe("g++ --version"), "g++ --version safe");
+    check(Registry::classify_safe("make -n install"), "make -n safe");
+    check(Registry::classify_safe("cmake --version"), "cmake --version safe");
+    check(Registry::classify_safe("pkg-config --exists zlib"), "pkg-config safe");
+    check(Registry::classify_safe("cat notes.md"), "cat (no redirect) safe");
+
+    // Not safe: executes code, writes, or mutates.
+    check(!Registry::classify_safe("rm file"), "rm not safe");
+    check(!Registry::classify_safe("make"), "bare make not safe");
+    check(!Registry::classify_safe("make install"), "make install not safe");
+    check(!Registry::classify_safe("gcc main.c -o app"), "gcc compile not safe");
+    check(!Registry::classify_safe("git branch newbranch"), "git branch create not safe");
+    check(!Registry::classify_safe("git checkout main"), "git checkout not safe");
+    check(!Registry::classify_safe("echo hi > f"), "redirection not safe");
+    check(!Registry::classify_safe("ls | sh"), "pipe not safe");
+    check(!Registry::classify_safe("tail -f log"), "tail -f not safe");
 }
 
 int main() {
@@ -413,6 +447,7 @@ int main() {
     test_grep_robustness();
     test_token_usage();
     test_danger_list();
+    test_safe_commands();
 
     std::cout << "\n" << passed << " passed, " << failed << " failed" << std::endl;
     return failed > 0 ? 1 : 0;

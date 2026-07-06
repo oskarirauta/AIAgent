@@ -42,6 +42,7 @@ public:
     void set_confirm_callback(confirm_cb_t cb);
     void set_activity_callback(activity_cb_t cb) { _activity_cb = std::move(cb); }
     void set_mode(ConfirmMode mode) { _mode = mode; }
+    void set_strict(bool strict) { _strict = strict; } // ignore the safe-command list when true
 
     JSON schema() const;
     std::string execute(const std::string& name, const JSON& args);
@@ -56,11 +57,17 @@ public:
     // outside the working directory is risky. Returns a reason or empty string.
     static std::string classify_path_danger(const std::string& path);
 
+    // Whether a shell command is a known read-only / side-effect-free command
+    // (date, ls, pwd, git status, gcc -v, …) that can run without confirmation
+    // in confirm mode (unless strict mode is on). Exposed for testing.
+    static bool classify_safe(const std::string& command);
+
 private:
     std::map<std::string, std::unique_ptr<Tool>> _tools;
     confirm_cb_t _confirm_cb;
     activity_cb_t _activity_cb;
     ConfirmMode _mode = ConfirmMode::confirm;
+    bool _strict = false;
 
     // Session-scoped approvals granted via "allow session" / "allow similar".
     std::set<std::string> _allow_exact;   // full command / action strings

@@ -182,7 +182,9 @@ Tool calling has three modes:
 
 `--no-tools` disables tool calls entirely. Non-interactive runs (single-prompt / piped) fail safe: a tool needing confirmation is denied unless `--yes-tools` / `--insecure` is set.
 
-The **danger list** flags risky shell commands (e.g. `rm -rf`, `sudo`, `dd`, `mkfs`, piping downloads into a shell) and shows a warning before running them. Rules match a program plus optional criteria, so a plain `rm file` is a normal confirmation while `rm -rf …` is flagged.
+The **danger list** flags risky shell commands (e.g. `rm -rf`, `sudo`, `passwd`, `dd`, `mkfs`, piping downloads into a shell, or touching sensitive paths like `/etc/passwd` and block devices) and warns before running them. Rules match a program plus optional criteria, so a plain `rm file` is a normal confirmation while `rm -rf …` is flagged.
+
+The **safe list** goes the other way: in confirm mode, known read-only commands run *without* asking — `ls`, `pwd`, `cat` (no redirection), `date`, `df`, `git status`/`log`/`diff`, `gcc -v`, `make -n`, `pkg-config`, any `… --version`, and similar. This keeps everyday commands friction-free while still gating anything that writes, executes, or mutates. Turn it off with `strict: true` in config or the `/strict on` command, which requires confirmation for those too.
 
 ## Project layout
 
