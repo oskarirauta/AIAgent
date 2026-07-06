@@ -193,9 +193,9 @@ std::string Registry::classify_path_danger(const std::string& path) {
     return "writes outside the working directory";
 }
 
-bool Registry::classify_safe(const std::string& command) {
-    // Only a single, simple command can be vouched for. Anything with a shell
-    // operator (redirection, pipe, chaining, subshell) is not classified safe.
+// A single simple command (no connectors). Redirection, background, subshell
+// and stray pipes are rejected; otherwise the program decides.
+static bool classify_safe_simple(const std::string& command) {
     for ( char c : command ) {
         if ( c == '>' || c == '<' || c == '|' || c == ';' || c == '&' ||
              c == '`' || c == '\n' || c == '\r' )
@@ -215,7 +215,10 @@ bool Registry::classify_safe(const std::string& command) {
         "ls", "cat", "head", "tail", "df", "free", "echo", "printenv", "env",
         "wc", "file", "stat", "true", "false", "tty", "groups", "uptime",
         "arch", "nproc", "basename", "dirname", "realpath", "readlink", "locale",
-        "pkg-config", "type", "whereis"
+        "pkg-config", "type", "whereis",
+        // `cd` only affects the command's own subshell; these filters read stdin
+        // / files and write only to stdout, so they are safe inside a pipe.
+        "cd", "grep", "egrep", "fgrep", "tr", "cut", "rev", "tac", "nl"
     };
     if ( std::find(safe.begin(), safe.end(), prog) != safe.end()) {
         // `tail -f` / `--follow` would block until the timeout — not classified
@@ -305,6 +308,38 @@ bool Registry::classify_safe(const std::string& command) {
         return true;
 
     return false;
+}
+
+bool Registry::classify_safe(const std::string& command) {
+    // A subshell anywhere makes the whole thing unvouchable.
+    if ( command.find("$(") != std::string::npos )
+        return false;
+
+    // Split on the sequencing/pipe connectors (&&, ||, ;, |) and require every
+    // segment to be individually safe, so chains like `cd dir && git log` or
+    // `git log | grep foo` are recognised. A lone `&` (background) or a redirect
+    // stays inside a segment and is rejected by classify_safe_simple.
+    std::vector<std::string> parts;
+    std::string cur;
+    for ( size_t i = 0; i < command.size(); ) {
+        if ( command[i] == '&' && i + 1 < command.size() && command[i + 1] == '&' ) {
+            parts.push_back(cur); cur.clear(); i += 2;
+        } else if ( command[i] == '|' && i + 1 < command.size() && command[i + 1] == '|' ) {
+            parts.push_back(cur); cur.clear(); i += 2;
+        } else if ( command[i] == ';' || command[i] == '|' ) {
+            parts.push_back(cur); cur.clear(); i += 1;
+        } else {
+            cur += command[i]; ++i;
+        }
+    }
+    parts.push_back(cur);
+
+    for ( const std::string& p : parts ) {
+        std::string seg = common::trim_ws(p);
+        if ( seg.empty() || !classify_safe_simple(seg))
+            return false;
+    }
+    return true;
 }
 
 // ── execution with confirmation policy ──────────────────────────────────

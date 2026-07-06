@@ -479,6 +479,15 @@ static void test_safe_commands() {
     check(!Registry::classify_safe("echo hi > f"), "redirection not safe");
     check(!Registry::classify_safe("ls | sh"), "pipe not safe");
     check(!Registry::classify_safe("tail -f log"), "tail -f not safe");
+
+    // Chained safe commands.
+    check(Registry::classify_safe("cd /usr/src/AIAgent && git log"), "cd && git log safe");
+    check(Registry::classify_safe("git log | grep fix"), "git log | grep safe");
+    check(Registry::classify_safe("ls; pwd"), "ls; pwd safe");
+    check(!Registry::classify_safe("cd /tmp && rm x"), "chain with rm not safe");
+    check(!Registry::classify_safe("ls && echo hi > f"), "chain with redirect not safe");
+    check(!Registry::classify_safe("git log | sh"), "pipe to sh not safe");
+    check(!Registry::classify_safe("sleep 5 &"), "background job not safe");
 }
 
 int main() {
