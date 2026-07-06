@@ -133,8 +133,15 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         }
         _conversation.add_assistant(normalized, assistant_calls);
 
-        if ( resp.tool_calls.empty())
+        if ( resp.tool_calls.empty()) {
+            // Show the model's reasoning (if any) above the answer. It is display
+            // only — the saved assistant message keeps just the answer.
+            if ( !resp.thinking.empty()) {
+                std::string think = agent::normalize_text(resp.thinking);
+                return "💭 " + think + "\n\n" + normalized;
+            }
             return normalized;
+        }
 
         for ( const auto& tc : resp.tool_calls ) {
 

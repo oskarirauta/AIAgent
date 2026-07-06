@@ -85,6 +85,16 @@ Response OpenAI::parse_response(const JSON& response) {
         if ( msg.contains("content") && msg["content"] != nullptr )
             r.message = msg["content"].to_string();
 
+        // Reasoning/thinking content: the de-facto field across OpenAI-compatible
+        // reasoners (DeepSeek, Qwen, Moonshot/Kimi) is `reasoning_content`; some
+        // gateways use `reasoning`. It is separate from the visible `content`.
+        for ( const char* key : { "reasoning_content", "reasoning" } ) {
+            if ( msg.contains(key) && msg[key] == JSON::TYPE::STRING ) {
+                r.thinking = msg[key].to_string();
+                break;
+            }
+        }
+
         if ( msg.contains("tool_calls") && msg["tool_calls"] == JSON::TYPE::ARRAY ) {
             for ( size_t i = 0; i < msg["tool_calls"].size(); i++ ) {
                 JSON tc = msg["tool_calls"][i];

@@ -19,6 +19,7 @@ struct ToolCall {
 
 struct Response {
     std::string message;
+    std::string thinking;    // reasoning/thinking content, if the model returned any
     std::vector<ToolCall> tool_calls;
     bool success = true;
     long input_tokens = 0;   // prompt/context tokens reported by the provider (0 if unknown)

@@ -102,6 +102,27 @@ static void test_openai_request() {
     check(req["messages"].size() == 2, "two messages");
 }
 
+static void test_reasoning_content() {
+    std::cout << "reasoning content parsing" << std::endl;
+    agent::Config cfg;
+    JSON resp = JSON::Object{
+        { "choices", JSON::Array{ JSON::Object{
+            { "message", JSON::Object{
+                { "content", "the answer" },
+                { "reasoning_content", "let me think..." }
+            }}
+        }}}
+    };
+    agent::providers::OpenAI p(cfg);
+    auto r = p.parse_response(resp);
+    check(r.message == "the answer", "content parsed");
+    check(r.thinking == "let me think...", "reasoning_content captured");
+
+    agent::providers::Kimi k(cfg); // inherits the OpenAI parse
+    auto rk = k.parse_response(resp);
+    check(rk.thinking == "let me think...", "kimi captures reasoning_content");
+}
+
 static void test_ollama_request() {
     std::cout << "ollama request format" << std::endl;
     agent::Config cfg;
@@ -532,6 +553,7 @@ int main() {
     test_memory_loading();
     test_memory_listing();
     test_openai_request();
+    test_reasoning_content();
     test_ollama_request();
     test_anthropic_request();
     test_provider_capabilities();
