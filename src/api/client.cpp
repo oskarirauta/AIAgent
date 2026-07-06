@@ -36,6 +36,16 @@ static size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdat
     return size * nmemb;
 }
 
+// A NAMED function, not a lambda: curl_easy_setopt is variadic, and a lambda
+// object passed there is not converted to a function pointer (it becomes garbage
+// libcurl then calls — a crash). userdata is the std::function<void(chunk)>.
+static size_t stream_write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    auto* cb = static_cast<std::function<void(const std::string&)>*>(userdata);
+    std::string chunk(ptr, size * nmemb);
+    (*cb)(chunk);
+    return size * nmemb;
+}
+
 static int progress_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
     (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
     auto* flag = static_cast<std::atomic<bool>*>(clientp);
@@ -156,17 +166,10 @@ void Client::post_stream(const std::string& url, const std::string& auth_header,
         logger::debug["http"] << "no auth header added (header=" << auth_header << ", value empty=" << auth_value.empty() << ")" << std::endl;
     }
 
-    auto stream_callback = [](char* ptr, size_t size, size_t nmemb, void* userdata) -> size_t {
-        auto* cb = static_cast<std::function<void(const std::string&)>*>(userdata);
-        std::string chunk(ptr, size * nmemb);
-        (*cb)(chunk);
-        return size * nmemb;
-    };
-
     curl_easy_setopt(c, CURLOPT_URL, url.c_str());
     curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
     curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, stream_callback);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, stream_write_callback);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &callback);
     curl_easy_setopt(c, CURLOPT_TIMEOUT, 120L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
