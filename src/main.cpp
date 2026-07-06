@@ -39,13 +39,13 @@ static usage_t make_usage(int argc, char **argv) {
             { "model", { "m", "model", "model name", usage_t::OPTIONAL }},
             { "api_url", { "u", "api-url", "api endpoint url", usage_t::OPTIONAL }},
             { "api_key", { "k", "api-key", "api key / token", usage_t::OPTIONAL }},
-            { "login", { "L", "login", "force re-authentication for the selected provider and exit", usage_t::OPTIONAL }},
+            { "login", { "L", "login", "force re-authentication for the selected provider and exit" }},
             { "log_level", { "l", "log-level", "quiet/error/warning/notice/info/verbose/vverbose/debug", usage_t::OPTIONAL }},
             { "system_prompt", { "s", "system-prompt", "system prompt message", usage_t::OPTIONAL }},
             { "home_dir", { "d", "home", "agent home directory for memory and data", usage_t::OPTIONAL }},
-            { "no_tools", { "T", "no-tools", "disable tool calls (safer mode)", usage_t::OPTIONAL }},
-            { "yes_tools", { "Y", "yes-tools", "run ordinary tools without confirmation (danger-listed commands still warn)", usage_t::OPTIONAL }},
-            { "insecure", { "I", "insecure", "run ALL tools without any confirmation, including dangerous commands", usage_t::OPTIONAL }},
+            { "no_tools", { "T", "no-tools", "disable tool calls (safer mode)" }},
+            { "yes_tools", { "Y", "yes-tools", "run ordinary tools without confirmation (danger-listed commands still warn)" }},
+            { "insecure", { "I", "insecure", "run ALL tools without any confirmation, including dangerous commands" }},
             { "prompt", { "P", "prompt", "single prompt mode, exit after answer", usage_t::OPTIONAL }}
         }
     };
