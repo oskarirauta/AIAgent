@@ -378,7 +378,15 @@ std::string Repl::handle_command(const std::string& line) {
                 else return "usage: /settings thinking_stream <off|on|collapse>";
                 return std::string("stream: ") + ( !_config.thinking_stream ? "off" : ( _config.thinking_collapse ? "collapse" : "on" ));
             }
-            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, context, multiline; theme via /theme)";
+            if ( key == "paste_preview" || key == "preview" ) {
+                std::string v = common::to_lower(val);
+                if ( v == "off" || v == "all" || v == "none" ) _config.paste_preview = 0;
+                else _config.paste_preview = Config::parse_size_suffixed(val, _config.paste_preview);
+                return _config.paste_preview == 0
+                     ? std::string("paste preview: all lines")
+                     : "paste preview: first " + std::to_string(_config.paste_preview) + " lines";
+            }
+            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, paste_preview, context, multiline; theme via /theme)";
         }
 
         std::string tools = !_config.tools_enabled ? "off"
@@ -399,6 +407,9 @@ std::string Repl::handle_command(const std::string& line) {
         }
         s += "context:   " + ctx + "\n";
         s += "multiline: " + std::string( _config.multiline ? "on" : "off" ) + "\n";
+        s += "preview:   " + ( _config.paste_preview == 0
+                 ? std::string("all lines")
+                 : "first " + std::to_string(_config.paste_preview) + " lines" ) + "\n";
         s += "home:      " + _config.home_dir + "\n";
         s += "tokens:    ctx " + std::to_string(_stats.context_tokens.load()) +
              ", session " + std::to_string(_stats.session_total());

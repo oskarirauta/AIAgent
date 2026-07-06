@@ -402,7 +402,8 @@ static void test_settings_persistence() {
 
     agent::Config c;
     c.theme = "warm"; c.multiline = true; c.thinking = "on"; c.thinking_stream = false;
-    c.context_auto = true; c.context_limit = 65536;
+    c.thinking_collapse = true;
+    c.context_auto = true; c.context_limit = 65536; c.paste_preview = 12;
     c.save_settings(home);
 
     auto last = agent::Config::load_last_used(home);
@@ -415,11 +416,14 @@ static void test_settings_persistence() {
     check(last.thinking == "on", "thinking persisted");
     check(last.context_auto, "context_auto persisted");
     check(last.context_limit == 65536, "context_limit persisted");
+    check(last.thinking_collapse, "thinking_collapse persisted");
+    check(last.paste_preview == 12, "paste_preview persisted");
 
     agent::Config c2;
     c2.apply_settings(last);
     check(c2.theme == "warm" && c2.multiline && c2.thinking == "on" && c2.context_limit == 65536,
           "apply_settings restores onto a fresh config");
+    check(c2.thinking_collapse && c2.paste_preview == 12, "apply_settings restores collapse + paste_preview");
 
     std::filesystem::remove_all(home);
 }

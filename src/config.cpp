@@ -194,6 +194,7 @@ void Config::load(const std::string& path) {
         else if ( key == "paste_threshold_lines" ) paste_threshold_lines = parse_size(value, paste_threshold_lines, key);
         else if ( key == "paste_single_line_chars" ) paste_single_line_chars = parse_size(value, paste_single_line_chars, key);
         else if ( key == "paste_threshold_ms" ) paste_threshold_ms = parse_size(value, paste_threshold_ms, key);
+        else if ( key == "paste_preview" ) paste_preview = parse_size(value, paste_preview, key);
         else if ( key.rfind("provider.", 0) == 0 ) {
             // provider.<name>.<key>: value
             size_t first_dot = key.find('.', 0);
@@ -287,6 +288,8 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.context_auto = s["context_auto"].to_bool();
             if ( s.contains("context_limit") && s["context_limit"] == JSON::TYPE::INT )
                 last.context_limit = static_cast<size_t>(static_cast<long long>(s["context_limit"]));
+            if ( s.contains("paste_preview") && s["paste_preview"] == JSON::TYPE::INT )
+                last.paste_preview = static_cast<size_t>(static_cast<long long>(s["paste_preview"]));
         }
     } catch ( const std::exception& e ) {
         logger::warning["config"] << "failed to parse state file: " << e.what() << std::endl;
@@ -313,7 +316,8 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "thinking_stream", last.thinking_stream },
             { "thinking_collapse", last.thinking_collapse },
             { "context_auto", last.context_auto },
-            { "context_limit", static_cast<long long>(last.context_limit) }
+            { "context_limit", static_cast<long long>(last.context_limit) },
+            { "paste_preview", static_cast<long long>(last.paste_preview) }
         };
     }
 
@@ -352,6 +356,7 @@ void Config::save_settings(const std::string& home_dir) const {
     last.thinking_collapse = thinking_collapse;
     last.context_auto = context_auto;
     last.context_limit = context_limit;
+    last.paste_preview = paste_preview;
     write_state(home_dir, last);
 }
 
@@ -365,6 +370,7 @@ void Config::apply_settings(const LastUsed& last) {
     thinking_collapse = last.thinking_collapse;
     context_auto = last.context_auto;
     context_limit = last.context_limit;
+    paste_preview = last.paste_preview;
 }
 
 void Config::ensure_home_dir() {

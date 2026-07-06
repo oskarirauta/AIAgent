@@ -376,8 +376,14 @@ void InlineRepl::echo_user(const std::string& display) {
         int hw = static_cast<int>(split_cells("── pasted · " + std::to_string(plines.size()) + " lines ").size());
         for ( int i = hw; i < width; ++i ) header += "─";
         emit(header + "\033[0m");
-        for ( const auto& pl : plines )
-            emit(_theme.dim + sanitize_display(pl) + "\033[0m");
+        // Optionally preview only the first N lines, noting how many were hidden.
+        // The full text is still what the model receives; this only trims the echo.
+        size_t limit = _config.paste_preview;
+        size_t shown = ( limit > 0 && plines.size() > limit ) ? limit : plines.size();
+        for ( size_t i = 0; i < shown; ++i )
+            emit(_theme.dim + sanitize_display(plines[i]) + "\033[0m");
+        if ( shown < plines.size())
+            emit(_theme.dim + "  … " + std::to_string(plines.size() - shown) + " more lines" + "\033[0m");
         std::string footer;
         for ( int i = 0; i < width; ++i ) footer += "─";
         emit(_theme.dim + footer + "\033[0m");
@@ -1420,6 +1426,8 @@ void InlineRepl::open_settings_menu() {
     _settings_rows.push_back({ "context", "context",
         first_word(cur.count("context") ? cur["context"] : "unlimited"), {} });
     _settings_rows.push_back({ "multiline", "multiline", _config.multiline ? "on" : "off", { "off", "on" } });
+    _settings_rows.push_back({ "paste_preview", "preview",
+        _config.paste_preview == 0 ? "all" : std::to_string(_config.paste_preview), {} });
 
     erase_live();
     tcflush(STDIN_FILENO, TCIFLUSH); // ignore anything typed before the menu opened
