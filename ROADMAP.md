@@ -13,7 +13,10 @@ each list is roughly the current priority order.
 - **Thinking / reasoning**: captured for Kimi (`reasoning_content`) and Claude
   (thinking block); Claude extended-thinking wired (effort → `budget_tokens`,
   `max` = model ceiling); Kimi `xhigh`/`max` normalised to `high`. Reasoning
-  streams live, dimmed, behind a 💭 marker; `thinking_stream` / `/stream` toggles it.
+  streams live, dimmed, behind a 💭 marker; `/stream off|on|collapse` toggles it —
+  collapse shows the reasoning live then hides it once the answer is done.
+  (Note: Claude's OAuth API redacts thinking text, so only Kimi shows a transcript.)
+- **Current date** injected into the system prompt (so the model needn't call `date`).
 - **UI**: inline REPL (native scrollback, no ncurses), colour themes
   (dark/light/warm), multi-line prompt mode, interactive `/settings` menu,
   visual `/context`, arrow-select tool confirmation.
@@ -27,13 +30,6 @@ each list is roughly the current priority order.
 
 ## Planned
 
-- **Collapse-thinking mode**: show the reasoning live while it streams, then hide
-  it once the answer is complete (leaving just the result). Needs the reasoning to
-  render in a transient/erasable area rather than the permanent transcript, since
-  native scrollback can't un-print scrolled lines. Likely a third `thinking_stream`
-  state (off / on / collapse).
-- **Inject current date/time** into the system prompt (so the model rarely needs
-  `date`; avoids busybox coreutils gaps).
 - **`/compact`**: summarise history when it grows (trimming is done; summarisation
   is the remaining piece).
 - **Autocomplete**: slash commands and file paths.
