@@ -181,6 +181,7 @@ void Config::load(const std::string& path) {
         else if ( key == "theme" ) theme = value;
         else if ( key == "multiline" ) multiline = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
         else if ( key == "thinking_stream" ) thinking_stream = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
+        else if ( key == "thinking_collapse" ) thinking_collapse = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
         else if ( key == "system_prompt" ) system_prompt = value;
         else if ( key == "home_dir" ) home_dir = expand_tilde(value);
         else if ( key == "tools_enabled" ) tools_enabled = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
@@ -280,6 +281,8 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.multiline = s["multiline"].to_bool();
             if ( s.contains("thinking_stream") && s["thinking_stream"] == JSON::TYPE::BOOL )
                 last.thinking_stream = s["thinking_stream"].to_bool();
+            if ( s.contains("thinking_collapse") && s["thinking_collapse"] == JSON::TYPE::BOOL )
+                last.thinking_collapse = s["thinking_collapse"].to_bool();
             if ( s.contains("context_auto") && s["context_auto"] == JSON::TYPE::BOOL )
                 last.context_auto = s["context_auto"].to_bool();
             if ( s.contains("context_limit") && s["context_limit"] == JSON::TYPE::INT )
@@ -308,6 +311,7 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "thinking", last.thinking },
             { "multiline", last.multiline },
             { "thinking_stream", last.thinking_stream },
+            { "thinking_collapse", last.thinking_collapse },
             { "context_auto", last.context_auto },
             { "context_limit", static_cast<long long>(last.context_limit) }
         };
@@ -345,6 +349,7 @@ void Config::save_settings(const std::string& home_dir) const {
     last.thinking = thinking;
     last.multiline = multiline;
     last.thinking_stream = thinking_stream;
+    last.thinking_collapse = thinking_collapse;
     last.context_auto = context_auto;
     last.context_limit = context_limit;
     write_state(home_dir, last);
@@ -357,6 +362,7 @@ void Config::apply_settings(const LastUsed& last) {
     thinking = last.thinking;
     multiline = last.multiline;
     thinking_stream = last.thinking_stream;
+    thinking_collapse = last.thinking_collapse;
     context_auto = last.context_auto;
     context_limit = last.context_limit;
 }

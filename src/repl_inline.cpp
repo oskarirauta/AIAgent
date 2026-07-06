@@ -398,6 +398,8 @@ void InlineRepl::begin_reply() {
     _reply_has_content = false;
     _reply_first_line = true;
     _reply_dim = false;
+    _think_preview.clear();
+    _stream_in_think = false;
 }
 
 void InlineRepl::emit_reply_line(const std::string& raw_line) {
@@ -441,6 +443,65 @@ void InlineRepl::flush_lines() {
         emit_reply_line(_line_buf.substr(0, nl));
         _line_buf.erase(0, nl + 1);
     }
+}
+
+void InlineRepl::route_stream_chunk(const std::string& chunk) {
+    // Collapse mode: reasoning (between the \x01 and \x02 markers) is diverted to
+    // the transient preview instead of _line_buf, so it is shown live but never
+    // committed. \x02 (answer begins) drops the preview. Everything else is the
+    // answer and flows into _line_buf as usual.
+    for ( char ch : chunk ) {
+        if ( ch == '\x01' ) { _stream_in_think = true; continue; }
+        if ( ch == '\x02' ) { _stream_in_think = false; _think_preview.clear(); continue; }
+        if ( _stream_in_think )
+            _think_preview += ch;
+        else
+            _line_buf += ch;
+    }
+}
+
+std::vector<std::string> InlineRepl::think_preview_lines(int cols) const {
+    std::vector<std::string> out;
+    if ( _think_preview.empty())
+        return out;
+
+    int width = cols - 4;
+    if ( width < 8 ) width = 8;
+
+    // Word-wrap each logical line of the accumulated reasoning.
+    std::vector<std::string> wrapped;
+    size_t start = 0;
+    while ( true ) {
+        size_t nl = _think_preview.find('\n', start);
+        std::string logical = ( nl == std::string::npos )
+            ? _think_preview.substr(start)
+            : _think_preview.substr(start, nl - start);
+        for ( const auto& seg : word_wrap(logical, width))
+            wrapped.push_back(seg);
+        if ( nl == std::string::npos ) break;
+        start = nl + 1;
+    }
+    if ( wrapped.empty())
+        return out;
+
+    // Bound the preview height (keep the most recent lines) so the live block
+    // never grows without limit; the older reasoning is summarised in the header.
+    int cap = 8;
+    struct winsize ws;
+    if ( ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 10 )
+        cap = std::min(cap, static_cast<int>(ws.ws_row) - 8);
+    if ( cap < 1 ) cap = 1;
+
+    int total = static_cast<int>(wrapped.size());
+    int first = ( total > cap ) ? ( total - cap ) : 0;
+
+    std::string header = _theme.dim + "💭 thinking";
+    if ( first > 0 ) header += " (+" + std::to_string(first) + " earlier)";
+    header += "…" + std::string(Theme::reset);
+    out.push_back(header);
+    for ( int i = first; i < total; ++i )
+        out.push_back("  " + _theme.dim + wrapped[i] + Theme::reset);
+    return out;
 }
 
 // ── live block (input + status) ─────────────────────────────────────────
@@ -692,9 +753,23 @@ void InlineRepl::draw_live() {
         sep += "─";
 
     // Block layout: blank spacer, separator, the K input lines, separator, status.
+    // Collapse mode: a transient reasoning preview sits at the very top of the
+    // live block. It is redrawn as reasoning streams and erased with the block
+    // when the answer arrives or the turn ends — never entering the transcript.
+    std::vector<std::string> preview;
+    if ( _turn_running && _config.thinking_collapse && _config.thinking_stream )
+        preview = think_preview_lines(cols);
+    int P = static_cast<int>(preview.size());
+    // A blank line separates the user's prompt above from the reasoning preview.
+    int preview_rows = ( P > 0 ) ? ( P + 1 ) : 0;
+
     int K = static_cast<int>(vlines.size());
     std::string out = ( _live_lines > 0 ) ? ("\r\033[" + std::to_string(_live_cursor_up) + "A\033[J")
                                           : "\r\033[J";
+    if ( P > 0 )
+        out += "\r\n";                        // blank line above the reasoning preview
+    for ( const auto& pl : preview )
+        out += pl + "\r\n";                   // transient reasoning preview
     out += "\r\n";                            // blank spacer above the separator
     out += _theme.dim + sep + "\033[0m\r\n";  // separator: transcript | input
     for ( const auto& vl : vlines )
@@ -707,8 +782,8 @@ void InlineRepl::draw_live() {
     if ( screen_col > 0 )
         out += "\033[" + std::to_string(screen_col) + "C";
     wr(out);
-    _live_lines = 4 + K;
-    _live_cursor_up = 2 + cur_row;
+    _live_lines = 4 + K + preview_rows;
+    _live_cursor_up = 2 + cur_row + preview_rows;
 }
 
 // ── input editing ───────────────────────────────────────────────────────
@@ -1048,8 +1123,13 @@ void InlineRepl::poll_worker() {
 
     if ( !chunks.empty()) {
         erase_live();
-        for ( const auto& c : chunks )
-            _line_buf += c;
+        bool collapse = _config.thinking_collapse && _config.thinking_stream;
+        for ( const auto& c : chunks ) {
+            if ( collapse )
+                route_stream_chunk(c);
+            else
+                _line_buf += c;
+        }
         flush_lines();
         draw_live();
     }
@@ -1066,8 +1146,12 @@ void InlineRepl::finish_turn() {
     bool streamed;
     {
         std::lock_guard<std::mutex> lk(_mx);
+        bool collapse = _config.thinking_collapse && _config.thinking_stream;
         while ( !_out_chunks.empty()) {
-            _line_buf += _out_chunks.front();
+            if ( collapse )
+                route_stream_chunk(_out_chunks.front());
+            else
+                _line_buf += _out_chunks.front();
             _out_chunks.pop();
         }
         reply = _turn_reply;
@@ -1075,7 +1159,11 @@ void InlineRepl::finish_turn() {
         _activity.clear();
     }
 
+    // The transient reasoning preview lived in the live block; erasing it here is
+    // exactly the collapse — only the answer below remains in the transcript.
     erase_live();
+    _think_preview.clear();
+    _stream_in_think = false;
     if ( !streamed && !reply.empty())
         _line_buf += reply;
     flush_lines();
@@ -1326,7 +1414,9 @@ void InlineRepl::open_settings_menu() {
         cur["tools"].find("(strict)") != std::string::npos ? "on" : "off", { "off", "on" } });
     _settings_rows.push_back({ "thinking", "thinking", th,
         { "off", "on", "low", "medium", "high", "xhigh", "max" } });
-    _settings_rows.push_back({ "thinking_stream", "stream", _config.thinking_stream ? "on" : "off", { "off", "on" } });
+    _settings_rows.push_back({ "thinking_stream", "stream",
+        ( !_config.thinking_stream ? "off" : ( _config.thinking_collapse ? "collapse" : "on" )),
+        { "off", "on", "collapse" } });
     _settings_rows.push_back({ "context", "context",
         first_word(cur.count("context") ? cur["context"] : "unlimited"), {} });
     _settings_rows.push_back({ "multiline", "multiline", _config.multiline ? "on" : "off", { "off", "on" } });

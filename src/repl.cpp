@@ -235,7 +235,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /strict <on|off>         also confirm safe read-only commands\n"
                "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
                "  /theme <dark|light|warm> switch the colour theme\n"
-               "  /stream <on|off>         show the model's reasoning live as it streams\n"
+               "  /stream <off|on|collapse> live reasoning; collapse hides it once the answer is done\n"
                "  /memories [name]         list this provider's memory files, or view one\n"
                "  /context                 show context usage (system, conversation, limit)\n"
                "  /history                 list the messages in the current context\n"
@@ -372,10 +372,11 @@ std::string Repl::handle_command(const std::string& line) {
             }
             if ( key == "thinking_stream" || key == "stream" ) {
                 std::string v = common::to_lower(val);
-                if ( v == "on" || v == "true" || v == "1" || v == "yes" ) _config.thinking_stream = true;
-                else if ( v == "off" || v == "false" || v == "0" || v == "no" ) _config.thinking_stream = false;
-                else return "usage: /settings thinking_stream <on|off>";
-                return std::string("thinking_stream: ") + ( _config.thinking_stream ? "on" : "off" );
+                if ( v == "on" || v == "true" || v == "1" || v == "yes" ) { _config.thinking_stream = true; _config.thinking_collapse = false; }
+                else if ( v == "off" || v == "false" || v == "0" || v == "no" ) { _config.thinking_stream = false; _config.thinking_collapse = false; }
+                else if ( v == "collapse" || v == "hide" ) { _config.thinking_stream = true; _config.thinking_collapse = true; }
+                else return "usage: /settings thinking_stream <off|on|collapse>";
+                return std::string("stream: ") + ( !_config.thinking_stream ? "off" : ( _config.thinking_collapse ? "collapse" : "on" ));
             }
             return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, context, multiline; theme via /theme)";
         }
@@ -388,7 +389,7 @@ std::string Repl::handle_command(const std::string& line) {
         s += "model:     " + _config.model + "\n";
         s += "tools:     " + tools + ( _config.strict ? " (strict)" : "" ) + "\n";
         s += "thinking:  " + ( _config.thinking.empty() ? std::string("(provider default)") : _config.thinking ) +
-             "  (live stream: " + ( _config.thinking_stream ? "on" : "off" ) + ")\n";
+             "  (stream: " + ( !_config.thinking_stream ? "off" : ( _config.thinking_collapse ? "collapse" : "on" )) + ")\n";
         std::string ctx;
         if ( _config.context_auto ) {
             size_t b = _config.context_budget();
@@ -425,13 +426,18 @@ std::string Repl::handle_command(const std::string& line) {
     }
 
     if ( cmd == "/stream" ) {
+        auto mode = [this]() -> std::string {
+            if ( !_config.thinking_stream ) return "off";
+            return _config.thinking_collapse ? "collapse" : "on";
+        };
         std::string m = common::to_lower(args);
         if ( m.empty())
-            return std::string("stream: ") + ( _config.thinking_stream ? "on" : "off" );
-        if ( m == "on" || m == "true" ) _config.thinking_stream = true;
-        else if ( m == "off" || m == "false" ) _config.thinking_stream = false;
-        else return "usage: /stream <on|off>";
-        return std::string("stream: ") + ( _config.thinking_stream ? "on" : "off" );
+            return "stream: " + mode();
+        if ( m == "on" || m == "true" ) { _config.thinking_stream = true; _config.thinking_collapse = false; }
+        else if ( m == "off" || m == "false" ) { _config.thinking_stream = false; _config.thinking_collapse = false; }
+        else if ( m == "collapse" || m == "hide" ) { _config.thinking_stream = true; _config.thinking_collapse = true; }
+        else return "usage: /stream <off|on|collapse>";
+        return "stream: " + mode();
     }
 
     if ( cmd == "/strict" ) {

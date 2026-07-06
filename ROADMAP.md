@@ -47,7 +47,10 @@ each list is roughly the current priority order.
 - **paste-block settings** Currently whole block is displayed, we should also support
   a setting that suppresses paste-block to certain amount of lines in chat history,
   giving a preview of X lines and dimming to end with note of X lines more..
+  Possibly with expand support, but this is still under valuation if expansion will
+  be supported.
 - **`/workflows` command** for claude only
+- **`/rc` command** for claude only
 - **`/advisor` command** setting for claude only
 - **More proviers** We don't aim to support every provider, we aim to support enough, most
   common and most useful ones.

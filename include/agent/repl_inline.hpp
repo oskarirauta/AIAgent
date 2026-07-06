@@ -84,6 +84,8 @@ private:
     void finish_turn();
     void flush_lines();  // emit complete lines from _line_buf (block already erased)
     void emit_reply_line(const std::string& line); // one reply line, trimming blank edges
+    void route_stream_chunk(const std::string& chunk); // split think preview vs answer in collapse mode
+    std::vector<std::string> think_preview_lines(int cols) const; // transient collapse-mode preview
     void render_command(const std::string& cmd, const std::string& result);
     void render_confirm_dialog(const tools::ConfirmRequest& req);
     void draw_confirm_menu(const tools::ConfirmRequest& req, bool redraw);
@@ -167,6 +169,12 @@ private:
     bool _reply_has_content = false;
     bool _reply_first_line = false; // the reply's first printed line gets the AI marker
     bool _reply_dim = false;        // inside a streamed "thinking" region (rendered dim, 💭 marker)
+
+    // Collapse mode: reasoning is shown live in a transient preview inside the live
+    // block (never committed to the transcript), then vanishes once the answer
+    // arrives or the turn ends. _stream_in_think tracks the \x01…\x02 region.
+    std::string _think_preview;
+    bool _stream_in_think = false;
 
     SyntaxHighlighter _highlighter{1};
     Theme _theme = theme_dark();
