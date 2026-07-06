@@ -1,12 +1,14 @@
 #include "agent/tools/registry.hpp"
 
 #include <sstream>
+#include <fstream>
 #include <vector>
 #include <algorithm>
 #include <filesystem>
 #include "throws.hpp"
 #include "logger.hpp"
 #include "common.hpp"
+#include "agent/text_utils.hpp"
 #include "agent/tools/read_file.hpp"
 #include "agent/tools/write_file.hpp"
 #include "agent/tools/edit_file.hpp"
@@ -60,6 +62,52 @@ JSON Registry::schema() const {
 // ── danger list ─────────────────────────────────────────────────────────
 
 namespace {
+
+// Prefix every line of `text` with `mark` (for -/+ diff-style previews).
+std::string mark_lines(const std::string& text, const char* mark, size_t cap = 40) {
+    std::string out;
+    std::istringstream is(text);
+    std::string line;
+    size_t n = 0;
+    while ( std::getline(is, line)) {
+        if ( n++ >= cap ) { out += std::string(mark) + " …\n"; break; }
+        out += std::string(mark) + " " + line + "\n";
+    }
+    return out;
+}
+
+// A human-readable preview of what a write_file / edit_file call would change,
+// shown in the confirmation dialog. Empty for other tools.
+std::string change_preview(const std::string& name, const JSON& args) {
+    if ( name == "write_file" && args.contains("path") && args.contains("content")) {
+        std::string path = common::trim_ws(args["path"].to_string());
+        std::string newc = args["content"].to_string();
+        std::error_code ec;
+        if ( !std::filesystem::exists(path, ec)) {
+            size_t lines = static_cast<size_t>(std::count(newc.begin(), newc.end(), '\n')) + ( newc.empty() ? 0 : 1 );
+            return "(new file, " + std::to_string(lines) + " lines)";
+        }
+        std::ifstream ifd(path, std::ios::binary);
+        std::stringstream ss; ss << ifd.rdbuf();
+        return agent::block_diff(ss.str(), newc, "current", "new");
+    }
+    if ( name == "edit_file" && args.contains("path")) {
+        auto one = [](const JSON& e) {
+            std::string o = e.contains("old_string") ? e["old_string"].to_string() : "";
+            std::string n = e.contains("new_string") ? e["new_string"].to_string() : "";
+            return mark_lines(o, "-") + mark_lines(n, "+");
+        };
+        if ( args.contains("edits") && args["edits"] == JSON::TYPE::ARRAY ) {
+            std::string out;
+            const JSON& edits = args["edits"];
+            for ( size_t i = 0; i < edits.size(); ++i )
+                out += ( i ? "\n" : "" ) + one(edits[i]);
+            return out;
+        }
+        return one(args);
+    }
+    return "";
+}
 
 std::vector<std::string> tokenize(const std::string& s) {
     std::vector<std::string> out;
@@ -369,7 +417,13 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
 
     const bool is_shell = ( name == "run_command" && args.contains("command"));
     std::string command = is_shell ? common::trim_ws(args["command"].to_string()) : "";
-    std::string summary = is_shell ? command : (name + " " + args.dump_minified());
+    std::string summary;
+    if ( is_shell )
+        summary = command;
+    else if (( name == "write_file" || name == "edit_file" ) && args.contains("path"))
+        summary = name + " " + common::trim_ws(args["path"].to_string()); // the diff is the preview
+    else
+        summary = name + " " + args.dump_minified();
 
     std::string danger;
     if ( is_shell )
@@ -433,6 +487,7 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
     req.summary = summary;
     req.danger = danger;
     req.similar_key = similar_key;
+    req.preview = change_preview(name, args);
     req.can_similar = true;
 
     Decision d = _confirm_cb(req);

@@ -122,32 +122,6 @@ static size_t count_lines(const std::string& s) {
     return n;
 }
 
-// A compact block diff: trim the common leading/trailing lines and show the rest
-// as -old / +new with a little context.
-static std::string block_diff(const std::string& oldc, const std::string& newc) {
-    auto split = [](const std::string& s) {
-        std::vector<std::string> v; std::string line; std::istringstream is(s);
-        while ( std::getline(is, line)) v.push_back(line);
-        return v;
-    };
-    std::vector<std::string> o = split(oldc), n = split(newc);
-    size_t p = 0;
-    while ( p < o.size() && p < n.size() && o[p] == n[p] ) ++p;
-    size_t s = 0;
-    while ( s < o.size() - p && s < n.size() - p && o[o.size() - 1 - s] == n[n.size() - 1 - s] ) ++s;
-
-    std::string out = "--- original\n+++ current\n";
-    size_t ctx_start = p > 2 ? p - 2 : 0;
-    for ( size_t i = ctx_start; i < p; ++i ) out += "  " + o[i] + "\n";
-    size_t shown = 0;
-    for ( size_t i = p; i < o.size() - s && shown < 200; ++i, ++shown ) out += "- " + o[i] + "\n";
-    shown = 0;
-    for ( size_t i = p; i < n.size() - s && shown < 200; ++i, ++shown ) out += "+ " + n[i] + "\n";
-    size_t ctx_end = std::min(o.size(), ( o.size() - s ) + 2 );
-    for ( size_t i = o.size() - s; i < ctx_end; ++i ) out += "  " + o[i] + "\n";
-    return out;
-}
-
 std::string Repl::changes_command(const std::string& args) {
     std::istringstream iss(args);
     std::string sub, target;
@@ -200,7 +174,7 @@ std::string Repl::changes_command(const std::string& args) {
         if ( !it->second.existed )
             return target + " was created this session (" +
                    std::to_string(count_lines(cur.value_or(""))) + " lines)";
-        return block_diff(it->second.original, cur.value_or(""));
+        return agent::block_diff(it->second.original, cur.value_or(""), "original", "current");
     }
 
     if ( _changes.empty())

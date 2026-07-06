@@ -1,8 +1,37 @@
 #include "agent/text_utils.hpp"
 
 #include <cstring>
+#include <vector>
+#include <sstream>
+#include <algorithm>
 
 namespace agent {
+
+std::string block_diff(const std::string& old_text, const std::string& new_text,
+                       const std::string& from_label, const std::string& to_label) {
+    auto split = [](const std::string& s) {
+        std::vector<std::string> v; std::string line; std::istringstream is(s);
+        while ( std::getline(is, line)) v.push_back(line);
+        return v;
+    };
+    std::vector<std::string> o = split(old_text), n = split(new_text);
+    size_t p = 0;
+    while ( p < o.size() && p < n.size() && o[p] == n[p] ) ++p;
+    size_t s = 0;
+    while ( s < o.size() - p && s < n.size() - p && o[o.size() - 1 - s] == n[n.size() - 1 - s] ) ++s;
+
+    std::string out = "--- " + from_label + "\n+++ " + to_label + "\n";
+    size_t ctx_start = p > 2 ? p - 2 : 0;
+    for ( size_t i = ctx_start; i < p; ++i ) out += "  " + o[i] + "\n";
+    size_t shown = 0;
+    for ( size_t i = p; i < o.size() - s && shown < 200; ++i, ++shown ) out += "- " + o[i] + "\n";
+    shown = 0;
+    for ( size_t i = p; i < n.size() - s && shown < 200; ++i, ++shown ) out += "+ " + n[i] + "\n";
+    size_t ctx_end = std::min(o.size(), ( o.size() - s ) + 2 );
+    for ( size_t i = o.size() - s; i < ctx_end; ++i ) out += "  " + o[i] + "\n";
+    return out;
+}
+
 
 std::string normalize_text(std::string s) {
     struct Replacement {

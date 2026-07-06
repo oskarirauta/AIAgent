@@ -29,6 +29,7 @@ struct ConfirmRequest {
     std::string summary;     // full human-readable action / command
     std::string danger;      // reason string if the command is danger-listed, else empty
     std::string similar_key; // what "allow similar" would whitelist (e.g. program name)
+    std::string preview;     // optional diff/preview of the change (write_file/edit_file)
     bool can_similar = false;
 };
 

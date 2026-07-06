@@ -1443,8 +1443,21 @@ void InlineRepl::render_confirm_dialog(const tools::ConfirmRequest& req) {
     if ( !req.danger.empty())
         wr("\n" + _theme.danger + "⚠ dangerous command — " + req.danger + Theme::reset + "\n");
     wr("\n" + _theme.warn + "? " + req.tool + " wants to run:" + Theme::reset + "\n");
-    wr(_theme.warn + req.summary + Theme::reset + "\n\n");
-    wr(_theme.dim + "Select with ↑/↓ and press Enter (Esc denies). Letters do nothing." + Theme::reset + "\n");
+    wr(_theme.warn + req.summary + Theme::reset + "\n");
+
+    // Diff preview (write_file / edit_file): colour -/+ lines like a diff.
+    if ( !req.preview.empty()) {
+        wr("\n");
+        std::istringstream ps(req.preview);
+        std::string line;
+        while ( std::getline(ps, line)) {
+            std::string colour = _theme.dim;
+            if ( !line.empty() && line[0] == '+' ) colour = _theme.command;
+            else if ( !line.empty() && line[0] == '-' ) colour = _theme.danger;
+            wr(colour + line + Theme::reset + "\n");
+        }
+    }
+    wr("\n" + _theme.dim + "Select with ↑/↓ and press Enter (Esc denies). Letters do nothing." + Theme::reset + "\n");
 
     _confirm_selection = 0;   // Deny
     _confirm_menu_lines = 0;

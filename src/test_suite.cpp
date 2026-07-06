@@ -34,6 +34,7 @@
 #include "agent/tools/advisor.hpp"
 #include "agent/tools/workflow_tool.hpp"
 #include "agent/workflow.hpp"
+#include "agent/text_utils.hpp"
 
 static int passed = 0;
 static int failed = 0;
@@ -475,6 +476,14 @@ static void test_find_symbol() {
     check(r5.rfind("error:", 0) == 0, "rejects a non-identifier name");
 
     std::filesystem::remove_all(dir);
+}
+
+static void test_block_diff() {
+    std::cout << "block_diff" << std::endl;
+    std::string d = agent::block_diff("one\ntwo\nthree\n", "one\nTWO\nthree\n", "a", "b");
+    check(d.find("--- a") != std::string::npos && d.find("+++ b") != std::string::npos, "diff has labelled headers");
+    check(d.find("- two") != std::string::npos && d.find("+ TWO") != std::string::npos, "diff shows the changed line");
+    check(d.find("- one") == std::string::npos && d.find("- three") == std::string::npos, "unchanged edges are not shown as removed");
 }
 
 static void test_find_references() {
@@ -1221,6 +1230,7 @@ int main() {
     test_html_to_text();
     test_web_search_parse();
     test_find_symbol();
+    test_block_diff();
     test_find_references();
     test_pricing_and_cost();
     test_project_instructions();
