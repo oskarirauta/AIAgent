@@ -19,6 +19,7 @@ public:
     std::string log_level = "info";
     std::string system_prompt = "You are a helpful Linux CLI assistant.";
     std::string home_dir;
+    std::string theme = "dark"; // colour theme: dark | light | warm
     bool tools_enabled = true;
     bool confirm_tools = true;  // ask before confirmation-requiring tools
     bool insecure = false;      // run every tool without asking (implies no danger warnings)

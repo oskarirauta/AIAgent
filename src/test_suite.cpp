@@ -225,6 +225,19 @@ static void test_expand_tilde() {
     check(agent::Config::expand_tilde("rel/p") == "rel/p", "relative path unchanged");
 }
 
+static void test_conversation_undo() {
+    std::cout << "conversation undo" << std::endl;
+    agent::Conversation c;
+    c.set_system("sys");
+    c.add_user("q1"); c.add_assistant("a1");
+    c.add_user("q2"); c.add_assistant("a2");
+
+    check(c.undo_last() == "q2", "undo returns the last user message");
+    check(c.messages().size() == 3, "undo removes the last exchange");
+    check(c.undo_last() == "q1", "undo again returns the prior user message");
+    check(c.undo_last().empty(), "undo on empty history returns empty");
+}
+
 static void test_conversation_corrupt() {
     std::cout << "corrupt conversation handling" << std::endl;
     std::string path = "/tmp/ai_conv_bad.json";
@@ -382,6 +395,7 @@ int main() {
     std::cout << "Running AI Agent test suite\n" << std::endl;
 
     test_conversation_save_load();
+    test_conversation_undo();
     test_conversation_corrupt();
     test_expand_tilde();
     test_memory_loading();

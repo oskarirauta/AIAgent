@@ -14,6 +14,7 @@
 #include "agent/syntax_highlighter.hpp"
 #include "agent/tools/registry.hpp"
 #include "agent/token_stats.hpp"
+#include "agent/theme.hpp"
 
 namespace agent {
 
@@ -143,7 +144,11 @@ private:
     bool _reply_first_line = false; // the reply's first printed line gets the AI marker
 
     SyntaxHighlighter _highlighter{1};
+    Theme _theme = theme_dark();
     bool _raw_active = false;
+
+    // Handle the UI-local /theme command (returns text to display).
+    std::string apply_theme_command(const std::string& line);
 
     // ── concurrency ──────────────────────────────────────────────────────
     // The LLM turn runs on a worker thread; the main thread keeps reading the

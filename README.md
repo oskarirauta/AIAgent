@@ -150,12 +150,25 @@ Slash commands run locally (never sent to the model):
 | Command | Effect |
 |---------|--------|
 | `/help` | List the commands. |
+| `/about` | App description, version and current provider/model (alias `/info`). |
 | `/settings` | Show provider, model, tool mode, thinking, home, token usage. |
 | `/model [name]` | Show or change the active model. |
 | `/tools <confirm\|auto\|insecure>` | Change the tool confirmation mode. |
 | `/thinking <on\|off\|low\|medium\|high\|xhigh\|max>` | Set the thinking level (alias `/effort`; applied by Kimi). |
+| `/theme <dark\|light\|warm>` | Switch the colour theme. |
+| `/history` | List the messages in the current context. |
+| `/retry` | Re-run your last message. |
+| `/undo` | Remove the last exchange from history. |
 | `/clear` | Clear the conversation history (context). |
 | `/exit`, `/quit` | Leave. |
+
+### Themes
+
+Three eye-comfort colour themes tuned with muted 256-colour tones (never setting
+the background, so the terminal's own background is respected): `dark` (default,
+for dark terminals), `light` (for light terminals), and `warm` (low-blue, easier
+on tired eyes over long evening sessions). Set with `theme: <name>` in the config
+file or switch live with `/theme`.
 
 ## Security
 

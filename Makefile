@@ -2,6 +2,10 @@ all: world
 
 CXX?=g++
 CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include -g
+# Emit header dependency files (.d) so changing a header recompiles every source
+# that includes it — mixing objects built against different struct layouts causes
+# memory corruption at runtime.
+CXXFLAGS+=-MMD -MP
 LDFLAGS?=-L/usr/lib
 
 # Prefer pkg-config for curl when available, fallback to plain flags. The inline
@@ -126,3 +130,6 @@ test: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(
 .PHONY: clean
 clean:
 	@rm -rf objs agent test_runner
+
+# Pull in the generated per-object header dependencies (see -MMD above).
+-include $(wildcard objs/*.d)

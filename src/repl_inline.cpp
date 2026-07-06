@@ -96,7 +96,24 @@ static std::vector<std::string> word_wrap(const std::string& line, int width) {
 
 InlineRepl::InlineRepl(callback_t cb, const Config& config, const Conversation& conversation, const TokenStats& stats)
     : _callback(std::move(cb)), _config(config), _conversation(conversation), _stats(stats) {
+    _theme = theme_by_name(config.theme);
     g_instance = this;
+}
+
+std::string InlineRepl::apply_theme_command(const std::string& line) {
+    std::string arg;
+    {
+        std::istringstream iss(line);
+        std::string cmd;
+        iss >> cmd;       // "/theme"
+        iss >> arg;       // name
+    }
+    if ( arg.empty())
+        return "theme: " + _theme.name + "  (available: dark, light, warm)";
+    if ( arg != "dark" && arg != "light" && arg != "warm" )
+        return "unknown theme: " + arg + "  (available: dark, light, warm)";
+    _theme = theme_by_name(arg);
+    return "theme: " + _theme.name;
 }
 
 InlineRepl::~InlineRepl() {
@@ -183,24 +200,22 @@ std::string InlineRepl::style_spans(const std::string& line, Language lang) cons
 
     std::string out;
     for ( const auto& sp : spans ) {
-        std::string sgr;
-        if ( sp.color_pair == _highlighter.color_for_keyword()) sgr = "35";      // magenta
-        else if ( sp.color_pair == _highlighter.color_for_string()) sgr = "32";  // green
-        else if ( sp.color_pair == _highlighter.color_for_comment()) sgr = "90"; // gray
-        else if ( sp.color_pair == _highlighter.color_for_number()) sgr = "33";  // yellow
-        else if ( sp.color_pair == _highlighter.color_for_type()) sgr = "36";    // cyan
-        else if ( sp.color_pair == _highlighter.color_for_fence()) sgr = "90";   // gray
+        std::string color;
+        if ( sp.color_pair == _highlighter.color_for_keyword()) color = _theme.kw;
+        else if ( sp.color_pair == _highlighter.color_for_string()) color = _theme.str;
+        else if ( sp.color_pair == _highlighter.color_for_comment()) color = _theme.dim;
+        else if ( sp.color_pair == _highlighter.color_for_number()) color = _theme.num;
+        else if ( sp.color_pair == _highlighter.color_for_type()) color = _theme.type;
+        else if ( sp.color_pair == _highlighter.color_for_fence()) color = _theme.dim;
 
-        bool styled = !sgr.empty() || sp.bold;
+        bool styled = !color.empty() || sp.bold;
         if ( styled ) {
-            out += "\033[";
-            if ( sp.bold ) { out += "1"; if ( !sgr.empty()) out += ";"; }
-            out += sgr;
-            out += "m";
+            if ( sp.bold ) out += "\033[1m";
+            out += color;
         }
         out += sp.text;
         if ( styled )
-            out += "\033[0m";
+            out += Theme::reset;
     }
     return out;
 }
@@ -212,7 +227,7 @@ void InlineRepl::emit_styled_line(const std::string& line) {
     auto next_prefix = [this]() -> std::string {
         if ( _reply_first_line ) {
             _reply_first_line = false;
-            return "\033[1;32m●\033[0m ";
+            return _theme.ai + "● " + Theme::reset;
         }
         return "  ";
     };
@@ -227,7 +242,7 @@ void InlineRepl::emit_styled_line(const std::string& line) {
             _in_code = false;
             _code_lang = Language::none;
         }
-        wr(next_prefix() + "\033[90m" + line + "\033[0m");
+        wr(next_prefix() + _theme.dim + line + "\033[0m");
         return;
     }
 
@@ -297,7 +312,7 @@ void InlineRepl::echo_user(const std::string& display) {
     bool first = true;
     auto emit = [&](const std::string& seg) {
         if ( first ) {
-            wr("\033[1;36m›\033[0m " + seg + "\n");
+            wr(_theme.user + "› " + Theme::reset + seg + "\n");
             first = false;
         } else {
             wr("  " + seg + "\n"); // continuation / block lines align under the text
@@ -341,21 +356,21 @@ void InlineRepl::echo_user(const std::string& display) {
             while ( std::getline(cs, cl))
                 plines.push_back(cl);
         }
-        std::string header = "\033[90m── pasted · " + std::to_string(plines.size()) + " lines ";
+        std::string header = _theme.dim + "── pasted · " + std::to_string(plines.size()) + " lines ";
         int hw = static_cast<int>(split_cells("── pasted · " + std::to_string(plines.size()) + " lines ").size());
         for ( int i = hw; i < width; ++i ) header += "─";
         emit(header + "\033[0m");
         for ( const auto& pl : plines )
-            emit("\033[90m" + sanitize_display(pl) + "\033[0m");
+            emit(_theme.dim + sanitize_display(pl) + "\033[0m");
         std::string footer;
         for ( int i = 0; i < width; ++i ) footer += "─";
-        emit("\033[90m" + footer + "\033[0m");
+        emit(_theme.dim + footer + "\033[0m");
 
         pos = best + which->placeholder.size();
     }
 
     if ( first ) // empty message (shouldn't happen, but stay safe)
-        wr("\033[1;36m›\033[0m\n");
+        wr(_theme.user + "›" + Theme::reset + "\n");
 }
 
 void InlineRepl::begin_reply() {
@@ -426,11 +441,11 @@ std::string InlineRepl::status_line() const {
 
         // Pre-styled: a bright spinner + label stands out against the dim idle
         // status line. (draw_live prints this verbatim while a turn is running.)
-        std::string s = "\033[1;96m" + std::string(frame) + "\033[0m "
-                      + "\033[96m" + what + " " + std::to_string(secs) + "s\033[0m"
-                      + " \033[90m(Ctrl-C to interrupt)\033[0m";
+        std::string s = _theme.accent + std::string(frame) + Theme::reset + " "
+                      + _theme.accent + what + " " + std::to_string(secs) + "s" + Theme::reset
+                      + " " + _theme.dim + "(Ctrl-C to interrupt)" + Theme::reset;
         if ( queued > 0 )
-            s += " \033[90m·\033[0m \033[93m" + std::to_string(queued) + " queued\033[0m";
+            s += " " + _theme.dim + "·" + Theme::reset + " " + _theme.warn + std::to_string(queued) + " queued" + Theme::reset;
         return s;
     }
 
@@ -516,7 +531,7 @@ void InlineRepl::draw_live() {
     std::string prompt = prefix;
     for ( const auto& c : vis ) {
         if ( c == "\n" )
-            prompt += "\033[90m↵\033[0m"; // newline shown as a dim, single-cell glyph
+            prompt += _theme.dim + "↵" + Theme::reset; // newline shown as a dim, single-cell glyph
         else
             prompt += c;
     }
@@ -548,11 +563,11 @@ void InlineRepl::draw_live() {
     // Input line sits between two separators (transcript above, status below) so
     // the status text is never mistaken for the user's own typing.
     std::string out = ( _live_lines > 0 ) ? "\r\033[1A\033[J" : "\r\033[J";
-    out += "\033[90m" + sep + "\033[0m\r\n"; // separator: transcript | input
+    out += _theme.dim + sep + "\033[0m\r\n"; // separator: transcript | input
     out += prompt;
     out += "\r\n";
-    out += "\033[90m" + sep + "\033[0m\r\n"; // separator: input | status
-    out += status_prestyled ? status : ("\033[90m" + status + "\033[0m"); // status
+    out += _theme.dim + sep + "\033[0m\r\n"; // separator: input | status
+    out += status_prestyled ? status : (_theme.dim + status + "\033[0m"); // status
     out += "\033[2A\r";                      // back up to the prompt line
     if ( cursor_col > 0 )
         out += "\033[" + std::to_string(cursor_col) + "C";
@@ -712,7 +727,7 @@ void InlineRepl::run() {
     wr("\033[H\033[2J\033[3J");
 
     wr("\033[1magent\033[0m — " + _config.provider + " · " + _config.model + "\n");
-    wr("\033[90mType your message. /exit or /quit to leave, Ctrl-C to interrupt.\033[0m\n\n");
+    wr(_theme.dim + "Type your message. /exit or /quit to leave, Ctrl-C to interrupt." + Theme::reset + "\n\n");
 
     _history_index = _prompt_history.size();
     draw_live();
@@ -792,8 +807,24 @@ void InlineRepl::on_enter() {
         _input_window_start = 0;
         _pastes.clear();
 
-        std::string result = _command_cb ? _command_cb(trimmed)
-                                         : ("unknown command: " + trimmed);
+        // /retry pops the last exchange and re-runs the prompt as a fresh turn.
+        if ( trimmed == "/retry" ) {
+            std::string prompt = _command_cb ? _command_cb("/retry") : "nothing to retry";
+            if ( prompt.empty() || prompt == "nothing to retry" )
+                render_command(trimmed, "nothing to retry");
+            else if ( _turn_running ) {
+                _pending.push(prompt);
+                render_command(trimmed, "queued retry");
+            } else
+                start_turn(prompt, prompt);
+            return;
+        }
+
+        std::string result;
+        if ( trimmed == "/theme" || trimmed.rfind("/theme ", 0) == 0 )
+            result = apply_theme_command(trimmed); // UI-local: only touches this renderer
+        else
+            result = _command_cb ? _command_cb(trimmed) : ("unknown command: " + trimmed);
         render_command(trimmed, result);
         return;
     }
@@ -961,7 +992,7 @@ void InlineRepl::draw_confirm_menu(const tools::ConfirmRequest& req, bool redraw
         if ( i == _confirm_selection )
             out += "\033[1;7m ❯ " + opts[i] + " \033[0m";  // highlighted (reverse video)
         else
-            out += "\033[90m   " + opts[i] + "\033[0m";
+            out += _theme.dim + "   " + opts[i] + Theme::reset;
         out += "\r\n";
     }
     wr(out);
@@ -971,7 +1002,7 @@ void InlineRepl::draw_confirm_menu(const tools::ConfirmRequest& req, bool redraw
 void InlineRepl::render_command(const std::string& cmd, const std::string& result) {
     erase_live();
     // A system message: the command echoed with a ⚙ marker, then its result.
-    wr("\n\033[1;35m⚙\033[0m " + cmd + "\n");
+    wr("\n" + _theme.command + "⚙ " + Theme::reset + cmd + "\n");
     int width = term_cols() - 4;
     if ( width < 8 ) width = 8;
     std::istringstream ls(result);
@@ -991,10 +1022,10 @@ void InlineRepl::render_confirm_dialog(const tools::ConfirmRequest& req) {
     tcflush(STDIN_FILENO, TCIFLUSH);
 
     if ( !req.danger.empty())
-        wr("\n\033[1;31m⚠ dangerous command — " + req.danger + "\033[0m\n");
-    wr("\n\033[1;33m? " + req.tool + " wants to run:\033[0m\n");
-    wr("\033[33m" + req.summary + "\033[0m\n\n");
-    wr("\033[90mSelect with ↑/↓ and press Enter (Esc denies). Letters do nothing.\033[0m\n");
+        wr("\n" + _theme.danger + "⚠ dangerous command — " + req.danger + Theme::reset + "\n");
+    wr("\n" + _theme.warn + "? " + req.tool + " wants to run:" + Theme::reset + "\n");
+    wr(_theme.warn + req.summary + Theme::reset + "\n\n");
+    wr(_theme.dim + "Select with ↑/↓ and press Enter (Esc denies). Letters do nothing." + Theme::reset + "\n");
 
     _confirm_selection = 0;   // Deny
     _confirm_menu_lines = 0;

@@ -134,6 +134,7 @@ void Config::load(const std::string& path) {
         else if ( key == "oauth_host" ) oauth_host = value;
         else if ( key == "oauth_client_id" ) oauth_client_id = value;
         else if ( key == "log_level" ) log_level = value;
+        else if ( key == "theme" ) theme = value;
         else if ( key == "system_prompt" ) system_prompt = value;
         else if ( key == "home_dir" ) home_dir = expand_tilde(value);
         else if ( key == "tools_enabled" ) tools_enabled = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");

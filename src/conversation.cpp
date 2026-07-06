@@ -57,6 +57,17 @@ void Conversation::clear() {
     _messages.clear();
 }
 
+std::string Conversation::undo_last() {
+    for ( size_t i = _messages.size(); i-- > 0; ) {
+        if ( _messages[i].role == Role::USER ) {
+            std::string content = _messages[i].content;
+            _messages.erase(_messages.begin() + i, _messages.end());
+            return content;
+        }
+    }
+    return "";
+}
+
 void Conversation::save(const std::string& path) const {
 
     JSON arr = JSON::Array{};

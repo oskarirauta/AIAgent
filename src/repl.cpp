@@ -167,12 +167,68 @@ std::string Repl::handle_command(const std::string& line) {
     if ( cmd == "/help" ) {
         return "commands:\n"
                "  /help                    show this help\n"
+               "  /about                   about the app, version, provider/model (alias /info)\n"
                "  /settings                show current settings\n"
                "  /model [name]            show or change the model\n"
                "  /tools <confirm|auto|insecure>   set the tool confirmation mode\n"
                "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
+               "  /theme <dark|light|warm> switch the colour theme\n"
+               "  /history                 list the messages in the current context\n"
+               "  /retry                   re-run your last message\n"
+               "  /undo                    remove the last exchange from history\n"
                "  /clear                   clear the conversation history\n"
                "  /exit, /quit             leave";
+    }
+
+    if ( cmd == "/history" ) {
+        std::string s;
+        int n = 0;
+        for ( const auto& m : _conversation.messages()) {
+            if ( m.role == Role::SYSTEM )
+                continue;
+            std::string who = ( m.role == Role::USER ) ? "you" :
+                              ( m.role == Role::ASSISTANT ) ? "ai" : "tool";
+            std::string first = m.content.substr(0, m.content.find('\n'));
+            if ( first.size() > 70 )
+                first = first.substr(0, 70) + "…";
+            if ( first.empty() && !m.tool_calls.empty())
+                first = "(tool call)";
+            s += who + ": " + first + "\n";
+            ++n;
+        }
+        if ( n == 0 )
+            return "(no messages yet)";
+        s += "\n" + std::to_string(n) + " message(s) in context";
+        return s;
+    }
+
+    if ( cmd == "/undo" ) {
+        std::string removed = _conversation.undo_last();
+        if ( removed.empty())
+            return "nothing to undo";
+        save_conversation();
+        return "removed the last exchange";
+    }
+
+    if ( cmd == "/retry" ) {
+        std::string last = _conversation.undo_last();
+        if ( last.empty())
+            return "nothing to retry";
+        save_conversation();
+        return last; // the inline REPL re-submits this as a fresh turn
+    }
+
+    if ( cmd == "/info" || cmd == "/about" ) {
+        return "agent version 0.1.0\n"
+               "A lightweight, local C++ AI assistant for the command line, a\n"
+               "provider-agnostic alternative to tools like Kimi Code and Claude Code.\n"
+               "It chats, reads/writes files, runs commands and greps — with per-provider\n"
+               "history and memory, tool-call safety, and subscription auth for Kimi/Claude.\n"
+               "\n"
+               "provider:  " + _config.provider + "\n"
+               "model:     " + _config.model + "\n"
+               "\n"
+               "Type /help for commands.";
     }
 
     if ( cmd == "/settings" ) {

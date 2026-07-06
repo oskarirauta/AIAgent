@@ -44,6 +44,11 @@ public:
     const std::vector<Message>& messages() const { return _messages; }
     void clear();
 
+    // Remove the most recent exchange: everything from the last user message to
+    // the end (its assistant reply and any tool messages). Returns the removed
+    // user message's content, or empty if there was nothing to undo.
+    std::string undo_last();
+
     void save(const std::string& path) const;
     void load(const std::string& path);
 
