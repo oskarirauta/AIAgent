@@ -98,7 +98,6 @@ static std::vector<std::string> word_wrap(const std::string& line, int width) {
 InlineRepl::InlineRepl(callback_t cb, const Config& config, const Conversation& conversation, const TokenStats& stats)
     : _callback(std::move(cb)), _config(config), _conversation(conversation), _stats(stats) {
     _theme = theme_by_name(config.theme);
-    _multiline = config.multiline;
 }
 
 std::string InlineRepl::apply_theme_command(const std::string& line) {
@@ -480,62 +479,169 @@ void InlineRepl::set_activity(const std::string& activity) {
 }
 
 void InlineRepl::erase_live() {
-    // The cursor rests on the input line, two lines below the block top (blank
-    // spacer + separator) — step up two lines before clearing so the whole block
-    // is removed.
+    // Step up from the cursor to the block top (_live_cursor_up lines) before
+    // clearing, so the whole block is removed regardless of its height.
     if ( _live_lines > 0 )
-        wr("\r\033[2A\033[J");
+        wr("\r\033[" + std::to_string(_live_cursor_up) + "A\033[J");
     else
         wr("\r\033[J");
     _live_lines = 0;
 }
 
+std::vector<std::pair<size_t, size_t>> InlineRepl::wrap_input(int width) const {
+    if ( width < 1 ) width = 1;
+    std::vector<std::pair<size_t, size_t>> lines;
+    size_t line_start = 0;
+    int col = 0;
+    size_t i = 0;
+    while ( i < _input.size()) {
+        if ( _input[i] == '\n' ) {
+            lines.push_back({ line_start, i });
+            ++i;
+            line_start = i;
+            col = 0;
+            continue;
+        }
+        size_t j = i + 1;
+        while ( j < _input.size() && (static_cast<unsigned char>(_input[j]) & 0xC0) == 0x80 )
+            ++j;
+        if ( col == width ) {                 // wrap before this codepoint
+            lines.push_back({ line_start, i });
+            line_start = i;
+            col = 0;
+        }
+        ++col;
+        i = j;
+    }
+    lines.push_back({ line_start, _input.size() });
+    return lines;
+}
+
+// Locate _cursor within a wrapped layout: row index and display column.
+static void locate_cursor(const std::vector<std::pair<size_t, size_t>>& lines,
+                          const std::string& input, size_t cursor, int& row, int& col) {
+    auto width = [](const std::string& s) {
+        int w = 0;
+        for ( unsigned char ch : s )
+            if ( (ch & 0xC0) != 0x80 ) ++w;
+        return w;
+    };
+    for ( size_t r = 0; r < lines.size(); ++r ) {
+        bool last = ( r + 1 == lines.size());
+        bool wrap_next = !last && lines[r + 1].first == lines[r].second;
+        if ( cursor < lines[r].second || ( cursor == lines[r].second && !wrap_next )) {
+            row = static_cast<int>(r);
+            col = width(input.substr(lines[r].first, cursor - lines[r].first));
+            return;
+        }
+        if ( last ) {
+            row = static_cast<int>(r);
+            col = width(input.substr(lines[r].first, cursor - lines[r].first));
+        }
+    }
+}
+
+bool InlineRepl::multiline_vertical(int dir) {
+    int width = term_cols() - 2 - 1;
+    if ( width < 1 ) width = 1;
+    auto lines = wrap_input(width);
+    if ( lines.size() <= 1 )
+        return false; // single visual line — let history handle Up/Down
+
+    int row = 0, col = 0;
+    locate_cursor(lines, _input, _cursor, row, col);
+
+    int target = row + dir;
+    if ( target < 0 || target >= static_cast<int>(lines.size()))
+        return false; // at the top / bottom edge
+
+    // Walk `col` display columns into the target line.
+    size_t off = lines[target].first;
+    int c = 0;
+    while ( off < lines[target].second && c < col ) {
+        size_t j = off + 1;
+        while ( j < _input.size() && (static_cast<unsigned char>(_input[j]) & 0xC0) == 0x80 )
+            ++j;
+        off = j;
+        ++c;
+    }
+    _cursor = off;
+    return true;
+}
+
 void InlineRepl::draw_live() {
     int cols = term_cols();
-
-    // Prompt line: a fixed "> " prefix followed by a horizontal window over the
-    // input. The prefix never scrolls away, "…" marks clipped ends, and one
-    // right-hand column is always left blank so we never write the terminal's
-    // last cell (which would trigger auto-wrap and corrupt the in-place redraw).
-    const std::string prefix = "> ";
     const int prefix_w = 2;
 
-    std::vector<std::string> in_cells = split_cells(_input);
-    int total = static_cast<int>(in_cells.size());
-    int cursor_pos = display_width(_input.substr(0, _cursor));
+    // Build the input as one or more visual lines, each (prefix, body), plus the
+    // cursor's row within them and display column (excluding the prefix).
+    std::vector<std::pair<std::string, std::string>> vlines;
+    int cur_row = 0, cur_col = 0;
 
-    int win = cols - prefix_w - 1;
-    if ( win < 1 )
-        win = 1;
-
-    int start = static_cast<int>(_input_window_start);
-    if ( total <= win ) {
-        start = 0;
+    if ( !_config.multiline ) {
+        // Single line with a horizontal window; "…" marks clipped ends and one
+        // right-hand column stays blank to avoid the terminal's auto-wrap.
+        std::vector<std::string> in_cells = split_cells(_input);
+        int total = static_cast<int>(in_cells.size());
+        int cursor_pos = display_width(_input.substr(0, _cursor));
+        int win = cols - prefix_w - 1;
+        if ( win < 1 ) win = 1;
+        int start = static_cast<int>(_input_window_start);
+        if ( total <= win ) start = 0;
+        else {
+            if ( cursor_pos < start ) start = cursor_pos;
+            else if ( cursor_pos > start + win - 1 ) start = cursor_pos - (win - 1);
+            if ( start > total - win ) start = total - win;
+            if ( start < 0 ) start = 0;
+        }
+        _input_window_start = static_cast<size_t>(start);
+        bool clip_left = start > 0;
+        bool clip_right = start + win < total;
+        std::vector<std::string> vis;
+        for ( int i = start; i < start + win && i < total; ++i )
+            vis.push_back(in_cells[i]);
+        if ( clip_left && !vis.empty()) vis.front() = "…";
+        if ( clip_right && !vis.empty()) vis.back() = "…";
+        std::string body;
+        for ( const auto& ch : vis ) {
+            if ( ch == "\n" ) body += _theme.dim + "↵" + Theme::reset; // newline glyph
+            else body += ch;
+        }
+        vlines.push_back({ "> ", body });
+        cur_row = 0;
+        cur_col = cursor_pos - start;
     } else {
-        if ( cursor_pos < start ) start = cursor_pos;
-        else if ( cursor_pos > start + win - 1 ) start = cursor_pos - (win - 1);
-        if ( start > total - win ) start = total - win;
-        if ( start < 0 ) start = 0;
+        // Multi-line: wrap the whole input; window vertically around the cursor.
+        int width = cols - prefix_w - 1;
+        if ( width < 1 ) width = 1;
+        auto ranges = wrap_input(width);
+        int full_row = 0;
+        locate_cursor(ranges, _input, _cursor, full_row, cur_col);
+
+        int nrows = static_cast<int>(ranges.size());
+        int maxrows = 12;
+        struct winsize ws;
+        if ( ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 8 )
+            maxrows = std::min(maxrows, static_cast<int>(ws.ws_row) - 6);
+        if ( maxrows < 3 ) maxrows = 3;
+
+        int first = 0, count = nrows;
+        if ( nrows > maxrows ) {
+            first = full_row - maxrows / 2;
+            if ( first < 0 ) first = 0;
+            if ( first > nrows - maxrows ) first = nrows - maxrows;
+            count = maxrows;
+        }
+        cur_row = full_row - first;
+        for ( int r = first; r < first + count; ++r ) {
+            std::string body = _input.substr(ranges[r].first, ranges[r].second - ranges[r].first);
+            std::string pfx;
+            if ( r == 0 ) pfx = "> ";
+            else if ( r == first && first > 0 ) pfx = _theme.dim + "⋮ " + Theme::reset; // more above
+            else pfx = "  ";
+            vlines.push_back({ pfx, body });
+        }
     }
-    _input_window_start = static_cast<size_t>(start);
-
-    bool clip_left = start > 0;
-    bool clip_right = start + win < total;
-
-    std::vector<std::string> vis;
-    for ( int i = start; i < start + win && i < total; ++i )
-        vis.push_back(in_cells[i]);
-    if ( clip_left && !vis.empty()) vis.front() = "…";
-    if ( clip_right && !vis.empty()) vis.back() = "…";
-
-    std::string prompt = prefix;
-    for ( const auto& c : vis ) {
-        if ( c == "\n" )
-            prompt += _theme.dim + "↵" + Theme::reset; // newline shown as a dim, single-cell glyph
-        else
-            prompt += c;
-    }
-    int cursor_col = prefix_w + (cursor_pos - start);
 
     // Status line. While a turn runs it is pre-styled (bright spinner) and short,
     // so it is printed verbatim; the idle status is plain text, clipped to leave
@@ -553,27 +659,28 @@ void InlineRepl::draw_live() {
         }
     }
 
-    // Separator rule dividing the transcript above from the input below.
     std::string sep;
     for ( int i = 0; i < cols; ++i )
-        sep += "─"; // ─
+        sep += "─";
 
-    // The live block is 5 lines: a blank spacer, the transcript|input separator,
-    // the input line, the input|status separator, and the status. A leading blank
-    // gives breathing room between the transcript and the separator. The cursor
-    // rests on the input line, two lines below the block top.
-    std::string out = ( _live_lines > 0 ) ? "\r\033[2A\033[J" : "\r\033[J";
-    out += "\r\n";                           // blank spacer above the separator
-    out += _theme.dim + sep + "\033[0m\r\n"; // separator: transcript | input
-    out += prompt;
-    out += "\r\n";
-    out += _theme.dim + sep + "\033[0m\r\n"; // separator: input | status
+    // Block layout: blank spacer, separator, the K input lines, separator, status.
+    int K = static_cast<int>(vlines.size());
+    std::string out = ( _live_lines > 0 ) ? ("\r\033[" + std::to_string(_live_cursor_up) + "A\033[J")
+                                          : "\r\033[J";
+    out += "\r\n";                            // blank spacer above the separator
+    out += _theme.dim + sep + "\033[0m\r\n";  // separator: transcript | input
+    for ( const auto& vl : vlines )
+        out += vl.first + vl.second + "\r\n";
+    out += _theme.dim + sep + "\033[0m\r\n";  // separator: input | status
     out += status_prestyled ? status : (_theme.dim + status + "\033[0m"); // status
-    out += "\033[2A\r";                      // back up to the input line
-    if ( cursor_col > 0 )
-        out += "\033[" + std::to_string(cursor_col) + "C";
+
+    out += "\033[" + std::to_string(1 + K - cur_row) + "A\r"; // status up to the cursor's input line
+    int screen_col = prefix_w + cur_col;
+    if ( screen_col > 0 )
+        out += "\033[" + std::to_string(screen_col) + "C";
     wr(out);
-    _live_lines = 5;
+    _live_lines = 4 + K;
+    _live_cursor_up = 2 + cur_row;
 }
 
 // ── input editing ───────────────────────────────────────────────────────
@@ -1191,6 +1298,7 @@ void InlineRepl::open_settings_menu() {
         { "off", "low", "medium", "high", "xhigh", "max" } });
     _settings_rows.push_back({ "context", "context",
         first_word(cur.count("context") ? cur["context"] : "unlimited"), {} });
+    _settings_rows.push_back({ "multiline", "multiline", _config.multiline ? "on" : "off", { "off", "on" } });
 
     erase_live();
     tcflush(STDIN_FILENO, TCIFLUSH); // ignore anything typed before the menu opened
@@ -1244,7 +1352,7 @@ void InlineRepl::cycle_settings_row(int dir) {
     if ( row.key == "theme" )
         apply_theme_command("/theme " + row.value);
     else if ( _command_cb )
-        _command_cb("/" + row.key + " " + row.value);
+        _command_cb("/settings " + row.key + " " + row.value); // /settings delegates per key
     draw_settings_menu(true);
 }
 
@@ -1479,8 +1587,8 @@ void InlineRepl::handle_byte(int c) {
             }
             if ( seq == "D" ) { move_left(); draw_live(); }
             else if ( seq == "C" ) { move_right(); draw_live(); }
-            else if ( seq == "A" ) { history_prev(); draw_live(); }
-            else if ( seq == "B" ) { history_next(); draw_live(); }
+            else if ( seq == "A" ) { if ( !_config.multiline || !multiline_vertical(-1)) history_prev(); draw_live(); }
+            else if ( seq == "B" ) { if ( !_config.multiline || !multiline_vertical(+1)) history_next(); draw_live(); }
             else if ( seq == "H" || seq == "1~" || seq == "7~" ) { _cursor = 0; draw_live(); }
             else if ( seq == "F" || seq == "4~" || seq == "8~" ) { _cursor = _input.size(); draw_live(); }
             else if ( seq == "3~" ) { // Delete (forward)

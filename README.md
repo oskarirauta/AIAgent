@@ -152,7 +152,7 @@ Slash commands run locally (never sent to the model):
 | `/help` | List the commands. |
 | `/about` | App description, version and current provider/model (alias `/info`). |
 | `/settings` | Open the interactive settings menu (↑/↓ select, ←/→ change, Enter edit/apply, Esc close). |
-| `/settings <key> <value>` | Set a value directly: `context` (`auto`, `64K`, or `0` = unlimited), `model`, `tools`, `strict`, `thinking`. |
+| `/settings <key> <value>` | Set a value directly: `context` (`auto`, `64K`, or `0` = unlimited), `multiline` (`on`/`off`), `model`, `tools`, `strict`, `thinking`. |
 | `/model [name]` | Show or change the active model. |
 | `/tools <confirm\|auto\|insecure>` | Change the tool confirmation mode. |
 | `/thinking <on\|off\|low\|medium\|high\|xhigh\|max>` | Set the thinking level (alias `/effort`; applied by Kimi). |
@@ -164,6 +164,15 @@ Slash commands run locally (never sent to the model):
 | `/undo` | Remove the last exchange from history. |
 | `/clear` | Clear the conversation history (context). |
 | `/exit`, `/quit` | Leave. |
+
+### Input
+
+Enter (CR) submits; **Ctrl-J** or **Alt+Enter** inserts a newline. Turn on
+`multiline` (config `multiline: on` or `/settings multiline on`) to see long or
+multi-line prompts wrapped across several lines instead of one horizontally
+scrolling line — ↑/↓ then move between the input lines (and fall back to history
+at the top/bottom). Large pastes stay collapsed into `[paste #N]` placeholders in
+either mode.
 
 ### Themes
 

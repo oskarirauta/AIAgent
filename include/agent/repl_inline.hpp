@@ -154,7 +154,6 @@ private:
 
     int _live_lines = 0;                // physical lines the live block currently occupies
     int _live_cursor_up = 2;            // lines from the cursor up to the block top (for erase/redraw)
-    bool _multiline = false;            // multi-line prompt: wrap the input across visual lines
     bool _in_reply = false;             // between begin_reply()/end_reply()
 
     // Streaming line buffer + fenced-code state for syntax highlighting.

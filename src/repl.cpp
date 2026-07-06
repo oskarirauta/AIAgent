@@ -301,7 +301,14 @@ std::string Repl::handle_command(const std::string& line) {
                      ? std::string("context: unlimited")
                      : "context: " + std::to_string(_config.context_limit) + " tokens";
             }
-            return "unknown setting: " + key + "  (model, tools, strict, thinking, context; theme via /theme)";
+            if ( key == "multiline" ) {
+                std::string v = common::to_lower(val);
+                if ( v == "on" || v == "true" || v == "1" || v == "yes" ) _config.multiline = true;
+                else if ( v == "off" || v == "false" || v == "0" || v == "no" ) _config.multiline = false;
+                else return "usage: /settings multiline <on|off>";
+                return std::string("multiline: ") + ( _config.multiline ? "on" : "off" );
+            }
+            return "unknown setting: " + key + "  (model, tools, strict, thinking, context, multiline; theme via /theme)";
         }
 
         std::string tools = !_config.tools_enabled ? "off"
@@ -320,6 +327,7 @@ std::string Repl::handle_command(const std::string& line) {
             ctx = _config.context_limit == 0 ? "unlimited" : std::to_string(_config.context_limit) + " tokens";
         }
         s += "context:   " + ctx + "\n";
+        s += "multiline: " + std::string( _config.multiline ? "on" : "off" ) + "\n";
         s += "home:      " + _config.home_dir + "\n";
         s += "tokens:    ctx " + std::to_string(_stats.context_tokens.load()) +
              ", session " + std::to_string(_stats.session_total());
