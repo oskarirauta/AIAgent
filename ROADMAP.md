@@ -38,6 +38,9 @@ each list is roughly the current priority order.
   Off by default; toggle with `/settings auto_compact on|off`. Inactive unless a
   context budget is known (`context: auto` or an explicit limit).
 - **SIGWINCH**: the live block redraws at the new width on terminal resize.
+- **Line editing**: the inline REPL supports Ctrl-A/E (line ends) and Ctrl-W/U/K
+  (delete word / kill to line start / kill to line end), respecting logical line
+  boundaries and pruning removed paste placeholders.
 - **`/advisor`** (claude only): exposes a `consult_advisor` tool so the main model
   can ask a stronger sibling model (e.g. sonnet → opus) for a second opinion on a
   hard problem. `/advisor <on|off|model <name>>`; the consult is a one-shot,
