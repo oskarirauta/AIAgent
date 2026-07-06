@@ -137,7 +137,11 @@ void Kimi::apply_provider_options(const JSON& options) {
                 _thinking_enabled = true;
                 _thinking_effort.clear();
             } else {
-                // treat any other value as an explicit effort level
+                // Explicit effort level. The Kimi coding endpoint only accepts
+                // low/medium/high (xhigh/max return HTTP 400), so normalise the
+                // higher UI levels down to high.
+                if ( lower == "xhigh" || lower == "max" )
+                    lower = "high";
                 _thinking_enabled = true;
                 _thinking_effort = lower;
             }

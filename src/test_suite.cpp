@@ -147,6 +147,23 @@ static void test_anthropic_request() {
     check(req["messages"][0]["role"].to_string() == "user", "user role");
 }
 
+static void test_kimi_thinking_effort() {
+    std::cout << "kimi thinking effort" << std::endl;
+    agent::Config cfg;
+    agent::providers::Kimi k(cfg);
+    agent::Conversation c;
+    c.add_user("hi");
+
+    k.apply_provider_options(JSON::Object{ { "thinking", "xhigh" } });
+    JSON req = k.build_request(c, JSON::Array{});
+    check(req.contains("thinking"), "kimi sends a thinking field");
+    check(req["thinking"]["effort"].to_string() == "high", "xhigh normalised to high (Kimi API rejects xhigh)");
+
+    k.apply_provider_options(JSON::Object{ { "thinking", "off" } });
+    req = k.build_request(c, JSON::Array{});
+    check(req["thinking"]["type"].to_string() == "disabled", "off disables thinking");
+}
+
 static void test_provider_capabilities() {
     std::cout << "provider capabilities" << std::endl;
     agent::Config cfg;
@@ -556,6 +573,7 @@ int main() {
     test_reasoning_content();
     test_ollama_request();
     test_anthropic_request();
+    test_kimi_thinking_effort();
     test_provider_capabilities();
     test_provider_options_config();
     test_claude_provider();
