@@ -29,17 +29,17 @@ each list is roughly the current priority order.
 - **Paste preview**: `paste_preview` trims a framed paste's echo to the first N
   lines + "… N more lines" (full text still sent to the model).
 - **Slash commands**: `/about /settings /model /tools /strict /thinking /theme
-  /stream /history /retry /undo /memories /context /clear /help`.
+  /stream /history /retry /undo /memories /context /compact /clear (/reset) /help`.
+- **`/compact`**: one LLM call summarises the history and replaces it; runs async
+  with a "compacting" spinner (Ctrl-C cancels).
+- **SIGWINCH**: the live block redraws at the new width on terminal resize.
 
 ## Planned
 
-- **`/compact`**: summarise history when it grows (trimming is done; summarisation
-  is the remaining piece).
 - **Autocomplete**: slash commands and file paths.
 - **Settable paste thresholds** in `/settings` (the char/line/ms thresholds exist in
   config but are not yet exposed in the menu).
 - **`/provider` switching** mid-session (needs re-auth + a fresh conversation).
-- **`SIGWINCH`** handling — redraw the live block on terminal resize.
 - **Config-extensible danger/safe command lists**.
 - **`/btw`** (mid-turn note) and **`/tasks`** (agent todo list) — Claude Code-style
   harness features; provider-agnostic if built as app features, sizeable.
