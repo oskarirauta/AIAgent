@@ -390,7 +390,7 @@ static void test_settings_persistence() {
     agent::Config::save_last_used(home, "kimi", "kimi-for-coding");
 
     agent::Config c;
-    c.theme = "warm"; c.multiline = true; c.thinking = "on";
+    c.theme = "warm"; c.multiline = true; c.thinking = "on"; c.thinking_stream = false;
     c.context_auto = true; c.context_limit = 65536;
     c.save_settings(home);
 
@@ -400,6 +400,7 @@ static void test_settings_persistence() {
     check(last.has_settings, "settings block present");
     check(last.theme == "warm", "theme persisted");
     check(last.multiline, "multiline persisted");
+    check(!last.thinking_stream, "thinking_stream persisted");
     check(last.thinking == "on", "thinking persisted");
     check(last.context_auto, "context_auto persisted");
     check(last.context_limit == 65536, "context_limit persisted");

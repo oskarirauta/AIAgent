@@ -1297,6 +1297,7 @@ void InlineRepl::open_settings_menu() {
         cur["tools"].find("(strict)") != std::string::npos ? "on" : "off", { "off", "on" } });
     _settings_rows.push_back({ "thinking", "thinking", th,
         { "off", "on", "low", "medium", "high", "xhigh", "max" } });
+    _settings_rows.push_back({ "thinking_stream", "stream", _config.thinking_stream ? "on" : "off", { "off", "on" } });
     _settings_rows.push_back({ "context", "context",
         first_word(cur.count("context") ? cur["context"] : "unlimited"), {} });
     _settings_rows.push_back({ "multiline", "multiline", _config.multiline ? "on" : "off", { "off", "on" } });

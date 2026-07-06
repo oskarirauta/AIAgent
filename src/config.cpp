@@ -274,6 +274,8 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.thinking = s["thinking"].to_string();
             if ( s.contains("multiline") && s["multiline"] == JSON::TYPE::BOOL )
                 last.multiline = s["multiline"].to_bool();
+            if ( s.contains("thinking_stream") && s["thinking_stream"] == JSON::TYPE::BOOL )
+                last.thinking_stream = s["thinking_stream"].to_bool();
             if ( s.contains("context_auto") && s["context_auto"] == JSON::TYPE::BOOL )
                 last.context_auto = s["context_auto"].to_bool();
             if ( s.contains("context_limit") && s["context_limit"] == JSON::TYPE::INT )
@@ -301,6 +303,7 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "theme", last.theme },
             { "thinking", last.thinking },
             { "multiline", last.multiline },
+            { "thinking_stream", last.thinking_stream },
             { "context_auto", last.context_auto },
             { "context_limit", static_cast<long long>(last.context_limit) }
         };
@@ -337,6 +340,7 @@ void Config::save_settings(const std::string& home_dir) const {
     last.theme = theme;
     last.thinking = thinking;
     last.multiline = multiline;
+    last.thinking_stream = thinking_stream;
     last.context_auto = context_auto;
     last.context_limit = context_limit;
     write_state(home_dir, last);
@@ -348,6 +352,7 @@ void Config::apply_settings(const LastUsed& last) {
     theme = last.theme;
     thinking = last.thinking;
     multiline = last.multiline;
+    thinking_stream = last.thinking_stream;
     context_auto = last.context_auto;
     context_limit = last.context_limit;
 }

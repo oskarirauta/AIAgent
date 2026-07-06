@@ -324,7 +324,14 @@ std::string Repl::handle_command(const std::string& line) {
                 else return "usage: /settings multiline <on|off>";
                 return std::string("multiline: ") + ( _config.multiline ? "on" : "off" );
             }
-            return "unknown setting: " + key + "  (model, tools, strict, thinking, context, multiline; theme via /theme)";
+            if ( key == "thinking_stream" || key == "stream" ) {
+                std::string v = common::to_lower(val);
+                if ( v == "on" || v == "true" || v == "1" || v == "yes" ) _config.thinking_stream = true;
+                else if ( v == "off" || v == "false" || v == "0" || v == "no" ) _config.thinking_stream = false;
+                else return "usage: /settings thinking_stream <on|off>";
+                return std::string("thinking_stream: ") + ( _config.thinking_stream ? "on" : "off" );
+            }
+            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, context, multiline; theme via /theme)";
         }
 
         std::string tools = !_config.tools_enabled ? "off"
@@ -334,7 +341,8 @@ std::string Repl::handle_command(const std::string& line) {
         s += "provider:  " + _config.provider + "\n";
         s += "model:     " + _config.model + "\n";
         s += "tools:     " + tools + ( _config.strict ? " (strict)" : "" ) + "\n";
-        s += "thinking:  " + ( _config.thinking.empty() ? std::string("(provider default)") : _config.thinking ) + "\n";
+        s += "thinking:  " + ( _config.thinking.empty() ? std::string("(provider default)") : _config.thinking ) +
+             "  (live stream: " + ( _config.thinking_stream ? "on" : "off" ) + ")\n";
         std::string ctx;
         if ( _config.context_auto ) {
             size_t b = _config.context_budget();

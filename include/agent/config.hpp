@@ -64,6 +64,7 @@ public:
         std::string theme;
         std::string thinking;
         bool multiline = false;
+        bool thinking_stream = true;
         size_t context_limit = 0;
         bool context_auto = false;
     };
