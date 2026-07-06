@@ -12,6 +12,7 @@
 #include "agent/tools/run_command.hpp"
 #include "agent/tools/list_directory.hpp"
 #include "agent/tools/grep.hpp"
+#include "agent/tools/find_symbol.hpp"
 
 namespace agent::tools {
 
@@ -21,6 +22,7 @@ void Registry::register_defaults() {
     add(std::make_unique<RunCommand>());
     add(std::make_unique<ListDirectory>());
     add(std::make_unique<Grep>());
+    add(std::make_unique<FindSymbol>());
 }
 
 void Registry::add(std::unique_ptr<Tool> tool) {

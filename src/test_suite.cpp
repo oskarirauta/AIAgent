@@ -23,6 +23,7 @@
 #include "agent/providers/claude.hpp"
 #include "agent/auth/claude_oauth.hpp"
 #include "agent/tools/registry.hpp"
+#include "agent/tools/find_symbol.hpp"
 #include "agent/tools/advisor.hpp"
 #include "agent/tools/workflow_tool.hpp"
 #include "agent/workflow.hpp"
@@ -273,6 +274,53 @@ static void test_advisor_tool() {
     check(reg.has("consult_advisor"), "advisor registered after add");
     reg.remove("consult_advisor");
     check(!reg.has("consult_advisor"), "advisor gone after remove");
+}
+
+static void test_find_symbol() {
+    std::cout << "find_symbol (definition-aware search)" << std::endl;
+    std::string dir = "/tmp/ai_agent_findsym_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir + "/objs"); // ignored dir
+    {
+        std::ofstream ofd(dir + "/widget.cpp");
+        ofd << "class WidgetFactory {\n"
+               "public:\n"
+               "    int compute_total(int a, int b) {\n"   // definition (no ;)
+               "        return a + b;\n"
+               "    }\n"
+               "};\n"
+               "void caller() { compute_total(1, 2); }\n"; // call (has ;) -> not a def
+    }
+    {
+        std::ofstream ofd(dir + "/config.py");
+        ofd << "def parse_config(path):\n    return {}\n";
+    }
+    {
+        std::ofstream ofd(dir + "/objs/generated.cpp");
+        ofd << "int compute_total(int, int); // stray in an ignored dir\n";
+    }
+
+    agent::tools::FindSymbol fs;
+
+    std::string r1 = fs.execute(JSON::Object{ { "name", "WidgetFactory" }, { "path", dir } });
+    check(r1.find("widget.cpp") != std::string::npos && r1.find("class WidgetFactory") != std::string::npos,
+          "finds a class definition");
+
+    std::string r2 = fs.execute(JSON::Object{ { "name", "compute_total" }, { "path", dir } });
+    check(r2.find("int compute_total(int a, int b)") != std::string::npos, "finds the function definition");
+    check(r2.find("caller()") == std::string::npos, "excludes the call site (line ends with ';')");
+    check(r2.find("objs/generated") == std::string::npos, "skips ignored directories (objs)");
+
+    std::string r3 = fs.execute(JSON::Object{ { "name", "parse_config" }, { "path", dir } });
+    check(r3.find("def parse_config") != std::string::npos, "finds a python def");
+
+    std::string r4 = fs.execute(JSON::Object{ { "name", "does_not_exist_xyz" }, { "path", dir } });
+    check(r4.find("no definition") != std::string::npos, "reports nothing found");
+
+    std::string r5 = fs.execute(JSON::Object{ { "name", "bad name!" }, { "path", dir } });
+    check(r5.rfind("error:", 0) == 0, "rejects a non-identifier name");
+
+    std::filesystem::remove_all(dir);
 }
 
 static void test_pricing_and_cost() {
@@ -866,6 +914,7 @@ int main() {
     test_anthropic_thinking();
     test_provider_capabilities();
     test_advisor_tool();
+    test_find_symbol();
     test_pricing_and_cost();
     test_project_instructions();
     test_workflow_manager();

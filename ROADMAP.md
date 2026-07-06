@@ -69,6 +69,12 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **`find_symbol` tool** (light codebase search): a definition-aware, tree-wide
+  symbol search — give an identifier and it returns where it is *defined*
+  (class/struct/enum/def/fn/type or a C-family `NAME(...)` opening), skipping call
+  sites (lines ending in `;`) and build/vendor dirs. Always fresh (no persistent
+  index to go stale), a precise complement to `grep`. The heavier options
+  (embeddings / vector search) stay out of scope — grep + this cover the need.
 - **Cost / token budget**: per-model pricing from config (`price.<model>: <in>/<out>`
   USD per million tokens) drives an estimated session cost shown on the status line
   and via `/cost`. `budget_usd` / `budget_tokens` (config or `/cost budget|tokens`)
@@ -111,11 +117,6 @@ each list is roughly the current priority order.
   server is configured — it gives an otherwise-offline model a way to fetch facts
   outside its training data and the project files. (Once MCP lands, an MCP search
   server can also provide this, but the built-in tool covers the no-MCP case.)
-- **Codebase symbol index** — a light ctags-style index (functions/classes/symbols
-  → file:line) the model can query for navigation. Models already use `grep` +
-  `read_file` well, so this is an *incremental* speed-up, not a gap; the light
-  symbol-index form is worth it, full embeddings/vector search is not (big build,
-  unclear ROI over grep).
 - **`/export <file>`** — write the transcript to Markdown for bug reports, sharing
   and docs. Trivial to build (the conversation is already in memory); small,
   occasional real value.
