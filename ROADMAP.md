@@ -56,6 +56,14 @@ each list is roughly the current priority order.
   Re-auth is non-interactive (`ready_noninteractive`): a subscription provider
   with no cached token is refused with a hint to relaunch with `-p <name>`,
   rather than blocking the raw-mode REPL on an OAuth prompt.
+- **`/workflows`** (claude only): a `run_workflow(name, steps[])` tool lets the
+  model launch a background workflow — each step is an independent read-only
+  sub-agent (own client/provider/conversation, read/list/grep tools, no re-auth).
+  Runs execute on background threads (`WorkflowManager`); the tool returns a run
+  id immediately. `/workflows` lists runs + progress, `/workflows <id>` shows step
+  results. Finished runs are folded into the conversation at the next turn's start.
+  NOTE: lightweight single-machine version — steps run sequentially and results
+  are pull-viewed; live push notifications and parallel steps are follow-ups.
 
 ## Planned
 
@@ -68,10 +76,15 @@ each list is roughly the current priority order.
 - **paste-block expand**: the preview (first N lines + "… N more lines") ships via
   `paste_preview`; interactive expand/collapse of a previewed block is still open
   and under evaluation.
-- **`/workflows` command** for claude only
+- **`/workflows` enhancements**: parallel steps, live push notifications on
+  completion, and cancel/retry of a run.
 - **`/rc` command** for claude only
 - **More proviers** We don't aim to support every provider, we aim to support enough, most
   common and most useful ones.
+- **word splitting to prompt** when multi-line mode is used, try to avoid cutting
+  to next line mid-word
+- **skills** support skills
+
 
 ## Considered / out of scope
 

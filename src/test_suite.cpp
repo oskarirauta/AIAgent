@@ -24,6 +24,8 @@
 #include "agent/auth/claude_oauth.hpp"
 #include "agent/tools/registry.hpp"
 #include "agent/tools/advisor.hpp"
+#include "agent/tools/workflow_tool.hpp"
+#include "agent/workflow.hpp"
 
 static int passed = 0;
 static int failed = 0;
@@ -271,6 +273,65 @@ static void test_advisor_tool() {
     check(reg.has("consult_advisor"), "advisor registered after add");
     reg.remove("consult_advisor");
     check(!reg.has("consult_advisor"), "advisor gone after remove");
+}
+
+static void test_workflow_manager() {
+    std::cout << "workflow manager (background runs)" << std::endl;
+    agent::WorkflowManager mgr;
+
+    std::atomic<int> calls{ 0 };
+    auto runner = [&calls](const std::string& task, std::atomic<bool>* abort) -> std::string {
+        (void)abort;
+        calls.fetch_add(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        return "result for: " + task;
+    };
+
+    int id = mgr.launch("scan", { "step one", "step two", "step three" }, runner);
+    check(id >= 1, "launch returns a run id");
+
+    // Wait for completion (bounded).
+    for ( int i = 0; i < 200 && mgr.any_running(); ++i )
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    check(!mgr.any_running(), "run finishes");
+    check(calls.load() == 3, "every step ran once");
+
+    auto runs = mgr.snapshot();
+    check(runs.size() == 1 && runs[0].status == "done", "run marked done");
+    check(runs[0].steps.size() == 3 && runs[0].steps[2].status == "done", "all steps done");
+    check(runs[0].steps[0].result == "result for: step one", "step result captured");
+
+    auto undelivered = mgr.take_undelivered();
+    check(undelivered.size() == 1, "finished run delivered once");
+    check(mgr.take_undelivered().empty(), "not delivered twice");
+
+    // An erroring step stops the run and marks it error.
+    auto bad = [](const std::string&, std::atomic<bool>*) -> std::string { return "error: boom"; };
+    int id2 = mgr.launch("bad", { "a", "b" }, bad);
+    (void)id2;
+    for ( int i = 0; i < 200 && mgr.any_running(); ++i )
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    auto runs2 = mgr.snapshot();
+    check(runs2.back().status == "error", "erroring step marks the run error");
+    check(runs2.back().steps[1].status == "pending", "later steps skipped after an error");
+}
+
+static void test_workflow_tool() {
+    std::cout << "workflow tool schema/execute" << std::endl;
+    std::string got_name;
+    std::vector<std::string> got_steps;
+    agent::tools::WorkflowTool tool([&](const std::string& n, const std::vector<std::string>& s) {
+        got_name = n; got_steps = s; return std::string("started workflow #7");
+    });
+    check(tool.name() == "run_workflow", "workflow tool name");
+    std::string r = tool.execute(JSON::Object{
+        { "name", "scan" },
+        { "steps", JSON::Array{ "look at a", "look at b" } }
+    });
+    check(got_name == "scan" && got_steps.size() == 2, "launcher gets name + steps");
+    check(r == "started workflow #7", "returns launcher message");
+    check(tool.execute(JSON::Object{ { "name", "x" } }).rfind("error:", 0) == 0,
+          "missing steps is an error");
 }
 
 static void test_provider_options_config() {
@@ -738,6 +799,8 @@ int main() {
     test_anthropic_thinking();
     test_provider_capabilities();
     test_advisor_tool();
+    test_workflow_manager();
+    test_workflow_tool();
     test_provider_options_config();
     test_claude_provider();
     test_claude_pkce();

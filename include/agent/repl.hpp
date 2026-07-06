@@ -9,6 +9,7 @@
 #include "agent/providers/provider.hpp"
 #include "agent/tools/registry.hpp"
 #include "agent/token_stats.hpp"
+#include "agent/workflow.hpp"
 
 namespace agent {
 
@@ -49,12 +50,19 @@ private:
     std::string ask_advisor(const std::string& question);
     void sync_advisor_tool();
 
+    // Workflows (claude only): register/unregister the run_workflow tool, render
+    // the /workflows view, and fold finished runs' results into the conversation.
+    void sync_workflow_tool();
+    std::string workflows_command(const std::string& args);
+    void deliver_workflow_results();
+
     Config _config;
     api::Client _client;
     tools::Registry _registry;
     std::unique_ptr<providers::Provider> _provider;
     Conversation _conversation;
     TokenStats _stats;
+    WorkflowManager _workflows;
 };
 
 } // namespace agent

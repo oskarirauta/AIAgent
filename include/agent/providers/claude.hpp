@@ -13,9 +13,10 @@ public:
 
     std::string name() const override { return "claude"; }
 
-    // Claude can consult a stronger sibling model (the /advisor tool), since the
-    // advisor model is itself a Claude model reached with the same OAuth token.
-    std::unordered_set<std::string> capabilities() const override { return { "advisor" }; }
+    // Claude can consult a stronger sibling model (the /advisor tool) and drive
+    // background sub-agent workflows (the /workflows tool), both reached with the
+    // same OAuth token.
+    std::unordered_set<std::string> capabilities() const override { return { "advisor", "workflows" }; }
 
     // Subscription (OAuth) requests authenticate with the raw access token as a
     // Bearer credential — NOT an API key. Using an API key here would bill the

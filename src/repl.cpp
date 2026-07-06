@@ -16,6 +16,7 @@
 #include "agent/memory.hpp"
 #include "agent/text_utils.hpp"
 #include "agent/tools/advisor.hpp"
+#include "agent/tools/workflow_tool.hpp"
 
 namespace agent {
 
@@ -53,6 +54,92 @@ Repl::Repl(const Config& config)
 
     // Expose the advisor tool if it was left enabled and the provider supports it.
     sync_advisor_tool();
+    sync_workflow_tool();
+}
+
+void Repl::sync_workflow_tool() {
+    // The run_workflow tool is available when tools are on and the provider can
+    // drive background sub-agents (claude). Kept in sync across /provider switches.
+    bool want = _config.tools_enabled && provider_supports("workflows");
+    if ( want && !_registry.has("run_workflow")) {
+        _registry.add(std::make_unique<tools::WorkflowTool>(
+            [this](const std::string& name, const std::vector<std::string>& steps) {
+                Config cfg = _config; // snapshot: sub-agents must not read live config
+                int id = _workflows.launch(name, steps,
+                    [cfg](const std::string& task, std::atomic<bool>* abort) {
+                        return run_workflow_step(cfg, task, abort);
+                    });
+                return "started workflow #" + std::to_string(id) + " (" +
+                       std::to_string(steps.size()) + " step(s)) in the background; "
+                       "watch it with /workflows. Results will come back on your next turn.";
+            }));
+    } else if ( !want && _registry.has("run_workflow")) {
+        _registry.remove("run_workflow");
+    }
+}
+
+std::string Repl::workflows_command(const std::string& args) {
+    std::string a = common::trim_ws(args);
+    auto runs = _workflows.snapshot();
+
+    auto step_glyph = [](const std::string& st) -> std::string {
+        if ( st == "done" ) return "✓";
+        if ( st == "error" ) return "✗";
+        if ( st == "running" ) return "▸";
+        if ( st == "cancelled" ) return "∅";
+        return "·"; // pending
+    };
+
+    if ( !a.empty()) {
+        // Detail view for one run.
+        int want = 0;
+        try { want = std::stoi(a); } catch ( ... ) { return "usage: /workflows [id]"; }
+        for ( const auto& r : runs ) {
+            if ( r.id != want ) continue;
+            std::string s = "workflow #" + std::to_string(r.id) + "  " + r.name +
+                            "  [" + r.status + "]\n";
+            for ( size_t i = 0; i < r.steps.size(); ++i ) {
+                const auto& st = r.steps[i];
+                s += "\n" + step_glyph(st.status) + " step " + std::to_string(i + 1) +
+                     ": " + st.task + "\n";
+                if ( !st.result.empty())
+                    s += "  " + st.result + "\n";
+            }
+            return s;
+        }
+        return "no workflow #" + a;
+    }
+
+    if ( runs.empty())
+        return "no workflows yet — the model starts one with the run_workflow tool";
+
+    std::string s = "workflows:\n";
+    for ( const auto& r : runs ) {
+        int done = 0;
+        for ( const auto& st : r.steps )
+            if ( st.status == "done" || st.status == "error" ) ++done;
+        s += "\n  #" + std::to_string(r.id) + "  " + r.name +
+             "  [" + r.status + "]  " + std::to_string(done) + "/" +
+             std::to_string(r.steps.size()) + " steps";
+    }
+    s += "\n\nuse /workflows <id> for step details";
+    return s;
+}
+
+void Repl::deliver_workflow_results() {
+    // Called on the turn thread before a new turn: fold any finished runs into the
+    // conversation so the model can build on them. Only this thread mutates
+    // _conversation, and the workflow threads for these runs have already ended.
+    auto done = _workflows.take_undelivered();
+    for ( const auto& r : done ) {
+        std::string note = "Workflow #" + std::to_string(r.id) + " (" + r.name +
+                           ") finished with status: " + r.status + ".\n";
+        for ( size_t i = 0; i < r.steps.size(); ++i ) {
+            note += "\nStep " + std::to_string(i + 1) + " [" + r.steps[i].status + "]: " +
+                    r.steps[i].task + "\nResult: " + r.steps[i].result + "\n";
+        }
+        _conversation.add_user(note);
+    }
 }
 
 void Repl::sync_advisor_tool() {
@@ -220,7 +307,8 @@ std::string Repl::switch_provider(const std::string& name) {
     _config = nc;
     _provider = std::move(np);
     _conversation.set_system(base_system_prompt());
-    sync_advisor_tool(); // advisor tool follows the provider (claude-only)
+    sync_advisor_tool();  // advisor tool follows the provider (claude-only)
+    sync_workflow_tool(); // workflow tool follows the provider (claude-only)
     save_conversation();
     Config::save_last_used(_config.home_dir, _config.provider, _config.model);
 
@@ -266,6 +354,10 @@ static std::string plain_stream_text(const std::string& s) {
 }
 
 std::string Repl::process_turn(const std::string& prompt, std::function<void(const std::string&)> stream_cb, std::atomic<bool>* abort_flag) {
+
+    // Fold any finished background workflows into the context first, so the model
+    // sees their results ahead of the new prompt.
+    deliver_workflow_results();
 
     _conversation.add_user(prompt);
 
@@ -406,6 +498,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /model [name]            show or change the model\n"
                "  /btw <note>              add a note to the context without asking for a reply (alias /note)\n"
                "  /advisor <on|off|model N>   (claude) let the model consult a stronger advisor model\n"
+               "  /workflows [id]          (claude) view background workflow runs the model started\n"
                "  /tools <confirm|auto|insecure>   set the tool confirmation mode\n"
                "  /strict <on|off>         also confirm safe read-only commands\n"
                "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
@@ -503,6 +596,12 @@ std::string Repl::handle_command(const std::string& line) {
             return "provider: " + _config.provider +
                    "\nusage: /provider <openai|ollama|anthropic|moonshot|kimi|claude>";
         return switch_provider(common::to_lower(common::trim_ws(args)));
+    }
+
+    if ( cmd == "/workflows" || cmd == "/workflow" ) {
+        if ( !provider_supports("workflows"))
+            return "workflows are only available with the claude provider";
+        return workflows_command(args);
     }
 
     if ( cmd == "/advisor" ) {

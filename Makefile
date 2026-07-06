@@ -20,6 +20,7 @@ OBJS:= \
 	objs/memory.o \
 	objs/repl.o \
 	objs/repl_inline.o \
+	objs/workflow.o \
 	objs/syntax_highlighter.o \
 	objs/text_utils.o \
 	objs/signal_handler.o \
@@ -102,6 +103,8 @@ objs/kimi_provider.o: src/providers/kimi.cpp
 objs/claude_oauth.o: src/auth/claude_oauth.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/claude_provider.o: src/providers/claude.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/workflow.o: src/workflow.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/tools_registry.o: src/tools/registry.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
