@@ -227,10 +227,25 @@ void InlineRepl::emit_styled_line(const std::string& line) {
     auto next_prefix = [this]() -> std::string {
         if ( _reply_first_line ) {
             _reply_first_line = false;
+            if ( _reply_dim )
+                return _theme.dim + "💭 " + Theme::reset;
             return _theme.ai + "● " + Theme::reset;
         }
         return "  ";
     };
+
+    // Thinking region: dim, no syntax highlighting, word-wrapped like prose.
+    if ( _reply_dim ) {
+        int width = term_cols() - 4;
+        if ( width < 8 ) width = 8;
+        std::vector<std::string> segs = word_wrap(line, width);
+        for ( size_t i = 0; i < segs.size(); ++i ) {
+            wr(next_prefix() + _theme.dim + segs[i] + Theme::reset);
+            if ( i + 1 < segs.size())
+                wr("\n");
+        }
+        return;
+    }
 
     std::string trimmed = common::trim_ws(line);
     if ( trimmed.rfind("```", 0) == 0 ) {
@@ -381,9 +396,20 @@ void InlineRepl::begin_reply() {
     _pending_blanks = 0;
     _reply_has_content = false;
     _reply_first_line = true;
+    _reply_dim = false;
 }
 
-void InlineRepl::emit_reply_line(const std::string& line) {
+void InlineRepl::emit_reply_line(const std::string& raw_line) {
+    // Handle streamed thinking-region markers: \x01 opens (dim + 💭), \x02 closes
+    // (back to the normal answer style + ● marker). Strip them from the text.
+    std::string line = raw_line;
+    size_t mp;
+    while ( ( mp = line.find_first_of("\x01\x02")) != std::string::npos ) {
+        _reply_dim = ( line[mp] == '\x01' );
+        _reply_first_line = true; // the first line of each region gets its marker
+        line.erase(mp, 1);
+    }
+
     if ( common::trim_ws(line).empty()) {
         // Defer blank lines: interior ones are flushed once more content arrives;
         // leading ones are skipped; trailing ones are simply never flushed.

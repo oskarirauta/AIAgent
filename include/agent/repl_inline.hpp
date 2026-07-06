@@ -166,6 +166,7 @@ private:
     int  _pending_blanks = 0;
     bool _reply_has_content = false;
     bool _reply_first_line = false; // the reply's first printed line gets the AI marker
+    bool _reply_dim = false;        // inside a streamed "thinking" region (rendered dim, 💭 marker)
 
     SyntaxHighlighter _highlighter{1};
     Theme _theme = theme_dark();

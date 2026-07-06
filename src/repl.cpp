@@ -68,6 +68,17 @@ void Repl::save_conversation() {
     _conversation.save(path);
 }
 
+// Convert the streamed thinking-region markers for plain (non-TTY) output: \x01
+// (begin) becomes a "💭 " prefix, \x02 (end) is dropped.
+static std::string plain_stream_text(const std::string& s) {
+    std::string out;
+    for ( char c : s ) {
+        if ( c == '\x01' ) out += "\xF0\x9F\x92\xAD ";
+        else if ( c != '\x02' ) out += c;
+    }
+    return out;
+}
+
 std::string Repl::process_turn(const std::string& prompt, std::function<void(const std::string&)> stream_cb, std::atomic<bool>* abort_flag) {
 
     _conversation.add_user(prompt);
@@ -102,11 +113,13 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                 [&](const std::string& chunk) {
                     providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
                     if ( _config.thinking_stream && !sc.reasoning.empty()) {
-                        if ( !thinking_open ) { stream_cb("💭 "); thinking_open = true; }
+                        // \x01 opens a dim "thinking" region the renderer styles.
+                        if ( !thinking_open ) { stream_cb("\x01"); thinking_open = true; }
                         stream_cb(sc.reasoning);
                     }
                     if ( !sc.content.empty()) {
-                        if ( thinking_open && !content_open ) { stream_cb("\n\n"); content_open = true; }
+                        // \x02 closes the thinking region before the answer.
+                        if ( thinking_open && !content_open ) { stream_cb("\n\x02\n\n"); content_open = true; }
                         stream_cb(agent::normalize_text(sc.content));
                     }
                 }, abort_flag);
@@ -456,7 +469,7 @@ void Repl::run_plain() {
 
         try {
             std::string reply = process_turn(line, [](const std::string& chunk) {
-                std::cout << chunk << std::flush;
+                std::cout << plain_stream_text(chunk) << std::flush;
             });
             std::cout << std::endl;
             save_conversation();
@@ -520,7 +533,7 @@ void Repl::run_once(const std::string& prompt) {
 
     try {
         std::string reply = process_turn(prompt, [](const std::string& chunk) {
-            std::cout << chunk << std::flush;
+            std::cout << plain_stream_text(chunk) << std::flush;
         });
         std::cout << std::endl;
         save_conversation();
