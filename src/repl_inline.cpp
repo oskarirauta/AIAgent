@@ -1320,7 +1320,7 @@ void InlineRepl::draw_settings_menu(bool redraw) {
     for ( int i = 0; i < n; ++i ) {
         const SettingRow& row = _settings_rows[i];
         std::string label = row.label;
-        while ( label.size() < 9 ) label += ' ';
+        while ( label.size() < 10 ) label += ' '; // keep a gap even for the longest label ("multiline")
         bool selected = ( i == _settings_selection );
         if ( selected && _settings_editing ) {
             // Free-text edit in place: show the buffer with a cursor bar.
