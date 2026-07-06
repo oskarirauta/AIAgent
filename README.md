@@ -174,6 +174,17 @@ scrolling line — ↑/↓ then move between the input lines (and fall back to h
 at the top/bottom). Large pastes stay collapsed into `[paste #N]` placeholders in
 either mode.
 
+### Thinking
+
+Reasoning models expose their thinking: Kimi/OpenAI-compatible via
+`reasoning_content`, Claude via a thinking block. Set the level with `/thinking`
+(`off`/`on`/`low`/`medium`/`high`/`xhigh`/`max`) — for Kimi it maps to the
+`thinking.effort` field (xhigh/max clamp to high), for Claude to a `budget_tokens`
+budget (`max` = the model's ceiling). Every turn streams (even with tools), so the
+reasoning and the answer flow in live and tool calls are assembled from the
+stream. `thinking_stream` (on by default, `/settings thinking_stream off`) toggles
+whether the reasoning is shown live (prefixed 💭).
+
 ### Persisted settings
 
 Theme, multi-line mode, thinking level and the context limit are remembered
