@@ -64,6 +64,11 @@ each list is roughly the current priority order.
   results. Finished runs are folded into the conversation at the next turn's start.
   NOTE: lightweight single-machine version — steps run sequentially and results
   are pull-viewed; live push notifications and parallel steps are follow-ups.
+- **Project instructions**: a project-local `AGENTS.md` (or `.ai-agent.md` /
+  `AGENT.md`) in the working directory is read into the system prompt (after the
+  long-term memories), so a project can pin coding style, testing conventions and
+  constraints without repeating them each session. Read fresh from the cwd (size-
+  capped); `/about` shows which file is loaded.
 
 ## Planned
 

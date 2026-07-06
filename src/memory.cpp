@@ -77,6 +77,52 @@ std::string load_memories(const std::string& home_dir, const std::string& provid
     return result;
 }
 
+// Project-instructions filenames, in priority order. AGENTS.md is the emerging
+// cross-tool convention; .ai-agent.md / AGENT.md are accepted too.
+static const std::vector<std::string>& project_instruction_names() {
+    static const std::vector<std::string> names = { "AGENTS.md", ".ai-agent.md", "AGENT.md" };
+    return names;
+}
+
+std::string project_instructions_file(const std::string& dir) {
+    for ( const auto& name : project_instruction_names()) {
+        std::error_code ec;
+        std::string path = dir + "/" + name;
+        if ( std::filesystem::is_regular_file(path, ec))
+            return name;
+    }
+    return "";
+}
+
+std::string load_project_instructions(const std::string& dir) {
+    std::string name = project_instructions_file(dir);
+    if ( name.empty())
+        return "";
+
+    std::ifstream ifd(dir + "/" + name, std::ios::in);
+    if ( !ifd.is_open())
+        return "";
+    std::stringstream ss;
+    ss << ifd.rdbuf();
+    std::string content = ss.str();
+
+    // Cap the size so a stray large file can't swamp the context window.
+    const size_t cap = 64 * 1024;
+    if ( content.size() > cap )
+        content = content.substr(0, cap) + "\n\n[project instructions truncated]";
+
+    // Trim trailing whitespace so the block ends cleanly.
+    while ( !content.empty() && ( content.back() == '\n' || content.back() == ' ' ||
+                                  content.back() == '\t' || content.back() == '\r' ))
+        content.pop_back();
+    if ( content.empty())
+        return "";
+
+    logger::info["memory"] << "loaded project instructions from " << name
+                           << " (" << content.size() << " chars)" << std::endl;
+    return "\n\n## Project instructions (from " + name + ")\n\n" + content + "\n";
+}
+
 std::vector<MemoryFile> list_memories(const std::string& home_dir, const std::string& provider) {
     std::vector<MemoryFile> out;
     std::string mem_dir = home_dir + "/memories/" + provider;

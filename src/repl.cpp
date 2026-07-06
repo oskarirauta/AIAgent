@@ -199,6 +199,16 @@ std::string Repl::base_system_prompt() const {
     std::string memories = load_memories(_config.home_dir, _config.provider);
     if ( !memories.empty())
         system += memories;
+    // Project-local instructions from the working directory (AGENTS.md etc.),
+    // read fresh so switching projects / dirs always reflects the current one.
+    std::string project;
+    try {
+        project = load_project_instructions(std::filesystem::current_path().string());
+    } catch ( ... ) {
+        project = "";
+    }
+    if ( !project.empty())
+        system += project;
     return system;
 }
 
@@ -656,7 +666,13 @@ std::string Repl::handle_command(const std::string& line) {
                "history and memory, tool-call safety, and subscription auth for Kimi/Claude.\n"
                "\n"
                "provider:  " + _config.provider + "\n"
-               "model:     " + _config.model + "\n"
+               "model:     " + _config.model + "\n" +
+               ( []() {
+                   std::string f;
+                   try { f = agent::project_instructions_file(std::filesystem::current_path().string()); }
+                   catch ( ... ) {}
+                   return f.empty() ? std::string() : "project:   " + f + " loaded\n";
+               }()) +
                "\n"
                "Type /help for commands.";
     }

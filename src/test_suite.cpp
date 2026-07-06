@@ -275,6 +275,38 @@ static void test_advisor_tool() {
     check(!reg.has("consult_advisor"), "advisor gone after remove");
 }
 
+static void test_project_instructions() {
+    std::cout << "project instructions (AGENTS.md)" << std::endl;
+    std::string dir = "/tmp/ai_agent_proj_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+
+    check(agent::project_instructions_file(dir).empty(), "no file when none present");
+    check(agent::load_project_instructions(dir).empty(), "empty block when none present");
+
+    {
+        std::ofstream ofd(dir + "/AGENTS.md");
+        ofd << "Use tabs. Run make test before finishing.\n";
+    }
+    check(agent::project_instructions_file(dir) == "AGENTS.md", "AGENTS.md detected");
+    std::string block = agent::load_project_instructions(dir);
+    check(block.find("Use tabs. Run make test") != std::string::npos, "content included");
+    check(block.find("Project instructions (from AGENTS.md)") != std::string::npos, "block is labelled");
+
+    // AGENTS.md wins over .ai-agent.md when both exist.
+    {
+        std::ofstream ofd(dir + "/.ai-agent.md");
+        ofd << "secondary\n";
+    }
+    check(agent::project_instructions_file(dir) == "AGENTS.md", "AGENTS.md has priority");
+
+    // Falls back to .ai-agent.md when AGENTS.md is absent.
+    std::filesystem::remove(dir + "/AGENTS.md");
+    check(agent::project_instructions_file(dir) == ".ai-agent.md", "falls back to .ai-agent.md");
+
+    std::filesystem::remove_all(dir);
+}
+
 static void test_workflow_manager() {
     std::cout << "workflow manager (background runs)" << std::endl;
     agent::WorkflowManager mgr;
@@ -799,6 +831,7 @@ int main() {
     test_anthropic_thinking();
     test_provider_capabilities();
     test_advisor_tool();
+    test_project_instructions();
     test_workflow_manager();
     test_workflow_tool();
     test_provider_options_config();
