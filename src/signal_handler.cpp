@@ -1,6 +1,7 @@
 #include "agent/signal_handler.hpp"
 
 #include <cstdlib>
+#include <csignal>
 #include "agent/repl_inline.hpp"
 #include "signal.hpp"
 
@@ -10,6 +11,11 @@ std::atomic<bool> running{true};
 std::atomic<int> sigint_count{0};
 std::atomic<bool> turn_active{false};
 std::atomic<bool> turn_abort{false};
+std::atomic<bool> winch_pending{false};
+
+static void winch_handler(int) {
+    winch_pending.store(true, std::memory_order_relaxed);
+}
 
 static void signal_handler(int signum) {
     if ( signum == SIGINT || signum == SIGTERM ) {
@@ -39,6 +45,14 @@ void install_signal_handlers() {
         .PIPE = [](int){ /* ignore broken pipe */ }
     };
     handler.install();
+
+    // SIGWINCH is not part of the SIG helper; install it directly. No SA_RESTART,
+    // so a resize interrupts the REPL's select() and the redraw happens promptly.
+    struct sigaction sa {};
+    sa.sa_handler = winch_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGWINCH, &sa, nullptr);
 }
 
 } // namespace agent

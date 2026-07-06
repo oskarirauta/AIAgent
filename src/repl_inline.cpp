@@ -956,6 +956,14 @@ void InlineRepl::run() {
     while ( agent::running.load(std::memory_order_relaxed)) {
         poll_worker();
 
+        // Terminal was resized: redraw the active view at the new width.
+        if ( agent::winch_pending.exchange(false, std::memory_order_relaxed)) {
+            if ( _in_settings )
+                draw_settings_menu(false);
+            else if ( !_confirming )
+                draw_live();
+        }
+
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(STDIN_FILENO, &fds);
