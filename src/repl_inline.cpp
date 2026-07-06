@@ -840,6 +840,53 @@ void InlineRepl::backspace() {
     _cursor = p;
 }
 
+// After deleting a span that may have contained paste placeholders, forget any
+// whose token no longer appears in the input (so their content isn't re-sent).
+void InlineRepl::prune_pastes() {
+    for ( auto it = _pastes.begin(); it != _pastes.end(); ) {
+        if ( _input.find(it->placeholder) == std::string::npos )
+            it = _pastes.erase(it);
+        else
+            ++it;
+    }
+}
+
+// Ctrl-W: delete the whitespace-delimited word before the cursor (skip trailing
+// spaces, then remove back to the previous whitespace boundary).
+void InlineRepl::delete_word_before() {
+    if ( _cursor == 0 )
+        return;
+    auto is_space = [](char ch) { return ch == ' ' || ch == '\t' || ch == '\n'; };
+    size_t p = _cursor;
+    while ( p > 0 && is_space(_input[p - 1]) ) --p;
+    while ( p > 0 && !is_space(_input[p - 1]) ) --p;
+    _input.erase(p, _cursor - p);
+    _cursor = p;
+    prune_pastes();
+}
+
+// Ctrl-U: delete from the start of the current line (after the previous newline)
+// up to the cursor.
+void InlineRepl::kill_to_line_start() {
+    if ( _cursor == 0 )
+        return;
+    size_t nl = _input.rfind('\n', _cursor - 1);
+    size_t start = ( nl == std::string::npos ) ? 0 : nl + 1;
+    _input.erase(start, _cursor - start);
+    _cursor = start;
+    prune_pastes();
+}
+
+// Ctrl-K: delete from the cursor to the end of the current line (next newline).
+void InlineRepl::kill_to_line_end() {
+    if ( _cursor >= _input.size())
+        return;
+    size_t nl = _input.find('\n', _cursor);
+    size_t end = ( nl == std::string::npos ) ? _input.size() : nl;
+    _input.erase(_cursor, end - _cursor);
+    prune_pastes();
+}
+
 void InlineRepl::move_left() {
     if ( _cursor == 0 )
         return;
@@ -1790,6 +1837,18 @@ void InlineRepl::handle_byte(int c) {
             return;
         case 0x05: // Ctrl-E -> end of line
             _cursor = _input.size();
+            draw_live();
+            return;
+        case 0x17: // Ctrl-W -> delete the word before the cursor
+            delete_word_before();
+            draw_live();
+            return;
+        case 0x15: // Ctrl-U -> delete to the start of the line
+            kill_to_line_start();
+            draw_live();
+            return;
+        case 0x0b: // Ctrl-K -> delete to the end of the line
+            kill_to_line_end();
             draw_live();
             return;
         case 0x1b: { // ESC: control sequence

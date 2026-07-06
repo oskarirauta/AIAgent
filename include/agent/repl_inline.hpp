@@ -122,6 +122,10 @@ private:
     void handle_byte(int c);
     void insert_text(const std::string& text);
     void backspace();
+    void delete_word_before();  // Ctrl-W
+    void kill_to_line_start();  // Ctrl-U
+    void kill_to_line_end();    // Ctrl-K
+    void prune_pastes();        // forget placeholders no longer present in _input
     void move_left();
     void move_right();
     void history_prev();
