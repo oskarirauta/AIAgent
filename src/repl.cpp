@@ -83,6 +83,11 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
 
     _conversation.add_user(prompt);
 
+    // Whether a dim "thinking" region is currently open in the streamed output.
+    // Tracked across tool-loop iterations so the answer after a tool call is not
+    // left rendered as dim reasoning.
+    bool showing_thinking = false;
+
     while ( true ) {
 
         if ( abort_flag && abort_flag->load(std::memory_order_relaxed))
@@ -107,20 +112,19 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             std::string buffer;
             bool done = false;
             _provider->stream_reset();
-            bool thinking_open = false, content_open = false;
 
             _client.post_stream(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body,
                 [&](const std::string& chunk) {
                     logger::vverbose["http"] << "STREAM chunk\n" << chunk << std::endl;
                     providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
                     if ( _config.thinking_stream && !sc.reasoning.empty()) {
-                        // \x01 opens a dim "thinking" region the renderer styles.
-                        if ( !thinking_open ) { stream_cb("\x01"); thinking_open = true; }
+                        // \x01 opens a dim reasoning region (on its own line).
+                        if ( !showing_thinking ) { stream_cb("\n\x01"); showing_thinking = true; }
                         stream_cb(sc.reasoning);
                     }
                     if ( !sc.content.empty()) {
-                        // \x02 closes the thinking region before the answer.
-                        if ( thinking_open && !content_open ) { stream_cb("\n\x02\n\n"); content_open = true; }
+                        // \x02 closes the reasoning region before the answer resumes.
+                        if ( showing_thinking ) { stream_cb("\n\x02\n\n"); showing_thinking = false; }
                         stream_cb(agent::normalize_text(sc.content));
                     }
                 }, abort_flag);
