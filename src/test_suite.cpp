@@ -195,6 +195,14 @@ static void test_anthropic_thinking() {
     auto r = p.parse_response(resp);
     check(r.thinking == "reasoning here", "parses the thinking block");
     check(r.message == "answer", "parses the text block");
+
+    // Claude must inherit Anthropic's thinking handling (it overrides
+    // apply_provider_options for the model, and must call the base).
+    agent::providers::Claude claude(cfg);
+    claude.apply_provider_options(JSON::Object{ { "thinking", "high" } });
+    agent::Conversation cc; cc.add_user("hi");
+    JSON creq = claude.build_request(cc, JSON::Array{});
+    check(creq.contains("thinking"), "claude applies thinking via apply_provider_options");
 }
 
 static void test_provider_capabilities() {
@@ -261,9 +269,11 @@ static void test_stream_parsers() {
     openai.stream_reset();
     std::string buf;
     bool done = false;
-    // Kimi sends "data:" with no space on chunks (but a space on [DONE]).
-    auto oc = openai.parse_stream("data:{\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\ndata: [DONE]\n\n", buf, done);
+    // Kimi sends "data:" with no space on chunks (but a space on [DONE]) and
+    // puts usage inside choices[0] on the final chunk.
+    auto oc = openai.parse_stream("data:{\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}]}\n\ndata: [DONE]\n\n", buf, done);
     check(oc.content == "Hello" && done, "openai stream parser (no space after data:)");
+    check(openai.stream_result().input_tokens == 3, "usage captured from choices[0].usage");
 
     agent::providers::Ollama ollama(cfg);
     ollama.stream_reset();
@@ -432,6 +442,10 @@ static void test_context_auto() {
     cfg.model = "mystery-model";
     cfg.context_auto = true;
     check(cfg.context_budget() == 0, "auto with unknown model = unlimited");
+
+    // parse_size must reject a negative (std::stoull would wrap it to a huge value).
+    check(agent::Config::parse_size_suffixed("-1", 100) == 100, "negative size rejected (keeps fallback)");
+    check(agent::Config::parse_size_suffixed("8K", 0) == 8192, "8K parses to 8192");
 }
 
 static void test_conversation_corrupt() {
@@ -591,6 +605,12 @@ static void test_danger_list() {
     check(!Registry::classify_danger("cat /etc/shadow").empty(), "reading /etc/shadow flagged");
     check(!Registry::classify_danger("echo x > /etc/passwd").empty(), "writing /etc/passwd flagged");
     check(!Registry::classify_danger("cat /dev/sda").empty(), "block device flagged");
+
+    // Flag criteria match whole tokens (paths/names must not trip option rules).
+    check(!Registry::classify_danger("rm -rf /tmp/x").empty(), "rm -rf still flagged");
+    check(Registry::classify_danger("rm dir/file").empty(), "rm of one file in a subdir not flagged");
+    check(!Registry::classify_danger("chmod 777 x").empty(), "chmod 777 flagged");
+    check(Registry::classify_danger("chmod 644 file777.txt").empty(), "chmod 644 with 777 in a name not flagged");
 }
 
 static void test_safe_commands() {

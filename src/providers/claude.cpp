@@ -25,7 +25,9 @@ static std::string random_state(size_t length) {
 }
 
 Claude::Claude(const Config& cfg) : Anthropic(cfg) {
-    _config.api_url = "https://api.anthropic.com";
+    // Default to Anthropic's endpoint, but keep a URL the user set explicitly.
+    if ( _config.api_url == Config().api_url )
+        _config.api_url = "https://api.anthropic.com";
     _token = auth::load_claude_token(_config.home_dir);
 }
 
@@ -107,6 +109,9 @@ JSON Claude::build_request(const Conversation& conv, const JSON& tools_schema) {
 }
 
 void Claude::apply_provider_options(const JSON& options) {
+    // Inherit Anthropic's handling (notably `thinking`) — without this the base
+    // options were dropped and Claude's extended thinking never applied.
+    Anthropic::apply_provider_options(options);
     if ( options == JSON::TYPE::OBJECT ) {
         if ( options.contains("model") && options["model"] == JSON::TYPE::STRING )
             _config.model = options["model"].to_string();

@@ -17,9 +17,13 @@ static std::string trim(const std::string& s) {
 // malformed input instead of letting std::stoull throw and crash the program.
 static size_t parse_size(const std::string& value, size_t current, const std::string& key) {
     try {
+        std::string trimmed = common::trim_ws(value);
+        // std::stoull happily wraps a leading "-" into a huge value; reject it.
+        if ( !trimmed.empty() && trimmed[0] == '-' )
+            throw std::invalid_argument("negative");
         size_t idx = 0;
-        size_t n = std::stoull(common::trim_ws(value), &idx);
-        std::string suffix = common::trim_ws(common::trim_ws(value).substr(idx));
+        size_t n = std::stoull(trimmed, &idx);
+        std::string suffix = common::trim_ws(trimmed.substr(idx));
         if ( !suffix.empty()) {
             char c = suffix[0];
             if ( c == 'k' || c == 'K' ) n *= 1024;

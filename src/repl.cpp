@@ -90,8 +90,10 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
 
     while ( true ) {
 
-        if ( abort_flag && abort_flag->load(std::memory_order_relaxed))
+        if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
+            _conversation.undo_last(); // drop the interrupted exchange from history
             return "";
+        }
 
         _provider->prepare_request(_client);
 
@@ -129,16 +131,20 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                     }
                 }, abort_flag);
 
-            if ( abort_flag && abort_flag->load(std::memory_order_relaxed))
+            if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
+                _conversation.undo_last(); // drop the interrupted exchange from history
                 return "";
+            }
 
             resp = _provider->stream_result();
         } else {
             std::string body = request.dump_minified();
             std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body, abort_flag);
 
-            if ( abort_flag && abort_flag->load(std::memory_order_relaxed))
+            if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
+                _conversation.undo_last(); // drop the interrupted exchange from history
                 return "";
+            }
 
             resp = _provider->parse_response(JSON::parse(response_str));
         }
@@ -215,6 +221,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /strict <on|off>         also confirm safe read-only commands\n"
                "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
                "  /theme <dark|light|warm> switch the colour theme\n"
+               "  /stream <on|off>         show the model's reasoning live as it streams\n"
                "  /memories [name]         list this provider's memory files, or view one\n"
                "  /context                 show context usage (system, conversation, limit)\n"
                "  /history                 list the messages in the current context\n"
@@ -401,6 +408,16 @@ std::string Repl::handle_command(const std::string& line) {
         _registry.set_mode(tool_mode());
         _registry.set_strict(_config.strict);
         return "tool mode: " + m;
+    }
+
+    if ( cmd == "/stream" ) {
+        std::string m = common::to_lower(args);
+        if ( m.empty())
+            return std::string("stream: ") + ( _config.thinking_stream ? "on" : "off" );
+        if ( m == "on" || m == "true" ) _config.thinking_stream = true;
+        else if ( m == "off" || m == "false" ) _config.thinking_stream = false;
+        else return "usage: /stream <on|off>";
+        return std::string("stream: ") + ( _config.thinking_stream ? "on" : "off" );
     }
 
     if ( cmd == "/strict" ) {

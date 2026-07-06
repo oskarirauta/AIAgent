@@ -142,6 +142,7 @@ void InlineRepl::teardown() {
     if ( !_raw_active )
         return;
     wr("\033[?2004l"); // disable bracketed paste
+    wr("\033[?25h");   // ensure the cursor is visible
     wr("\033[0m");
     if ( g_termios_saved )
         tcsetattr(STDIN_FILENO, TCSANOW, &g_orig_termios);
@@ -150,7 +151,7 @@ void InlineRepl::teardown() {
 
 void InlineRepl::emergency_teardown() {
     // Async-signal context: touch only the saved terminal state, no C++ objects.
-    const char* reset = "\033[?2004l\033[0m";
+    const char* reset = "\033[?2004l\033[?25h\033[0m";
     (void)::write(STDOUT_FILENO, reset, std::strlen(reset));
     if ( g_termios_saved )
         tcsetattr(STDIN_FILENO, TCSANOW, &g_orig_termios);
@@ -1146,6 +1147,7 @@ void InlineRepl::render_confirm_dialog(const tools::ConfirmRequest& req) {
     // Discard anything typed before the prompt appeared so type-ahead can never
     // select an option — the whole point is that a stray keypress cannot approve.
     tcflush(STDIN_FILENO, TCIFLUSH);
+    wr("\033[?25l"); // hide the cursor while the menu is up
 
     if ( !req.danger.empty())
         wr("\n" + _theme.danger + "⚠ dangerous command — " + req.danger + Theme::reset + "\n");
@@ -1162,6 +1164,7 @@ void InlineRepl::commit_confirm(tools::Decision d, const std::string& label) {
     // Erase the menu and record the choice in the transcript.
     if ( _confirm_menu_lines > 0 )
         wr("\r\033[" + std::to_string(_confirm_menu_lines) + "A\033[J");
+    wr("\033[?25h"); // restore the cursor
     wr("\033[1m→ " + label + "\033[0m\n");
     _confirm_menu_lines = 0;
 
@@ -1330,8 +1333,9 @@ void InlineRepl::open_settings_menu() {
 
     erase_live();
     tcflush(STDIN_FILENO, TCIFLUSH); // ignore anything typed before the menu opened
+    wr("\033[?25l");                 // hide the cursor while the menu is up
     wr("\n" + _theme.command + "⚙ settings" + Theme::reset + "\n\n");
-    wr(_theme.dim + "↑/↓ select · ←/→ change · Enter edit/apply · Esc close" + Theme::reset + "\n");
+    wr(_theme.dim + "↑/↓ select · ←/→ change · Enter edit text · Esc close" + Theme::reset + "\n");
     _in_settings = true;
     _settings_editing = false;
     _settings_selection = 0;
@@ -1387,6 +1391,7 @@ void InlineRepl::cycle_settings_row(int dir) {
 void InlineRepl::close_settings_menu() {
     if ( _settings_menu_lines > 0 )
         wr("\r\033[" + std::to_string(_settings_menu_lines) + "A\033[J");
+    wr("\033[?25h"); // restore the cursor
     _settings_menu_lines = 0;
     _in_settings = false;
     _settings_editing = false;
@@ -1477,14 +1482,13 @@ void InlineRepl::handle_settings_key(int c) {
 
     if ( c == '\r' || c == '\n' ) {
         SettingRow& row = _settings_rows[_settings_selection];
+        // Only free-text rows react to Enter (start editing). Enum rows change
+        // with ←/→ only, so Enter here does nothing — it must not flip the value
+        // the user just picked.
         if ( row.options.empty()) {
-            // Free-text row: begin editing in place, pre-filled with the current
-            // value (but not the placeholder "unlimited").
             _settings_editing = true;
             _settings_edit_buf = ( row.value == "unlimited" ) ? "" : row.value;
             draw_settings_menu(true);
-        } else {
-            cycle_settings_row(+1);
         }
         return;
     }

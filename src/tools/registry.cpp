@@ -147,8 +147,14 @@ std::string Registry::classify_danger(const std::string& command) {
         if ( rule.any_flags.empty())
             return rule.reason;
         for ( const auto& flag : rule.any_flags ) {
+            // Option flags (-r, -rf, …) substring-match so clusters like -rfv hit;
+            // everything else (/, *, 777) must be its own token, so a path like
+            // /tmp/x or a name like file777 is not mistaken for the criterion.
+            bool is_option = !flag.empty() && flag[0] == '-';
             for ( size_t i = 1; i < tokens.size(); ++i ) {
-                if ( tokens[i] == flag || tokens[i].find(flag) != std::string::npos )
+                bool hit = is_option ? ( tokens[i].find(flag) != std::string::npos )
+                                     : ( tokens[i] == flag );
+                if ( hit )
                     return rule.reason;
             }
         }

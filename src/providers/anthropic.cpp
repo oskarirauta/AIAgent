@@ -73,11 +73,18 @@ JSON Anthropic::message_to_json(const Message& msg) {
             });
         }
         for ( const auto& tc : msg.tool_calls ) {
+            JSON input = JSON::Object{};
+            try {
+                if ( !tc.arguments.empty())
+                    input = JSON::parse(tc.arguments);
+            } catch ( const std::exception& ) {
+                input = JSON::Object{}; // tolerate empty / partial saved arguments
+            }
             blocks.append(JSON::Object{
                 { "type", "tool_use" },
                 { "id", tc.id },
                 { "name", tc.name },
-                { "input", JSON::parse(tc.arguments) }
+                { "input", input }
             });
         }
         return JSON::Object{

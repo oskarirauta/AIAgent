@@ -15,7 +15,7 @@ static bool is_memory_file(const std::string& name) {
         return false;
     if ( name == "README" || name == "README.md" )
         return true;
-    if ( common::has_suffix(name, ".md") || common::has_suffix(name, ".txt") || common::has_suffix(name, ".md") ||
+    if ( common::has_suffix(name, ".md") || common::has_suffix(name, ".txt") ||
          common::has_suffix(name, ".memory") || common::has_suffix(name, ".prompt"))
         return true;
     // files without extension are also allowed

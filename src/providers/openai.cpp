@@ -161,13 +161,17 @@ StreamChunk OpenAI::parse_stream(const std::string& chunk, std::string& buffer, 
 
         try {
             JSON j = JSON::parse(data);
-            if ( j.contains("usage") && j["usage"] == JSON::TYPE::OBJECT ) {
-                JSON u = j["usage"];
+            auto capture_usage = [this](const JSON& u) {
+                if ( u != JSON::TYPE::OBJECT ) return;
                 if ( u.contains("prompt_tokens")) _s_input_tokens = json_long(u["prompt_tokens"]);
                 if ( u.contains("completion_tokens")) _s_output_tokens = json_long(u["completion_tokens"]);
-            }
+            };
+            // Usage is top-level with stream_options.include_usage, but Kimi puts
+            // it inside choices[0] on the final chunk.
+            if ( j.contains("usage")) capture_usage(j["usage"]);
             if ( !( j.contains("choices") && j["choices"] == JSON::TYPE::ARRAY && j["choices"].size() > 0 ))
                 continue;
+            if ( j["choices"][0].contains("usage")) capture_usage(j["choices"][0]["usage"]);
             JSON delta = j["choices"][0]["delta"];
 
             if ( delta.contains("content") && delta["content"] == JSON::TYPE::STRING ) {
