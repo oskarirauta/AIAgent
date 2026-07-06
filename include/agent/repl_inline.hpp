@@ -90,6 +90,22 @@ private:
     void handle_confirm_key(int c);
     void commit_confirm(tools::Decision d, const std::string& label);
 
+    // Interactive settings menu (arrow-select), opened by a bare /settings.
+    struct SettingRow {
+        std::string key;                  // command key (theme, tools, model, …)
+        std::string label;                // display label
+        std::string value;                // current value
+        std::vector<std::string> options; // cyclable values; empty = free text
+    };
+    void run_command_line(const std::string& trimmed); // execute a slash command (called when idle)
+    void drain_pending();                               // run queued commands/messages after a turn
+    void open_settings_menu();
+    void draw_settings_menu(bool redraw);
+    void handle_settings_key(int c);
+    void close_settings_menu();
+    void cycle_settings_row(int dir); // dir = +1 / -1
+    void apply_settings_edit();       // commit the free-text edit buffer
+
     // Input handling (raw mode line editor).
     void handle_byte(int c);
     void insert_text(const std::string& text);
@@ -174,6 +190,13 @@ private:
     bool _confirming = false;
     int _confirm_selection = 0;   // highlighted option (0 = Deny, the safe default)
     int _confirm_menu_lines = 0;  // option lines currently drawn (for in-place redraw)
+
+    bool _in_settings = false;
+    bool _settings_editing = false;    // typing a free-text value into the selected row
+    std::string _settings_edit_buf;
+    int _settings_selection = 0;
+    int _settings_menu_lines = 0;
+    std::vector<SettingRow> _settings_rows;
     std::queue<std::string> _pending;      // prompts queued while a turn is running
     int _spin = 0;
     std::chrono::steady_clock::time_point _turn_start;

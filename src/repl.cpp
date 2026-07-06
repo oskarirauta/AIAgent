@@ -168,7 +168,7 @@ std::string Repl::handle_command(const std::string& line) {
         return "commands:\n"
                "  /help                    show this help\n"
                "  /about                   about the app, version, provider/model (alias /info)\n"
-               "  /settings [key value]    show settings, or set one (context, model, tools, strict, thinking)\n"
+               "  /settings                open the settings menu (or /settings <key> <value> to set one directly)\n"
                "  /model [name]            show or change the model\n"
                "  /tools <confirm|auto|insecure>   set the tool confirmation mode\n"
                "  /strict <on|off>         also confirm safe read-only commands\n"

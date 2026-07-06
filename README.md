@@ -151,8 +151,8 @@ Slash commands run locally (never sent to the model):
 |---------|--------|
 | `/help` | List the commands. |
 | `/about` | App description, version and current provider/model (alias `/info`). |
-| `/settings` | Show provider, model, tool mode, thinking, context limit, home, token usage. |
-| `/settings <key> <value>` | Set a value: `context` (e.g. `64K`, `0` = unlimited), `model`, `tools`, `strict`, `thinking`. |
+| `/settings` | Open the interactive settings menu (↑/↓ select, ←/→ change, Enter edit/apply, Esc close). |
+| `/settings <key> <value>` | Set a value directly: `context` (e.g. `64K`, `0` = unlimited), `model`, `tools`, `strict`, `thinking`. |
 | `/model [name]` | Show or change the active model. |
 | `/tools <confirm\|auto\|insecure>` | Change the tool confirmation mode. |
 | `/thinking <on\|off\|low\|medium\|high\|xhigh\|max>` | Set the thinking level (alias `/effort`; applied by Kimi). |

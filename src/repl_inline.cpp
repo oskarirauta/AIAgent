@@ -10,6 +10,7 @@
 #include <string>
 #include <sstream>
 #include <algorithm>
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -755,11 +756,13 @@ void InlineRepl::run() {
             }
             if ( _confirming )
                 handle_confirm_key(c);
+            else if ( _in_settings )
+                handle_settings_key(c);
             else
                 handle_byte(c);
         } else if ( r < 0 && errno != EINTR ) {
             break;
-        } else if ( _turn_running && !_confirming ) {
+        } else if ( _turn_running && !_confirming && !_in_settings ) {
             // Idle tick while working: advance the spinner.
             ++_spin;
             draw_live();
@@ -808,25 +811,17 @@ void InlineRepl::on_enter() {
         _input_window_start = 0;
         _pastes.clear();
 
-        // /retry pops the last exchange and re-runs the prompt as a fresh turn.
-        if ( trimmed == "/retry" ) {
-            std::string prompt = _command_cb ? _command_cb("/retry") : "nothing to retry";
-            if ( prompt.empty() || prompt == "nothing to retry" )
-                render_command(trimmed, "nothing to retry");
-            else if ( _turn_running ) {
-                _pending.push(prompt);
-                render_command(trimmed, "queued retry");
-            } else
-                start_turn(prompt, prompt);
+        // While a turn is streaming, queue the command so it runs when the queue
+        // advances, instead of interleaving with (and cluttering) the output.
+        // Flush type-ahead so keys aimed at a not-yet-open interactive menu can't
+        // trigger anything by accident.
+        if ( _turn_running ) {
+            _pending.push(trimmed);
+            tcflush(STDIN_FILENO, TCIFLUSH);
+            draw_live();
             return;
         }
-
-        std::string result;
-        if ( trimmed == "/theme" || trimmed.rfind("/theme ", 0) == 0 )
-            result = apply_theme_command(trimmed); // UI-local: only touches this renderer
-        else
-            result = _command_cb ? _command_cb(trimmed) : ("unknown command: " + trimmed);
-        render_command(trimmed, result);
+        run_command_line(trimmed);
         return;
     }
 
@@ -963,14 +958,8 @@ void InlineRepl::finish_turn() {
     _turn_running = false;
     _in_reply = false;
 
-    // Auto-send the next queued prompt, if any.
-    if ( !_pending.empty()) {
-        std::string next = _pending.front();
-        _pending.pop();
-        start_turn(next, next);
-    } else {
-        draw_live();
-    }
+    // Run whatever was queued while the turn was in flight.
+    drain_pending();
 }
 
 static std::vector<std::string> confirm_options(const tools::ConfirmRequest& req) {
@@ -1052,6 +1041,248 @@ void InlineRepl::commit_confirm(tools::Decision d, const std::string& label) {
     _cv.notify_all();
     _confirming = false;
     draw_live();
+}
+
+// ── command execution / queue ───────────────────────────────────────────
+
+void InlineRepl::run_command_line(const std::string& trimmed) {
+    // Always called when idle (no turn running).
+    if ( trimmed == "/retry" ) {
+        std::string prompt = _command_cb ? _command_cb("/retry") : "nothing to retry";
+        if ( prompt.empty() || prompt == "nothing to retry" )
+            render_command(trimmed, "nothing to retry");
+        else
+            start_turn(prompt, prompt);
+        return;
+    }
+    if ( trimmed == "/settings" ) {
+        open_settings_menu();
+        return;
+    }
+    std::string result;
+    if ( trimmed == "/theme" || trimmed.rfind("/theme ", 0) == 0 )
+        result = apply_theme_command(trimmed); // UI-local: only touches this renderer
+    else
+        result = _command_cb ? _command_cb(trimmed) : ("unknown command: " + trimmed);
+    render_command(trimmed, result);
+}
+
+void InlineRepl::drain_pending() {
+    // Run queued items in order: a command (starts with '/') renders locally; a
+    // message starts a turn (and draining stops until it finishes). Stops early
+    // if a command starts a turn or opens the interactive menu.
+    while ( !_pending.empty()) {
+        std::string next = _pending.front();
+        _pending.pop();
+        if ( !next.empty() && next[0] == '/' ) {
+            run_command_line(next);
+            if ( _turn_running || _in_settings )
+                return;
+        } else {
+            start_turn(next, next);
+            return;
+        }
+    }
+    draw_live();
+}
+
+// ── interactive settings menu ───────────────────────────────────────────
+
+void InlineRepl::open_settings_menu() {
+    // Current values come from the plain text /settings output (stable
+    // "key: value" lines); the theme is our own UI state.
+    std::map<std::string, std::string> cur;
+    if ( _command_cb ) {
+        std::istringstream ss(_command_cb("/settings"));
+        std::string ln;
+        while ( std::getline(ss, ln)) {
+            size_t colon = ln.find(':');
+            if ( colon == std::string::npos )
+                continue;
+            cur[common::trim_ws(ln.substr(0, colon))] = common::trim_ws(ln.substr(colon + 1));
+        }
+    }
+    auto first_word = [](const std::string& s) {
+        std::istringstream is(s);
+        std::string w;
+        is >> w;
+        return w;
+    };
+    std::string th = cur.count("thinking") ? cur["thinking"] : "";
+    if ( th.empty() || th[0] == '(' ) th = "default";
+
+    _settings_rows.clear();
+    _settings_rows.push_back({ "model", "model", cur.count("model") ? cur["model"] : _config.model, {} });
+    _settings_rows.push_back({ "theme", "theme", _theme.name, { "dark", "light", "warm" } });
+    _settings_rows.push_back({ "tools", "tools", first_word(cur["tools"]), { "confirm", "auto", "insecure" } });
+    _settings_rows.push_back({ "strict", "strict",
+        cur["tools"].find("(strict)") != std::string::npos ? "on" : "off", { "off", "on" } });
+    _settings_rows.push_back({ "thinking", "thinking", th,
+        { "off", "low", "medium", "high", "xhigh", "max" } });
+    _settings_rows.push_back({ "context", "context",
+        first_word(cur.count("context") ? cur["context"] : "unlimited"), {} });
+
+    erase_live();
+    tcflush(STDIN_FILENO, TCIFLUSH); // ignore anything typed before the menu opened
+    wr("\n" + _theme.command + "⚙ settings" + Theme::reset + "\n\n");
+    wr(_theme.dim + "↑/↓ select · ←/→ change · Enter edit/apply · Esc close" + Theme::reset + "\n");
+    _in_settings = true;
+    _settings_editing = false;
+    _settings_selection = 0;
+    _settings_menu_lines = 0;
+    draw_settings_menu(false);
+}
+
+void InlineRepl::draw_settings_menu(bool redraw) {
+    int n = static_cast<int>(_settings_rows.size());
+    std::string out;
+    if ( redraw && _settings_menu_lines > 0 )
+        out += "\r\033[" + std::to_string(_settings_menu_lines) + "A";
+    out += "\033[J";
+    for ( int i = 0; i < n; ++i ) {
+        const SettingRow& row = _settings_rows[i];
+        std::string label = row.label;
+        while ( label.size() < 9 ) label += ' ';
+        bool selected = ( i == _settings_selection );
+        if ( selected && _settings_editing ) {
+            // Free-text edit in place: show the buffer with a cursor bar.
+            out += "\033[1;7m ❯ " + label + _settings_edit_buf + "▏ \033[0m"
+                 + _theme.dim + "  (Enter apply · Esc cancel)" + Theme::reset;
+        } else if ( selected ) {
+            std::string hint = row.options.empty() ? "  (Enter to edit)" : "  (←/→)";
+            out += "\033[1;7m ❯ " + label + row.value + hint + " \033[0m";
+        } else {
+            out += _theme.dim + "   " + label + row.value + Theme::reset;
+        }
+        out += "\r\n";
+    }
+    wr(out);
+    _settings_menu_lines = n;
+}
+
+void InlineRepl::cycle_settings_row(int dir) {
+    SettingRow& row = _settings_rows[_settings_selection];
+    if ( row.options.empty())
+        return; // free-text row, not cyclable
+    int size = static_cast<int>(row.options.size());
+    int idx = 0;
+    for ( int i = 0; i < size; ++i )
+        if ( row.options[i] == row.value ) { idx = i; break; }
+    idx = ( idx + dir + size ) % size;
+    row.value = row.options[idx];
+
+    if ( row.key == "theme" )
+        apply_theme_command("/theme " + row.value);
+    else if ( _command_cb )
+        _command_cb("/" + row.key + " " + row.value);
+    draw_settings_menu(true);
+}
+
+void InlineRepl::close_settings_menu() {
+    if ( _settings_menu_lines > 0 )
+        wr("\r\033[" + std::to_string(_settings_menu_lines) + "A\033[J");
+    _settings_menu_lines = 0;
+    _in_settings = false;
+    _settings_editing = false;
+    // Anything queued behind the menu (while a turn ran) resumes now.
+    if ( !_pending.empty())
+        drain_pending();
+    else
+        draw_live();
+}
+
+void InlineRepl::apply_settings_edit() {
+    SettingRow& row = _settings_rows[_settings_selection];
+    std::string val = common::trim_ws(_settings_edit_buf);
+    _settings_editing = false;
+    if ( !val.empty()) {
+        if ( _command_cb )
+            _command_cb("/settings " + row.key + " " + val);
+        row.value = val;
+    }
+    draw_settings_menu(true);
+}
+
+void InlineRepl::handle_settings_key(int c) {
+    int n = static_cast<int>(_settings_rows.size());
+    if ( n == 0 ) { close_settings_menu(); return; }
+
+    // Free-text edit mode: type a value into the selected row.
+    if ( _settings_editing ) {
+        if ( c == 0x1b ) {
+            // Consume a possible arrow sequence (ignored while editing); a bare
+            // Esc cancels the edit and returns to menu navigation.
+            fd_set fds;
+            FD_ZERO(&fds);
+            FD_SET(STDIN_FILENO, &fds);
+            struct timeval tv { 0, 40 * 1000 };
+            if ( select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0 ) {
+                int b1 = read_byte();
+                if ( b1 == '[' || b1 == 'O' )
+                    read_byte();
+                return;
+            }
+            _settings_editing = false;
+            draw_settings_menu(true);
+            return;
+        }
+        if ( c == '\r' || c == '\n' ) {
+            apply_settings_edit();
+            return;
+        }
+        if ( c == 0x7f || c == 0x08 ) { // backspace (one UTF-8 char)
+            if ( !_settings_edit_buf.empty()) {
+                _settings_edit_buf.pop_back();
+                while ( !_settings_edit_buf.empty() &&
+                        (static_cast<unsigned char>(_settings_edit_buf.back()) & 0xC0) == 0x80 )
+                    _settings_edit_buf.pop_back();
+            }
+            draw_settings_menu(true);
+            return;
+        }
+        if ( c >= 0x20 ) { // printable / UTF-8 byte
+            _settings_edit_buf += static_cast<char>(c);
+            draw_settings_menu(true);
+            return;
+        }
+        return; // ignore other control keys while editing
+    }
+
+    // Navigation mode.
+    if ( c == 0x1b ) {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(STDIN_FILENO, &fds);
+        struct timeval tv { 0, 40 * 1000 };
+        if ( select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0 ) {
+            int b1 = read_byte();
+            if ( b1 == '[' || b1 == 'O' ) {
+                int b2 = read_byte();
+                if ( b2 == 'A' )      { _settings_selection = (_settings_selection - 1 + n) % n; draw_settings_menu(true); }
+                else if ( b2 == 'B' ) { _settings_selection = (_settings_selection + 1) % n; draw_settings_menu(true); }
+                else if ( b2 == 'C' ) cycle_settings_row(+1); // right
+                else if ( b2 == 'D' ) cycle_settings_row(-1); // left
+            }
+            return;
+        }
+        close_settings_menu(); // bare Esc closes the menu
+        return;
+    }
+
+    if ( c == '\r' || c == '\n' ) {
+        SettingRow& row = _settings_rows[_settings_selection];
+        if ( row.options.empty()) {
+            // Free-text row: begin editing in place, pre-filled with the current
+            // value (but not the placeholder "unlimited").
+            _settings_editing = true;
+            _settings_edit_buf = ( row.value == "unlimited" ) ? "" : row.value;
+            draw_settings_menu(true);
+        } else {
+            cycle_settings_row(+1);
+        }
+        return;
+    }
+    // Other keys ignored.
 }
 
 void InlineRepl::handle_confirm_key(int c) {
