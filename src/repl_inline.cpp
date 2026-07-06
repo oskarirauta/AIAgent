@@ -1002,8 +1002,9 @@ void InlineRepl::draw_confirm_menu(const tools::ConfirmRequest& req, bool redraw
 
 void InlineRepl::render_command(const std::string& cmd, const std::string& result) {
     erase_live();
-    // A system message: the command echoed with a ⚙ marker, then its result.
-    wr("\n" + _theme.command + "⚙ " + Theme::reset + cmd + "\n");
+    // A system message: the command echoed with a ⚙ marker, a blank line, then
+    // its result (the blank separates the header from the content for clarity).
+    wr("\n" + _theme.command + "⚙ " + Theme::reset + cmd + "\n\n");
     int width = term_cols() - 4;
     if ( width < 8 ) width = 8;
     std::istringstream ls(result);
