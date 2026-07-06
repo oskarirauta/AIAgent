@@ -83,6 +83,7 @@ private:
     void start_async_command(const std::string& cmd, const std::string& activity,
                              const std::string& echo_label = ""); // run a slow command off-thread
     bool maybe_auto_compact(); // auto-summarise history when it nears the context budget; true if started
+    std::string budget_warning(); // one-shot warning text when the session nears its cost/token budget
     void poll_worker();
     void finish_turn();
     void finish_async_command();
@@ -226,6 +227,7 @@ private:
     std::vector<SettingRow> _settings_rows;
     std::queue<std::string> _pending;      // prompts queued while a turn is running
     int _spin = 0;
+    int _budget_notified = 0; // highest budget threshold already warned (0 / 80 / 100)
     std::chrono::steady_clock::time_point _turn_start;
 };
 

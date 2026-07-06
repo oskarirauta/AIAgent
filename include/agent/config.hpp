@@ -8,6 +8,12 @@
 
 namespace agent {
 
+// Per-model price in USD per one million tokens (input / output).
+struct ModelPricing {
+    double input_per_mtok = 0.0;
+    double output_per_mtok = 0.0;
+};
+
 class Config {
 public:
     std::string provider = "openai";
@@ -34,6 +40,13 @@ public:
     size_t auto_compact_pct = 80; // trigger threshold as a percentage of context_budget()
     bool advisor = false;       // expose a tool letting the model consult a stronger advisor model (claude only)
     std::string advisor_model = "claude-opus-4-8"; // the model consulted by the advisor tool
+
+    // Cost / usage budget. Pricing is per-model (USD per million tokens), loaded
+    // from `price.<model>: <in>/<out>` config keys — no built-in defaults, so a
+    // model with no price shows usage only (matching flat-rate subscriptions).
+    std::map<std::string, ModelPricing> pricing;
+    double budget_usd = 0.0;    // warn when the session's estimated cost nears this (0 = off)
+    size_t budget_tokens = 0;   // warn when the session's total tokens near this (0 = off)
 
     // ncurses paste detection thresholds
     size_t paste_threshold_chars = 500;        // characters for multi-line paste
@@ -110,6 +123,14 @@ public:
 
     // Approximate context window (tokens) known for a model, or 0 if unknown.
     static size_t context_window_for(const std::string& model);
+
+    // Price for `model`: exact match first, then the first pricing entry whose key
+    // is a substring of the model (so "gpt-4o" covers "gpt-4o-2024-..."). Empty if
+    // no price is configured (e.g. a flat-rate subscription).
+    std::optional<ModelPricing> pricing_for(const std::string& model) const;
+
+    // Estimated session cost in USD for the current model, or -1 if unpriced.
+    double session_cost(long input_tokens, long output_tokens) const;
 
     // The token budget to actually apply when trimming history: the model's
     // window (with response headroom) in auto mode, else `context_limit`.

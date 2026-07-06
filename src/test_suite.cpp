@@ -275,6 +275,41 @@ static void test_advisor_tool() {
     check(!reg.has("consult_advisor"), "advisor gone after remove");
 }
 
+static void test_pricing_and_cost() {
+    std::cout << "pricing + session cost" << std::endl;
+    std::string path = "/tmp/ai_agent_pricing_test.conf";
+    {
+        std::ofstream ofd(path);
+        ofd << "model: gpt-4o-mini\n";
+        ofd << "price.gpt-4o-mini: 0.15/0.60\n";   // USD per million tokens
+        ofd << "price.gpt-4o: 2.5/10\n";
+        ofd << "budget_usd: 1.5\n";
+        ofd << "budget_tokens: 100000\n";
+    }
+    agent::Config cfg;
+    cfg.load(path);
+    check(cfg.budget_usd == 1.5, "budget_usd parsed");
+    check(cfg.budget_tokens == 100000, "budget_tokens parsed");
+
+    auto p = cfg.pricing_for("gpt-4o-mini");
+    check(p.has_value() && p->input_per_mtok == 0.15 && p->output_per_mtok == 0.60, "exact price match");
+
+    // 1,000,000 input @ 0.15 + 500,000 output @ 0.60 = 0.15 + 0.30 = 0.45
+    double cost = cfg.session_cost(1000000, 500000);
+    check(cost > 0.4499 && cost < 0.4501, "session cost computed");
+
+    // Substring match: a dated model name resolves to the base entry.
+    cfg.model = "gpt-4o-2024-08-06";
+    auto p2 = cfg.pricing_for(cfg.model);
+    check(p2.has_value() && p2->input_per_mtok == 2.5, "substring price match (gpt-4o)");
+
+    // Unknown / unpriced model -> negative (usage-only, e.g. a subscription).
+    cfg.model = "claude-opus-4-8";
+    check(cfg.session_cost(1000, 1000) < 0, "unpriced model returns -1");
+
+    std::filesystem::remove(path);
+}
+
 static void test_project_instructions() {
     std::cout << "project instructions (AGENTS.md)" << std::endl;
     std::string dir = "/tmp/ai_agent_proj_test";
@@ -831,6 +866,7 @@ int main() {
     test_anthropic_thinking();
     test_provider_capabilities();
     test_advisor_tool();
+    test_pricing_and_cost();
     test_project_instructions();
     test_workflow_manager();
     test_workflow_tool();

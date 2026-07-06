@@ -516,6 +516,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /stream <off|on|collapse> live reasoning; collapse hides it once the answer is done\n"
                "  /memories [name]         list this provider's memory files, or view one\n"
                "  /context                 show context usage (system, conversation, limit)\n"
+               "  /cost [budget <usd>|tokens <n>]   session token usage + estimated cost / budget\n"
                "  /history                 list the messages in the current context\n"
                "  /retry                   re-run your last message\n"
                "  /undo                    remove the last exchange from history\n"
@@ -564,6 +565,61 @@ std::string Repl::handle_command(const std::string& line) {
                  : ( _config.context_limit == 0 ? std::string("unlimited") : std::to_string(_config.context_limit)));
         if ( _stats.context_tokens.load() > 0 )
             s += "\n  last turn:     " + std::to_string(_stats.context_tokens.load());
+        return s;
+    }
+
+    if ( cmd == "/cost" ) {
+        if ( !args.empty()) {
+            std::istringstream iss(args);
+            std::string sub, val;
+            iss >> sub >> val;
+            sub = common::to_lower(sub);
+            if ( sub == "budget" ) {
+                if ( val.empty()) return "usage: /cost budget <usd>  (0 = off)";
+                try { _config.budget_usd = std::stod(val); }
+                catch ( ... ) { return "usage: /cost budget <usd>"; }
+                return _config.budget_usd > 0
+                     ? "cost budget: $" + val
+                     : std::string("cost budget: off");
+            }
+            if ( sub == "tokens" ) {
+                if ( val.empty()) return "usage: /cost tokens <n>  (0 = off)";
+                _config.budget_tokens = Config::parse_size_suffixed(val, _config.budget_tokens);
+                return _config.budget_tokens > 0
+                     ? "token budget: " + std::to_string(_config.budget_tokens)
+                     : std::string("token budget: off");
+            }
+            return "usage: /cost [budget <usd> | tokens <n>]";
+        }
+
+        long in = _stats.session_input.load(std::memory_order_relaxed);
+        long out = _stats.session_output.load(std::memory_order_relaxed);
+        long total = in + out;
+        std::string s = "session usage (" + _config.provider + " · " + _config.model + "):\n";
+        s += "  input:   " + std::to_string(in) + " tokens\n";
+        s += "  output:  " + std::to_string(out) + " tokens\n";
+        s += "  total:   " + std::to_string(total) + " tokens\n";
+
+        double cost = _config.session_cost(in, out);
+        if ( cost < 0 ) {
+            s += "  cost:    (no price configured for this model — usage only)\n";
+            s += "           set one with `price." + _config.model + ": <in>/<out>` (USD per Mtok)";
+        } else {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "$%.4f", cost);
+            s += "  cost:    " + std::string(buf);
+            if ( _config.budget_usd > 0 ) {
+                int pct = static_cast<int>(cost / _config.budget_usd * 100.0);
+                char bb[64];
+                std::snprintf(bb, sizeof(bb), "  of $%.2f budget (%d%%)", _config.budget_usd, pct);
+                s += std::string(bb);
+            }
+        }
+        if ( _config.budget_tokens > 0 ) {
+            int pct = static_cast<int>(static_cast<double>(total) / _config.budget_tokens * 100.0);
+            s += "\n  tokens:  " + std::to_string(total) + " / " +
+                 std::to_string(_config.budget_tokens) + " (" + std::to_string(pct) + "%)";
+        }
         return s;
     }
 

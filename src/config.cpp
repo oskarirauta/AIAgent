@@ -124,6 +124,24 @@ size_t Config::context_window_for(const std::string& model) {
     return 0; // unknown
 }
 
+std::optional<ModelPricing> Config::pricing_for(const std::string& model) const {
+    auto it = pricing.find(model);
+    if ( it != pricing.end())
+        return it->second;
+    for ( const auto& [key, price] : pricing )
+        if ( !key.empty() && model.find(key) != std::string::npos )
+            return price;
+    return std::nullopt;
+}
+
+double Config::session_cost(long input_tokens, long output_tokens) const {
+    auto p = pricing_for(model);
+    if ( !p )
+        return -1.0;
+    return static_cast<double>(input_tokens) / 1e6 * p->input_per_mtok +
+           static_cast<double>(output_tokens) / 1e6 * p->output_per_mtok;
+}
+
 size_t Config::context_budget() const {
     if ( context_auto ) {
         size_t w = context_window_for(model);
@@ -195,6 +213,28 @@ void Config::load(const std::string& path) {
         else if ( key == "auto_compact_pct" ) auto_compact_pct = parse_size(value, auto_compact_pct, key);
         else if ( key == "advisor" ) advisor = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
         else if ( key == "advisor_model" ) advisor_model = value;
+        else if ( key == "budget_tokens" ) budget_tokens = parse_size(value, budget_tokens, key);
+        else if ( key == "budget_usd" ) {
+            try { budget_usd = std::stod(common::trim_ws(value)); }
+            catch ( ... ) { logger::warning["config"] << "invalid budget_usd: " << value << std::endl; }
+        }
+        else if ( key.rfind("price.", 0) == 0 ) {
+            // price.<model>: <input>/<output>  (USD per million tokens)
+            std::string model_key = trim(key.substr(6));
+            size_t slash = value.find('/');
+            if ( model_key.empty() || slash == std::string::npos ) {
+                logger::warning["config"] << "invalid price entry: " << key << ": " << value << std::endl;
+            } else {
+                try {
+                    ModelPricing p;
+                    p.input_per_mtok = std::stod(trim(value.substr(0, slash)));
+                    p.output_per_mtok = std::stod(trim(value.substr(slash + 1)));
+                    pricing[model_key] = p;
+                } catch ( ... ) {
+                    logger::warning["config"] << "invalid price numbers: " << value << std::endl;
+                }
+            }
+        }
         else if ( key == "paste_threshold_chars" ) paste_threshold_chars = parse_size(value, paste_threshold_chars, key);
         else if ( key == "paste_threshold_lines" ) paste_threshold_lines = parse_size(value, paste_threshold_lines, key);
         else if ( key == "paste_single_line_chars" ) paste_single_line_chars = parse_size(value, paste_single_line_chars, key);

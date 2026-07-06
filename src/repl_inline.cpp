@@ -5,6 +5,7 @@
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -564,6 +565,13 @@ std::string InlineRepl::status_line() const {
             return std::to_string(n);
         };
         s += " · ctx " + fmt(ctx) + " · " + fmt(total) + " tok";
+        double cost = _config.session_cost(_stats.session_input.load(std::memory_order_relaxed),
+                                           _stats.session_output.load(std::memory_order_relaxed));
+        if ( cost >= 0 ) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), " · $%.4f", cost);
+            s += buf;
+        }
     }
     return s;
 }
@@ -1300,6 +1308,11 @@ void InlineRepl::finish_turn() {
     _turn_running = false;
     _in_reply = false;
 
+    // Warn once when the session crosses 80% / 100% of a configured cost/token budget.
+    std::string warn = budget_warning();
+    if ( !warn.empty())
+        wr("\n" + _theme.warn + "⚠ " + warn + Theme::reset + "\n");
+
     // If the context is now near its budget, summarise it before anything else
     // (so queued messages run against the smaller history). The async compaction
     // drains the pending queue itself when it finishes.
@@ -1308,6 +1321,43 @@ void InlineRepl::finish_turn() {
 
     // Run whatever was queued while the turn was in flight.
     drain_pending();
+}
+
+std::string InlineRepl::budget_warning() {
+    long in = _stats.session_input.load(std::memory_order_relaxed);
+    long out = _stats.session_output.load(std::memory_order_relaxed);
+    long total = in + out;
+
+    double frac = 0.0;
+    std::string detail;
+    if ( _config.budget_usd > 0.0 ) {
+        double cost = _config.session_cost(in, out);
+        if ( cost >= 0 ) {
+            double f = cost / _config.budget_usd;
+            if ( f > frac ) {
+                frac = f;
+                char b[96];
+                std::snprintf(b, sizeof(b), "$%.4f of $%.2f budget", cost, _config.budget_usd);
+                detail = b;
+            }
+        }
+    }
+    if ( _config.budget_tokens > 0 ) {
+        double f = static_cast<double>(total) / static_cast<double>(_config.budget_tokens);
+        if ( f > frac ) {
+            frac = f;
+            detail = std::to_string(total) + " of " + std::to_string(_config.budget_tokens) + " token budget";
+        }
+    }
+
+    int level = frac >= 1.0 ? 100 : ( frac >= 0.8 ? 80 : 0 );
+    if ( level <= _budget_notified )
+        return "";
+    _budget_notified = level;
+    if ( level >= 100 )
+        return "session budget reached: " + detail;
+    return "approaching session budget: " + detail +
+           " (" + std::to_string(static_cast<int>(frac * 100)) + "%)";
 }
 
 bool InlineRepl::maybe_auto_compact() {
