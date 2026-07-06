@@ -44,6 +44,7 @@ OBJS:= \
 	objs/tools_list_directory.o \
 	objs/tools_grep.o \
 	objs/tools_find_symbol.o \
+	objs/tools_find_references.o \
 	objs/tools_web_search.o \
 	objs/tools_fetch_url.o
 
@@ -130,6 +131,8 @@ objs/tools_list_directory.o: src/tools/list_directory.cpp
 objs/tools_grep.o: src/tools/grep.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/tools_find_symbol.o: src/tools/find_symbol.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/tools_find_references.o: src/tools/find_references.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/tools_web_search.o: src/tools/web_search.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;

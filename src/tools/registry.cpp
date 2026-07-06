@@ -14,6 +14,7 @@
 #include "agent/tools/list_directory.hpp"
 #include "agent/tools/grep.hpp"
 #include "agent/tools/find_symbol.hpp"
+#include "agent/tools/find_references.hpp"
 
 namespace agent::tools {
 
@@ -25,6 +26,7 @@ void Registry::register_defaults() {
     add(std::make_unique<ListDirectory>());
     add(std::make_unique<Grep>());
     add(std::make_unique<FindSymbol>());
+    add(std::make_unique<FindReferences>());
 }
 
 void Registry::add(std::unique_ptr<Tool> tool) {

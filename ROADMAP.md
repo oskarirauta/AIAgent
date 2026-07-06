@@ -98,8 +98,15 @@ each list is roughly the current priority order.
   json_cpp-style subscript API.
 - **`edit_file`**: targeted edit tool — replace an exact `old_string` with
   `new_string` in an existing file (`replace_all` optional; unique-match enforced
-  otherwise). Cheaper/safer than rewriting the whole file; danger-classified and
-  change-tracked like `write_file`. (Prefer over write_file for edits.)
+  otherwise), or pass an **`edits` array** to apply several replacements in one
+  atomic call (sequential; if any fails the file is left unchanged). Cheaper/safer
+  than rewriting the whole file; danger-classified and change-tracked like
+  `write_file`. (Prefer over write_file for edits.)
+- **`find_references`**: tree-wide whole-identifier usage search — where a symbol
+  is *used* (call sites + definition), the counterpart to `find_symbol` (which
+  finds the definition). More precise than `grep` (whole-word, so `foo` skips
+  `foobar`); skips build/vendor dirs and binaries; reports the reference and line
+  counts.
 - **`/export [file]`**: write the whole conversation to a Markdown file (system /
   you / assistant / tool-result sections, assistant tool calls noted) for bug
   reports, sharing and docs. Defaults to `agent-export-<timestamp>.md`.
@@ -149,11 +156,6 @@ each list is roughly the current priority order.
 Roughly in priority order for real coding use. Kept only what is genuinely useful
 *and* buildable well; the rest is dropped below.
 
-- **`edit_file` multi-edit**: an `edits` array applying several `old→new`
-  replacements to one file atomically (all-or-nothing). Fewer round-trips and
-  fewer failed one-shot edits. Small–medium.
-- **`find_references`**: a tool that finds a symbol's *call sites* (as `find_symbol`
-  finds definitions) — definition-biased grep for usages. Small, high coding value.
 - **Diff preview in the confirm dialog**: show the actual diff `edit_file`/
   `write_file` would apply *before* it runs (today the confirm shows raw args and
   `/changes` shows it after). Safer, better UX for edits.

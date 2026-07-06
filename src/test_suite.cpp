@@ -26,6 +26,7 @@
 #include "agent/auth/claude_oauth.hpp"
 #include "agent/tools/registry.hpp"
 #include "agent/tools/find_symbol.hpp"
+#include "agent/tools/find_references.hpp"
 #include "agent/tools/web_search.hpp"
 #include "agent/tools/fetch_url.hpp"
 #include "agent/tools/mcp_tool.hpp"
@@ -472,6 +473,33 @@ static void test_find_symbol() {
 
     std::string r5 = fs.execute(JSON::Object{ { "name", "bad name!" }, { "path", dir } });
     check(r5.rfind("error:", 0) == 0, "rejects a non-identifier name");
+
+    std::filesystem::remove_all(dir);
+}
+
+static void test_find_references() {
+    std::cout << "find_references (whole-word usage search)" << std::endl;
+    std::string dir = "/tmp/ai_fr_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir + "/objs");
+    {
+        std::ofstream o(dir + "/a.cpp");
+        o << "int foo() { return 0; }\n"      // definition (also a reference)
+             "int x = foo();\n"               // usage
+             "int foobar = 1;\n"              // substring — NOT a match
+             "// call foo then foo again\n";  // two whole-word hits on one line
+    }
+    { std::ofstream o(dir + "/objs/gen.cpp"); o << "foo();\n"; } // ignored dir
+
+    agent::tools::FindReferences fr;
+    std::string r = fr.execute(JSON::Object{ { "name", "foo" }, { "path", dir } });
+    check(r.find("int foo()") != std::string::npos && r.find("x = foo()") != std::string::npos, "finds definition + usage");
+    check(r.find("foobar") == std::string::npos, "excludes substring matches (foobar)");
+    check(r.find("objs/gen") == std::string::npos, "skips ignored directories");
+    check(r.find("4 references") != std::string::npos && r.find("on 3 lines") != std::string::npos, "counts references and lines");
+
+    check(fr.execute(JSON::Object{ { "name", "nope_xyz" }, { "path", dir } }).find("no references") != std::string::npos, "reports nothing found");
+    check(fr.execute(JSON::Object{ { "name", "bad name" }, { "path", dir } }).rfind("error:", 0) == 0, "rejects a non-identifier name");
 
     std::filesystem::remove_all(dir);
 }
@@ -1193,6 +1221,7 @@ int main() {
     test_html_to_text();
     test_web_search_parse();
     test_find_symbol();
+    test_find_references();
     test_pricing_and_cost();
     test_project_instructions();
     test_workflow_manager();
