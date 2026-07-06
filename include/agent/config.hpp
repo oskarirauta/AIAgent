@@ -53,6 +53,12 @@ public:
     bool web_search = true;
     std::string web_search_url = "https://html.duckduckgo.com/html/";
 
+    // Prompt caching: mark cache_control breakpoints (Anthropic/Claude) so the
+    // stable prefix (tools + system + prior turns) is cached — cheaper + faster.
+    // OpenAI/Kimi/DeepSeek cache automatically server-side, so this only changes
+    // the Anthropic requests. On by default.
+    bool prompt_cache = true;
+
     // Path to an MCP servers config ({"mcpServers": {...}}). Empty = look in the
     // default locations (<home>/mcp.json and ./.mcp.json).
     std::string mcp_config;

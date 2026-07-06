@@ -157,6 +157,49 @@ static void test_anthropic_request() {
     check(req["messages"][0]["role"].to_string() == "user", "user role");
 }
 
+static void test_prompt_caching() {
+    std::cout << "prompt caching (anthropic cache_control)" << std::endl;
+    JSON tools = JSON::Array{ JSON::Object{
+        { "type", "function" },
+        { "function", JSON::Object{ { "name", "t" }, { "description", "d" },
+                                    { "parameters", JSON::Object{ { "type", "object" } } } } } } };
+
+    // On: tools/system/last-message get cache_control.
+    {
+        agent::Config cfg; cfg.prompt_cache = true;
+        agent::providers::Anthropic p(cfg);
+        agent::Conversation c; c.set_system("sys"); c.add_user("hi");
+        JSON req = p.build_request(c, tools);
+        check(req["system"] == JSON::TYPE::ARRAY, "system becomes a block array when caching");
+        check(req["system"][req["system"].size() - 1].contains("cache_control"), "system block cached");
+        check(req["tools"][req["tools"].size() - 1].contains("cache_control"), "last tool cached");
+        JSON lastm = req["messages"][req["messages"].size() - 1];
+        check(lastm["content"] == JSON::TYPE::ARRAY &&
+              lastm["content"][lastm["content"].size() - 1].contains("cache_control"), "last message cached");
+    }
+
+    // Off: nothing is marked, system stays a plain string.
+    {
+        agent::Config cfg; cfg.prompt_cache = false;
+        agent::providers::Anthropic p(cfg);
+        agent::Conversation c; c.set_system("sys"); c.add_user("hi");
+        JSON req = p.build_request(c, tools);
+        check(req["system"] == JSON::TYPE::STRING, "system stays a string when caching off");
+        check(!req["tools"][0].contains("cache_control"), "no tool cache_control when off");
+    }
+
+    // Claude keeps the CLI identity first and caches the last system block.
+    {
+        agent::Config cfg; cfg.prompt_cache = true;
+        agent::providers::Claude cl(cfg);
+        agent::Conversation c; c.set_system("my sys prompt"); c.add_user("hi");
+        JSON req = cl.build_request(c, tools);
+        check(req["system"] == JSON::TYPE::ARRAY && req["system"].size() >= 2, "claude system is blocks");
+        check(req["system"][0]["text"].to_string().find("Claude Code") != std::string::npos, "CLI identity is first");
+        check(req["system"][req["system"].size() - 1].contains("cache_control"), "claude caches the last system block");
+    }
+}
+
 static void test_anthropic_role_merge() {
     // A /btw note is a standalone user message; the next prompt is another user
     // message. Anthropic requires alternating roles, so consecutive same-role
@@ -1090,6 +1133,7 @@ int main() {
     test_reasoning_content();
     test_ollama_request();
     test_anthropic_request();
+    test_prompt_caching();
     test_anthropic_role_merge();
     test_kimi_thinking_effort();
     test_anthropic_thinking();

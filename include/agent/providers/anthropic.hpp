@@ -42,6 +42,10 @@ protected:
     long _s_input_tokens = 0;
     long _s_output_tokens = 0;
 
+    // Add cache_control breakpoints to the stable prefix (tools/system/last
+    // message) of a built request. No-op fields are left untouched.
+    void apply_cache_control(JSON& req);
+
 private:
     JSON message_to_json(const Message& msg);
     JSON convert_tools(const JSON& tools_schema);

@@ -1167,6 +1167,14 @@ std::string Repl::handle_command(const std::string& line) {
                 return std::string("auto-compact: ") + ( _config.auto_compact ? "on" : "off" ) +
                        ( _config.auto_compact ? "  (at " + std::to_string(_config.auto_compact_pct) + "% of the context budget)" : "" );
             }
+            if ( key == "prompt_cache" || key == "cache" ) {
+                std::string v = common::to_lower(val);
+                if ( v == "on" || v == "true" || v == "1" || v == "yes" ) _config.prompt_cache = true;
+                else if ( v == "off" || v == "false" || v == "0" || v == "no" ) _config.prompt_cache = false;
+                else return "usage: /settings prompt_cache <on|off>";
+                return std::string("prompt_cache: ") + ( _config.prompt_cache ? "on" : "off" ) +
+                       "  (Anthropic cache_control; OpenAI/Kimi cache automatically)";
+            }
             if ( key == "web_search" || key == "websearch" ) {
                 std::string v = common::to_lower(val);
                 if ( v == "on" || v == "true" || v == "1" || v == "yes" ) _config.web_search = true;

@@ -69,6 +69,12 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **Prompt caching**: Anthropic/Claude requests mark `cache_control: ephemeral`
+  breakpoints on the stable prefix — the tools, the system prompt and the last
+  message (incremental multi-turn caching) — so repeat context is cheap (~10%) and
+  faster on cache hits. Claude keeps the CLI-identity system block first and caches
+  the rest. OpenAI/Kimi/DeepSeek cache automatically server-side, so no change
+  there. `prompt_cache` config / `/settings prompt_cache on|off`, default on.
 - **Bulk `read_file`**: a `paths` array reads several files in one call (each
   under a `===== path =====` header, sharing one output budget; a missing file is
   noted and the rest still read), cutting tool round-trips. Single-file
@@ -137,9 +143,6 @@ each list is roughly the current priority order.
 
 ### From the second Kimi review (assessed, top picks)
 
-- **Prompt caching** (Anthropic + Moonshot/Kimi): `cache_control: ephemeral` on the
-  system prompt + tools + stable history prefix — cuts input cost ~90% and latency
-  on cache hits. High value for heavy interactive use.
 - **Parallel tool calls**: run independent read-only tool calls concurrently in
   `process_turn` (writes/commands stay serial).
 - **DeepSeek + OpenRouter providers**: both OpenAI-compatible → small.

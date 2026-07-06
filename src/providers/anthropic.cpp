@@ -193,7 +193,39 @@ JSON Anthropic::build_request(const Conversation& conv, const JSON& tools_schema
         req["tools"] = tools;
     }
 
+    // Prompt caching: mark cache_control breakpoints on the stable prefix — the
+    // tools, the system prompt and the last message (incremental multi-turn
+    // caching). Claude::build_request re-marks its own rebuilt system blocks.
+    if ( _config.prompt_cache )
+        apply_cache_control(req);
+
     return req;
+}
+
+void Anthropic::apply_cache_control(JSON& req) {
+    JSON marker = JSON::Object{ { "type", "ephemeral" } };
+
+    // Last tool caches the whole tools array.
+    if ( req.contains("tools") && req["tools"] == JSON::TYPE::ARRAY && req["tools"].size() > 0 )
+        req["tools"][req["tools"].size() - 1]["cache_control"] = marker;
+
+    // System prompt (string form → a single cached text block).
+    if ( req.contains("system") && req["system"] == JSON::TYPE::STRING &&
+         !req["system"].to_string().empty()) {
+        req["system"] = JSON::Array{ JSON::Object{
+            { "type", "text" }, { "text", req["system"].to_string() }, { "cache_control", marker } } };
+    }
+
+    // Last message's final content block → caches the conversation prefix.
+    if ( req.contains("messages") && req["messages"].size() > 0 ) {
+        JSON& last = req["messages"][req["messages"].size() - 1];
+        if ( last["content"] == JSON::TYPE::STRING ) {
+            last["content"] = JSON::Array{ JSON::Object{
+                { "type", "text" }, { "text", last["content"].to_string() }, { "cache_control", marker } } };
+        } else if ( last["content"] == JSON::TYPE::ARRAY && last["content"].size() > 0 ) {
+            last["content"][last["content"].size() - 1]["cache_control"] = marker;
+        }
+    }
 }
 
 Response Anthropic::parse_response(const JSON& response) {

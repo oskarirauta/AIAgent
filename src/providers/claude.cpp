@@ -134,15 +134,25 @@ JSON Claude::build_request(const Conversation& conv, const JSON& tools_schema) {
         }
     };
 
-    if ( req.contains("system") && req["system"] == JSON::TYPE::STRING ) {
-        std::string existing = req["system"].to_string();
-        if ( !existing.empty()) {
-            system_blocks.append(JSON::Object{
-                { "type", "text" },
-                { "text", existing }
-            });
+    // The base may have delivered `system` as a plain string or, when prompt
+    // caching is on, as an array of text blocks — carry the user's system prompt
+    // over in either case (dropping any cache_control; it is re-added below).
+    if ( req.contains("system")) {
+        if ( req["system"] == JSON::TYPE::STRING ) {
+            std::string existing = req["system"].to_string();
+            if ( !existing.empty())
+                system_blocks.append(JSON::Object{ { "type", "text" }, { "text", existing } });
+        } else if ( req["system"] == JSON::TYPE::ARRAY ) {
+            JSON arr = req["system"];
+            for ( size_t i = 0; i < arr.size(); ++i )
+                if ( arr[i].contains("text"))
+                    system_blocks.append(JSON::Object{ { "type", "text" }, { "text", arr[i]["text"].to_string() } });
         }
     }
+
+    // Cache the system prefix (its final block) too.
+    if ( _config.prompt_cache && system_blocks.size() > 0 )
+        system_blocks[system_blocks.size() - 1]["cache_control"] = JSON::Object{ { "type", "ephemeral" } };
 
     req["system"] = system_blocks;
     return req;
