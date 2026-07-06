@@ -115,6 +115,9 @@ int main(int argc, char **argv) {
     if ( !config.provider_explicit && !last_used.provider.empty()) {
         config.provider = last_used.provider;
     }
+    // Restore persisted UI/behaviour settings (theme, multiline, thinking,
+    // context) from the previous session. Tool mode / strict are never persisted.
+    config.apply_settings(last_used);
 
     if ( config.provider != "openai" && config.provider != "ollama" &&
          config.provider != "anthropic" && config.provider != "moonshot" &&

@@ -23,6 +23,11 @@ Repl::Repl(const Config& config)
     else
         logger::info["agent"] << "tools disabled" << std::endl;
 
+    // Re-apply a persisted thinking/effort level (from the previous session) over
+    // whatever the provider defaulted to.
+    if ( _provider && !_config.thinking.empty())
+        _provider->apply_provider_options(JSON::Object{{ "thinking", _config.thinking }});
+
     // Load any persisted history for THIS provider first, then (re)apply the
     // current system prompt so a provider's identity and freshly-loaded memories
     // always reflect the running config rather than whatever was saved earlier.
@@ -318,7 +323,7 @@ std::string Repl::handle_command(const std::string& line) {
         s += "provider:  " + _config.provider + "\n";
         s += "model:     " + _config.model + "\n";
         s += "tools:     " + tools + ( _config.strict ? " (strict)" : "" ) + "\n";
-        s += "thinking:  " + ( _thinking.empty() ? std::string("(provider default)") : _thinking ) + "\n";
+        s += "thinking:  " + ( _config.thinking.empty() ? std::string("(provider default)") : _config.thinking ) + "\n";
         std::string ctx;
         if ( _config.context_auto ) {
             size_t b = _config.context_budget();
@@ -368,12 +373,12 @@ std::string Repl::handle_command(const std::string& line) {
 
     if ( cmd == "/thinking" || cmd == "/effort" ) {
         if ( args.empty())
-            return "thinking: " + ( _thinking.empty() ? std::string("(provider default)") : _thinking );
-        _thinking = common::to_lower(args);
+            return "thinking: " + ( _config.thinking.empty() ? std::string("(provider default)") : _config.thinking );
+        _config.thinking = common::to_lower(args);
         if ( _provider )
-            _provider->apply_provider_options(JSON::Object{{ "thinking", _thinking }});
+            _provider->apply_provider_options(JSON::Object{{ "thinking", _config.thinking }});
         std::string note = ( _config.provider == "kimi" ) ? "" : "  (only Kimi applies thinking currently)";
-        return "thinking: " + _thinking + note;
+        return "thinking: " + _config.thinking + note;
     }
 
     if ( cmd == "/clear" ) {
@@ -472,6 +477,10 @@ void Repl::run_tty() {
     inline_repl.set_command_callback([this](const std::string& cmd) { return handle_command(cmd); });
 
     inline_repl.run();
+
+    // Persist UI/behaviour settings changed this session (theme, multiline,
+    // thinking, context) so they are restored next launch.
+    _config.save_settings(_config.home_dir);
 }
 
 void Repl::run() {

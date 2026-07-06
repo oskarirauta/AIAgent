@@ -95,7 +95,7 @@ static std::vector<std::string> word_wrap(const std::string& line, int width) {
 
 // ── construction / teardown ─────────────────────────────────────────────
 
-InlineRepl::InlineRepl(callback_t cb, const Config& config, const Conversation& conversation, const TokenStats& stats)
+InlineRepl::InlineRepl(callback_t cb, Config& config, const Conversation& conversation, const TokenStats& stats)
     : _callback(std::move(cb)), _config(config), _conversation(conversation), _stats(stats) {
     _theme = theme_by_name(config.theme);
 }
@@ -113,6 +113,7 @@ std::string InlineRepl::apply_theme_command(const std::string& line) {
     if ( arg != "dark" && arg != "light" && arg != "warm" )
         return "unknown theme: " + arg + "  (available: dark, light, warm)";
     _theme = theme_by_name(arg);
+    _config.theme = _theme.name; // keep config in sync so the choice is persisted
     return "theme: " + _theme.name;
 }
 

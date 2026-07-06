@@ -174,6 +174,15 @@ scrolling line — ↑/↓ then move between the input lines (and fall back to h
 at the top/bottom). Large pastes stay collapsed into `[paste #N]` placeholders in
 either mode.
 
+### Persisted settings
+
+Theme, multi-line mode, thinking level and the context limit are remembered
+between sessions (stored in `<home>/state.json` alongside the last provider and
+model) and restored on the next launch. Security settings — the tool
+confirmation mode and strict mode — are **not** persisted; they reset to the safe
+default each session and must be set explicitly (config file or a flag) when you
+want them relaxed.
+
 ### Themes
 
 Three eye-comfort colour themes tuned with muted 256-colour tones (never setting

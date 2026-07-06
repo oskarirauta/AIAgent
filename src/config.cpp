@@ -264,19 +264,29 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                     last.models[it.name()] = value.to_string();
             });
         }
+        if ( j.contains("settings") && j["settings"] == JSON::TYPE::OBJECT ) {
+            const JSON& s = j["settings"];
+            last.has_settings = true;
+            if ( s.contains("theme") && s["theme"] == JSON::TYPE::STRING )
+                last.theme = s["theme"].to_string();
+            if ( s.contains("thinking") && s["thinking"] == JSON::TYPE::STRING )
+                last.thinking = s["thinking"].to_string();
+            if ( s.contains("multiline") && s["multiline"] == JSON::TYPE::BOOL )
+                last.multiline = s["multiline"].to_bool();
+            if ( s.contains("context_auto") && s["context_auto"] == JSON::TYPE::BOOL )
+                last.context_auto = s["context_auto"].to_bool();
+            if ( s.contains("context_limit") && s["context_limit"] == JSON::TYPE::INT )
+                last.context_limit = static_cast<size_t>(static_cast<long long>(s["context_limit"]));
+        }
     } catch ( const std::exception& e ) {
         logger::warning["config"] << "failed to parse state file: " << e.what() << std::endl;
     }
     return last;
 }
 
-void Config::save_last_used(const std::string& home_dir, const std::string& provider, const std::string& model) {
-    // Merge into any existing state so other providers' remembered models survive.
-    LastUsed last = load_last_used(home_dir);
-    last.provider = provider;
-    if ( !model.empty())
-        last.models[provider] = model;
-
+// Serialise a full state (provider, per-provider models, and UI settings) to the
+// state file atomically. Settings are only written once they have been recorded.
+static void write_state(const std::string& home_dir, const Config::LastUsed& last) {
     JSON models = JSON::Object{};
     for ( const auto& [name, m] : last.models )
         models[name] = m;
@@ -285,6 +295,15 @@ void Config::save_last_used(const std::string& home_dir, const std::string& prov
         { "provider", last.provider },
         { "models", models }
     };
+    if ( last.has_settings ) {
+        j["settings"] = JSON::Object{
+            { "theme", last.theme },
+            { "thinking", last.thinking },
+            { "multiline", last.multiline },
+            { "context_auto", last.context_auto },
+            { "context_limit", static_cast<long long>(last.context_limit) }
+        };
+    }
 
     std::string path = state_path(home_dir);
     std::string tmp = path + ".tmp";
@@ -298,6 +317,38 @@ void Config::save_last_used(const std::string& home_dir, const std::string& prov
         ofd.flush();
     }
     std::filesystem::rename(tmp, path);
+}
+
+void Config::save_last_used(const std::string& home_dir, const std::string& provider, const std::string& model) {
+    // Merge into any existing state so other providers' models and the settings
+    // block survive.
+    LastUsed last = load_last_used(home_dir);
+    last.provider = provider;
+    if ( !model.empty())
+        last.models[provider] = model;
+    write_state(home_dir, last);
+}
+
+void Config::save_settings(const std::string& home_dir) const {
+    // Preserve the existing provider/model block; overwrite the settings block.
+    LastUsed last = load_last_used(home_dir);
+    last.has_settings = true;
+    last.theme = theme;
+    last.thinking = thinking;
+    last.multiline = multiline;
+    last.context_auto = context_auto;
+    last.context_limit = context_limit;
+    write_state(home_dir, last);
+}
+
+void Config::apply_settings(const LastUsed& last) {
+    if ( !last.has_settings )
+        return;
+    theme = last.theme;
+    thinking = last.thinking;
+    multiline = last.multiline;
+    context_auto = last.context_auto;
+    context_limit = last.context_limit;
 }
 
 void Config::ensure_home_dir() {

@@ -38,7 +38,7 @@ public:
         std::string content;     // full pasted text substituted on submit
     };
 
-    InlineRepl(callback_t cb, const Config& config, const Conversation& conversation, const TokenStats& stats);
+    InlineRepl(callback_t cb, Config& config, const Conversation& conversation, const TokenStats& stats);
     ~InlineRepl();
 
     void run();
@@ -137,7 +137,7 @@ private:
 
     callback_t _callback;
     command_cb_t _command_cb;
-    const Config& _config;
+    Config& _config;
     const Conversation& _conversation;
     const TokenStats& _stats;
 

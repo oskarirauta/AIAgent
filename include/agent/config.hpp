@@ -21,6 +21,7 @@ public:
     std::string home_dir;
     std::string theme = "dark"; // colour theme: dark | light | warm
     bool multiline = false;     // multi-line prompt: show long input wrapped across lines
+    std::string thinking;       // thinking/effort level (empty = provider default); applied by Kimi
     bool tools_enabled = true;
     bool confirm_tools = true;  // ask before confirmation-requiring tools
     bool insecure = false;      // run every tool without asking (implies no danger warnings)
@@ -57,9 +58,24 @@ public:
             auto it = models.find(p);
             return it == models.end() ? std::string() : it->second;
         }
+        // Persisted UI/behaviour settings (only meaningful when has_settings).
+        bool has_settings = false;
+        std::string theme;
+        std::string thinking;
+        bool multiline = false;
+        size_t context_limit = 0;
+        bool context_auto = false;
     };
     static LastUsed load_last_used(const std::string& home_dir);
     static void save_last_used(const std::string& home_dir, const std::string& provider, const std::string& model);
+
+    // Persist the UI/behaviour settings (theme, multiline, thinking, context) of
+    // this config to the state file, preserving the last provider/model. Security
+    // settings (tool mode, strict) are intentionally NOT persisted.
+    void save_settings(const std::string& home_dir) const;
+
+    // Apply persisted settings from a loaded state onto this config.
+    void apply_settings(const LastUsed& last);
 
     static std::string default_path();
     static std::string default_home_dir();

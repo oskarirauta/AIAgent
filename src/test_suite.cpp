@@ -274,6 +274,35 @@ static void test_context_budget() {
     check(tiny.size() >= 2 && tiny.front().role == agent::Role::SYSTEM, "tiny budget keeps system + latest");
 }
 
+static void test_settings_persistence() {
+    std::cout << "settings persistence" << std::endl;
+    std::string home = "/tmp/ai_agent_persist_test";
+    std::filesystem::create_directories(home);
+    agent::Config::save_last_used(home, "kimi", "kimi-for-coding");
+
+    agent::Config c;
+    c.theme = "warm"; c.multiline = true; c.thinking = "on";
+    c.context_auto = true; c.context_limit = 65536;
+    c.save_settings(home);
+
+    auto last = agent::Config::load_last_used(home);
+    check(last.provider == "kimi", "provider preserved across save_settings");
+    check(last.model_for("kimi") == "kimi-for-coding", "model preserved across save_settings");
+    check(last.has_settings, "settings block present");
+    check(last.theme == "warm", "theme persisted");
+    check(last.multiline, "multiline persisted");
+    check(last.thinking == "on", "thinking persisted");
+    check(last.context_auto, "context_auto persisted");
+    check(last.context_limit == 65536, "context_limit persisted");
+
+    agent::Config c2;
+    c2.apply_settings(last);
+    check(c2.theme == "warm" && c2.multiline && c2.thinking == "on" && c2.context_limit == 65536,
+          "apply_settings restores onto a fresh config");
+
+    std::filesystem::remove_all(home);
+}
+
 static void test_context_auto() {
     std::cout << "context auto budget" << std::endl;
     check(agent::Config::context_window_for("claude-opus-4-8") == 200000, "claude window");
@@ -496,6 +525,7 @@ int main() {
     test_conversation_save_load();
     test_conversation_undo();
     test_context_budget();
+    test_settings_persistence();
     test_context_auto();
     test_conversation_corrupt();
     test_expand_tilde();

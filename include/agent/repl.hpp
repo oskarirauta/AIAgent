@@ -42,7 +42,6 @@ private:
     std::unique_ptr<providers::Provider> _provider;
     Conversation _conversation;
     TokenStats _stats;
-    std::string _thinking; // last thinking/effort set via /thinking (for display)
 };
 
 } // namespace agent
