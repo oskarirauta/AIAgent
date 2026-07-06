@@ -146,11 +146,14 @@ StreamChunk OpenAI::parse_stream(const std::string& chunk, std::string& buffer, 
         std::string frame = buffer.substr(0, pos);
         buffer.erase(0, pos + 2);
 
-        size_t data_pos = frame.find("data: ");
+        // SSE data line — the space after "data:" is optional (Kimi omits it on
+        // chunks but includes it on [DONE]).
+        size_t data_pos = frame.find("data:");
         if ( data_pos == std::string::npos )
             continue;
-
-        std::string data = frame.substr(data_pos + 6);
+        std::string data = frame.substr(data_pos + 5);
+        size_t nsp = data.find_first_not_of(" \t");
+        data = ( nsp == std::string::npos ) ? "" : data.substr(nsp);
         if ( data == "[DONE]" ) {
             done = true;
             continue;

@@ -245,11 +245,12 @@ StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffe
         if ( frame.find("event: message_stop") != std::string::npos )
             done = true;
 
-        size_t data_pos = frame.find("data: ");
+        size_t data_pos = frame.find("data:");
         if ( data_pos == std::string::npos )
             continue;
-
-        std::string data = frame.substr(data_pos + 6);
+        std::string data = frame.substr(data_pos + 5);
+        size_t nsp = data.find_first_not_of(" \t");
+        data = ( nsp == std::string::npos ) ? "" : data.substr(nsp);
         try {
             JSON j = JSON::parse(data);
             std::string type = j.contains("type") ? j["type"].to_string() : "";

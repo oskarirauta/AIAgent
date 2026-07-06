@@ -103,11 +103,12 @@ StreamChunk Ollama::parse_stream(const std::string& chunk, std::string& buffer, 
         std::string frame = buffer.substr(0, pos);
         buffer.erase(0, pos + 2);
 
-        size_t data_pos = frame.find("data: ");
+        size_t data_pos = frame.find("data:");
         if ( data_pos == std::string::npos )
             continue;
-
-        std::string data = frame.substr(data_pos + 6);
+        std::string data = frame.substr(data_pos + 5);
+        size_t nsp = data.find_first_not_of(" \t");
+        data = ( nsp == std::string::npos ) ? "" : data.substr(nsp);
         try {
             JSON j = JSON::parse(data);
             if ( j.contains("message")) {

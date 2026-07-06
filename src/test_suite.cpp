@@ -261,8 +261,9 @@ static void test_stream_parsers() {
     openai.stream_reset();
     std::string buf;
     bool done = false;
-    auto oc = openai.parse_stream("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\ndata: [DONE]\n\n", buf, done);
-    check(oc.content == "Hello" && done, "openai stream parser");
+    // Kimi sends "data:" with no space on chunks (but a space on [DONE]).
+    auto oc = openai.parse_stream("data:{\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\ndata: [DONE]\n\n", buf, done);
+    check(oc.content == "Hello" && done, "openai stream parser (no space after data:)");
 
     agent::providers::Ollama ollama(cfg);
     ollama.stream_reset();
