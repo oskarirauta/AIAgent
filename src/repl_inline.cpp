@@ -98,6 +98,7 @@ static std::vector<std::string> word_wrap(const std::string& line, int width) {
 InlineRepl::InlineRepl(callback_t cb, const Config& config, const Conversation& conversation, const TokenStats& stats)
     : _callback(std::move(cb)), _config(config), _conversation(conversation), _stats(stats) {
     _theme = theme_by_name(config.theme);
+    _multiline = config.multiline;
 }
 
 std::string InlineRepl::apply_theme_command(const std::string& line) {
@@ -1398,10 +1399,21 @@ void InlineRepl::handle_confirm_key(int c) {
 }
 
 void InlineRepl::handle_byte(int c) {
+    // Follow-up to a lone ESC whose next byte was delayed past the peek window:
+    // ESC then Enter inserts a newline (Alt+Enter typed as two keys); any other
+    // key means the ESC was standalone, so fall through and handle this key.
+    if ( _esc_pending ) {
+        _esc_pending = false;
+        if ( c == '\r' || c == '\n' ) { insert_text("\n"); draw_live(); return; }
+    }
+
     switch ( c ) {
-        case '\r': // Enter — accept CR or LF so it works on every terminal
-        case '\n':
+        case '\r': // Enter (Carriage Return) submits the line
             on_enter();
+            return;
+        case '\n': // Ctrl-J (Line Feed) inserts a newline
+            insert_text("\n");
+            draw_live();
             return;
         case 0x7f: // DEL
         case 0x08: // Backspace
@@ -1443,8 +1455,10 @@ void InlineRepl::handle_byte(int c) {
             FD_ZERO(&fds);
             FD_SET(STDIN_FILENO, &fds);
             struct timeval tv { 0, 40 * 1000 };
-            if ( select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) <= 0 )
-                return; // lone ESC
+            if ( select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) <= 0 ) {
+                _esc_pending = true; // a lone ESC so far; decide on the next key
+                return;
+            }
             int b1 = read_byte();
             if ( b1 == '\r' || b1 == '\n' ) { // Alt+Enter inserts a newline
                 insert_text("\n");

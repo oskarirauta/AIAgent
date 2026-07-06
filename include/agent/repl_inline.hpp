@@ -107,6 +107,11 @@ private:
     void cycle_settings_row(int dir); // dir = +1 / -1
     void apply_settings_edit();       // commit the free-text edit buffer
 
+    // Multi-line prompt helpers: byte ranges of each visual line of _input when
+    // wrapped to `width` columns (split on '\n', hard-wrapped by display width).
+    std::vector<std::pair<size_t, size_t>> wrap_input(int width) const;
+    bool multiline_vertical(int dir); // move the cursor up/down a visual line; false at the edge
+
     // Input handling (raw mode line editor).
     void handle_byte(int c);
     void insert_text(const std::string& text);
@@ -139,6 +144,7 @@ private:
     std::string _input;                 // current input buffer (UTF-8, may hold placeholders)
     size_t _cursor = 0;                 // byte offset of the cursor within _input
     size_t _input_window_start = 0;     // horizontal scroll offset (display cells) for the prompt
+    bool _esc_pending = false;          // a lone ESC seen; the next key is its (possibly delayed) follow-up
     std::vector<PasteItem> _pastes;     // large pastes referenced by inline placeholders
     size_t _paste_counter = 0;
 
@@ -147,6 +153,8 @@ private:
     std::string _stashed_input;         // current line stashed while browsing history
 
     int _live_lines = 0;                // physical lines the live block currently occupies
+    int _live_cursor_up = 2;            // lines from the cursor up to the block top (for erase/redraw)
+    bool _multiline = false;            // multi-line prompt: wrap the input across visual lines
     bool _in_reply = false;             // between begin_reply()/end_reply()
 
     // Streaming line buffer + fenced-code state for syntax highlighting.
