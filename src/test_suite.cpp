@@ -147,6 +147,32 @@ static void test_anthropic_request() {
     check(req["messages"][0]["role"].to_string() == "user", "user role");
 }
 
+static void test_anthropic_role_merge() {
+    // A /btw note is a standalone user message; the next prompt is another user
+    // message. Anthropic requires alternating roles, so consecutive same-role
+    // plain-text messages must be merged into one.
+    std::cout << "anthropic consecutive-role merge (/btw)" << std::endl;
+    agent::Config cfg;
+    agent::providers::Anthropic p(cfg);
+    agent::Conversation c;
+    c.set_system("sys");
+    c.add_user("remember: do not touch tests"); // /btw note
+    c.add_user("now fix the bug");               // next real prompt
+    JSON req = p.build_request(c, JSON::Array{});
+    check(req["messages"].size() == 1, "two consecutive user messages merge into one");
+    std::string merged = req["messages"][0]["content"].to_string();
+    check(merged.find("do not touch tests") != std::string::npos &&
+          merged.find("now fix the bug") != std::string::npos,
+          "merged content keeps both the note and the prompt");
+
+    // Normal alternation is left untouched.
+    agent::Conversation c2;
+    c2.set_system("sys");
+    c2.add_user("a"); c2.add_assistant("b"); c2.add_user("c");
+    JSON req2 = p.build_request(c2, JSON::Array{});
+    check(req2["messages"].size() == 3, "alternating roles are not merged");
+}
+
 static void test_kimi_thinking_effort() {
     std::cout << "kimi thinking effort" << std::endl;
     agent::Config cfg;
@@ -673,6 +699,7 @@ int main() {
     test_reasoning_content();
     test_ollama_request();
     test_anthropic_request();
+    test_anthropic_role_merge();
     test_kimi_thinking_effort();
     test_anthropic_thinking();
     test_provider_capabilities();

@@ -38,16 +38,24 @@ each list is roughly the current priority order.
   Off by default; toggle with `/settings auto_compact on|off`. Inactive unless a
   context budget is known (`context: auto` or an explicit limit).
 - **SIGWINCH**: the live block redraws at the new width on terminal resize.
+- **`/btw <note>`** (alias `/note`): add a note to the context as a user message
+  without asking for a reply — the model sees it on your next turn. Consecutive
+  same-role messages are merged in the Anthropic request so this can't break
+  Claude's strict user/assistant alternation.
+- **`/provider <name>`**: switch provider mid-session, carrying the current
+  conversation over (system prompt refreshed to the new provider's identity).
+  Re-auth is non-interactive (`ready_noninteractive`): a subscription provider
+  with no cached token is refused with a hint to relaunch with `-p <name>`,
+  rather than blocking the raw-mode REPL on an OAuth prompt.
 
 ## Planned
 
 - **Autocomplete**: slash commands and file paths.
 - **Settable paste thresholds** in `/settings` (the char/line/ms thresholds exist in
   config but are not yet exposed in the menu).
-- **`/provider` switching** mid-session (needs re-auth + a fresh conversation).
 - **Config-extensible danger/safe command lists**.
-- **`/btw`** (mid-turn note) and **`/tasks`** (agent todo list) — Claude Code-style
-  harness features; provider-agnostic if built as app features, sizeable.
+- **`/tasks`** (agent todo list) — Claude Code-style harness feature; provider-
+  agnostic if built as an app feature, sizeable. (`/btw` shipped, see Done.)
 - **paste-block expand**: the preview (first N lines + "… N more lines") ships via
   `paste_preview`; interactive expand/collapse of a previewed block is still open
   and under evaluation.

@@ -43,6 +43,14 @@ public:
     virtual std::string auth_value() const { return _config.api_key.empty() ? "" : "Bearer " + _config.api_key; }
     virtual void prepare_request(api::Client& client) { (void)client; }
     virtual bool authenticate(api::Client& client, bool force = false) { (void)client; (void)force; return true; }
+
+    // Non-interactive readiness check for a mid-session /provider switch: refresh
+    // an existing token if it is close to expiry, but NEVER fall back to an
+    // interactive login (the raw-mode REPL cannot host one). Returns true when the
+    // provider can be used right away, false when a fresh login is required.
+    // Providers without authentication are always ready.
+    virtual bool ready_noninteractive(api::Client& client) { (void)client; return true; }
+
     virtual bool supports_streaming() const { return false; }
 
     // Streaming: reset per-turn accumulation, parse one SSE chunk (returning the

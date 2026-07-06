@@ -40,6 +40,9 @@ private:
     std::string base_system_prompt() const;
     // Summarise the conversation via one LLM call and replace history with it.
     std::string compact_history();
+    // Switch the active provider mid-session, carrying the current conversation
+    // over (re-auth non-interactively). Returns text to display.
+    std::string switch_provider(const std::string& name);
 
     Config _config;
     api::Client _client;

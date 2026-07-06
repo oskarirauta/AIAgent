@@ -113,6 +113,28 @@ JSON Kimi::build_request(const Conversation& conv, const JSON& tools_schema) {
     return req;
 }
 
+bool Kimi::ready_noninteractive(api::Client& client) {
+    // Used by a mid-session /provider switch: refresh silently, never prompt.
+    if ( !_token )
+        return false;
+    if ( auth::token_needs_refresh(*_token, 300)) {
+        if ( _token->refresh_token.empty())
+            return false;
+        try {
+            auto refreshed = auth::refresh_access_token(oauth_host(), oauth_client_id(), _token->refresh_token, _config.home_dir, client);
+            auth::save_token(_config.home_dir, refreshed);
+            _token = refreshed;
+            _config.api_key = refreshed.access_token;
+        } catch ( const std::exception& e ) {
+            logger::warning["kimi"] << "token refresh failed on switch: " << e.what() << std::endl;
+            return false;
+        }
+    } else {
+        _config.api_key = _token->access_token;
+    }
+    return true;
+}
+
 void Kimi::prepare_request(api::Client& client) {
     if ( _config.api_key.empty() || !_token || auth::token_needs_refresh(*_token, 300)) {
         authenticate(client, false);

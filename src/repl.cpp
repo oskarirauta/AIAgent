@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <cctype>
 #include <ctime>
+#include <algorithm>
+#include <vector>
 #include <filesystem>
 #include "json.hpp"
 #include "logger.hpp"
@@ -107,6 +109,65 @@ std::string Repl::compact_history() {
     save_conversation();
 
     return "compacted " + std::to_string(count) + " messages into a summary";
+}
+
+std::string Repl::switch_provider(const std::string& name) {
+    static const std::vector<std::string> supported =
+        { "openai", "ollama", "anthropic", "moonshot", "kimi", "claude" };
+    if ( std::find(supported.begin(), supported.end(), name) == supported.end())
+        return "unknown provider: " + name +
+               "  (openai, ollama, anthropic, moonshot, kimi, claude)";
+    if ( name == _config.provider )
+        return "already using " + name;
+
+    // Build the target config, mirroring main()'s resolution: reset the endpoint
+    // so the new provider picks its own default, resolve its remembered/default
+    // model, and swap in a provider-appropriate identity unless the user set a
+    // custom system prompt.
+    Config nc = _config;
+    nc.provider = name;
+    nc.provider_explicit = true;
+    nc.api_url = Config().api_url; // provider constructors override this to their own default
+    if ( name == "kimi" )
+        nc.api_url = "https://api.kimi.com/coding/v1";
+
+    Config::LastUsed last = Config::load_last_used(_config.home_dir);
+    std::string remembered = last.model_for(name);
+    nc.model = !remembered.empty() ? remembered : Config::default_model_for(name);
+    nc.model_explicit = true;
+
+    if ( _config.system_prompt == Config::default_system_prompt_for(_config.provider))
+        nc.system_prompt = Config::default_system_prompt_for(name);
+
+    // Construct and, for subscription providers, make sure we can authenticate
+    // without an interactive login (the REPL is in raw mode). If not, refuse the
+    // switch rather than blocking on a URL/code prompt.
+    std::unique_ptr<providers::Provider> np;
+    try {
+        np = providers::create(nc);
+    } catch ( const std::exception& e ) {
+        return std::string("could not switch to ") + name + ": " + e.what();
+    }
+    if ( np && !nc.thinking.empty())
+        np->apply_provider_options(JSON::Object{{ "thinking", nc.thinking }});
+
+    if ( name == "kimi" || name == "claude" ) {
+        if ( !np->ready_noninteractive(_client))
+            return "not logged in to " + name +
+                   " — relaunch with `-p " + name + "` to log in first, then switch back.";
+    }
+
+    // Commit the switch. _config / _conversation are shared by reference with the
+    // running InlineRepl, so the status line and settings reflect the change at
+    // once. The conversation is carried over: keep the dialogue, but refresh the
+    // system message to the new provider's identity + memories.
+    _config = nc;
+    _provider = std::move(np);
+    _conversation.set_system(base_system_prompt());
+    save_conversation();
+    Config::save_last_used(_config.home_dir, _config.provider, _config.model);
+
+    return "switched to " + name + " (" + _config.model + ") — the conversation continues here";
 }
 
 std::string Repl::conversation_path() const {
@@ -284,7 +345,9 @@ std::string Repl::handle_command(const std::string& line) {
                "  /help                    show this help\n"
                "  /about                   about the app, version, provider/model (alias /info)\n"
                "  /settings                open the settings menu (or /settings <key> <value> to set one directly)\n"
+               "  /provider [name]         switch provider mid-session (carries the conversation over)\n"
                "  /model [name]            show or change the model\n"
+               "  /btw <note>              add a note to the context without asking for a reply (alias /note)\n"
                "  /tools <confirm|auto|insecure>   set the tool confirmation mode\n"
                "  /strict <on|off>         also confirm safe read-only commands\n"
                "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
@@ -367,6 +430,21 @@ std::string Repl::handle_command(const std::string& line) {
             return "nothing to undo";
         save_conversation();
         return "removed the last exchange";
+    }
+
+    if ( cmd == "/btw" || cmd == "/note" ) {
+        if ( args.empty())
+            return "usage: /btw <note>  — add a note to the context without asking for a reply";
+        _conversation.add_user(args);
+        save_conversation();
+        return "noted — added to the context (no reply); the model will see it on your next message";
+    }
+
+    if ( cmd == "/provider" ) {
+        if ( args.empty())
+            return "provider: " + _config.provider +
+                   "\nusage: /provider <openai|ollama|anthropic|moonshot|kimi|claude>";
+        return switch_provider(common::to_lower(common::trim_ws(args)));
     }
 
     if ( cmd == "/retry" ) {

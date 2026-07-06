@@ -50,6 +50,7 @@ public:
     // Explicitly authenticate (refresh stored token or run OAuth browser flow).
     // Returns true if a usable token is now available.
     bool authenticate(api::Client& client, bool force_login = false);
+    bool ready_noninteractive(api::Client& client) override;
 
     bool is_authenticated() const { return !_config.api_key.empty(); }
 

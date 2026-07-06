@@ -129,6 +129,23 @@ JSON Anthropic::build_request(const Conversation& conv, const JSON& tools_schema
     std::string system;
     JSON messages = JSON::Array{};
 
+    // Anthropic requires user/assistant roles to alternate. Merge a plain-text
+    // message into the previous one when they share a role and both carry string
+    // content — e.g. a /btw note directly followed by the next user prompt would
+    // otherwise be two user turns in a row and get rejected.
+    auto push = [&messages](const JSON& entry) {
+        if ( messages.size() > 0 ) {
+            JSON& last = messages[messages.size() - 1];
+            if ( last["role"].to_string() == entry["role"].to_string()
+                 && last["content"] == JSON::TYPE::STRING
+                 && entry["content"] == JSON::TYPE::STRING ) {
+                last["content"] = last["content"].to_string() + "\n\n" + entry["content"].to_string();
+                return;
+            }
+        }
+        messages.append(entry);
+    };
+
     for ( const auto& msg : request_messages(conv)) {
         if ( msg.role == agent::Role::SYSTEM ) {
             system = msg.content;
@@ -141,12 +158,12 @@ JSON Anthropic::build_request(const Conversation& conv, const JSON& tools_schema
                     { "content", msg.content }
                 }
             };
-            messages.append(JSON::Object{
+            push(JSON::Object{
                 { "role", "user" },
                 { "content", content }
             });
         } else {
-            messages.append(message_to_json(msg));
+            push(message_to_json(msg));
         }
     }
 

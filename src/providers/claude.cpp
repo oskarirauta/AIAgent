@@ -93,6 +93,28 @@ bool Claude::authenticate(api::Client& client, bool force_login) {
     return true;
 }
 
+bool Claude::ready_noninteractive(api::Client& client) {
+    // Used by a mid-session /provider switch: refresh silently, never prompt.
+    if ( !_token || _token->access_token.empty())
+        return false;
+    if ( auth::token_needs_refresh(*_token, 300)) {
+        if ( _token->refresh_token.empty())
+            return false;
+        try {
+            std::string previous_refresh = _token->refresh_token;
+            auto refreshed = auth::refresh_access_token(client, _token->refresh_token);
+            if ( refreshed.refresh_token.empty())
+                refreshed.refresh_token = previous_refresh;
+            _token = refreshed;
+            auth::save_claude_token(_config.home_dir, *_token);
+        } catch ( const std::exception& e ) {
+            logger::warning["claude"] << "token refresh failed on switch: " << e.what() << std::endl;
+            return false;
+        }
+    }
+    return true;
+}
+
 void Claude::prepare_request(api::Client& client) {
     if ( !_token || _token->access_token.empty() || auth::token_needs_refresh(*_token, 300)) {
         authenticate(client, false);
