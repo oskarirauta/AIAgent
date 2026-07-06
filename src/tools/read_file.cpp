@@ -39,32 +39,9 @@ long json_long(const JSON& v, long fallback) {
     return fallback;
 }
 
-} // namespace
-
-JSON ReadFile::parameters() const {
-    return JSON::Object{
-        { "type", "object" },
-        { "properties", JSON::Object{
-            { "path", JSON::Object{
-                { "type", "string" },
-                { "description", "absolute or relative path to the file" }
-            }},
-            { "offset", JSON::Object{
-                { "type", "integer" },
-                { "description", "1-based line number to start reading from (optional)" }
-            }},
-            { "limit", JSON::Object{
-                { "type", "integer" },
-                { "description", "maximum number of lines to read (optional)" }
-            }}
-        }},
-        { "required", JSON::Array{ "path" }}
-    };
-}
-
-std::string ReadFile::execute(const JSON& args) {
-    std::string path = common::trim_ws(args["path"].to_string());
-
+// Read one file and format a line-windowed view (header/footer), bounded by
+// max_bytes. Returns an error/empty note on failure. Shared by single and bulk.
+std::string read_file_section(const std::string& path, long offset, long limit, size_t max_bytes) {
     std::ifstream ifd(path, std::ios::in | std::ios::binary);
     if ( !ifd.is_open())
         return std::string("error: cannot open file: ") + path;
@@ -72,17 +49,13 @@ std::string ReadFile::execute(const JSON& args) {
     std::stringstream ss;
     ss << ifd.rdbuf();
     std::string raw = ss.str();
-
     if ( raw.empty())
         return "(empty file)";
-
     if ( looks_binary(raw))
         return "error: " + path + " appears to be a binary file (" +
                std::to_string(raw.size()) + " bytes); not shown.";
 
     std::string content = agent::normalize_text(raw);
-
-    // Split into lines (keep it simple: split on '\n').
     std::vector<std::string> lines;
     {
         std::string line;
@@ -92,9 +65,6 @@ std::string ReadFile::execute(const JSON& args) {
     }
     long total = static_cast<long>(lines.size());
 
-    long offset = args.contains("offset") ? json_long(args["offset"], 1) : 1;
-    long limit  = args.contains("limit")  ? json_long(args["limit"], DEFAULT_LINES)
-                                          : static_cast<long>(DEFAULT_LINES);
     if ( offset < 1 ) offset = 1;
     if ( limit < 1 ) limit = 1;
     if ( offset > total )
@@ -111,7 +81,7 @@ std::string ReadFile::execute(const JSON& args) {
         std::string ln = lines[i];
         if ( ln.size() > MAX_LINE_CHARS )
             ln = ln.substr(0, MAX_LINE_CHARS) + " …[line truncated]";
-        if ( out.size() + ln.size() + 1 > MAX_TOTAL_BYTES ) {
+        if ( out.size() + ln.size() + 1 > max_bytes ) {
             byte_capped = true;
             break;
         }
@@ -133,6 +103,69 @@ std::string ReadFile::execute(const JSON& args) {
                  "; read with offset " + std::to_string(shown_end + 1) + "]";
 
     return header + out + footer;
+}
+
+} // namespace
+
+JSON ReadFile::parameters() const {
+    return JSON::Object{
+        { "type", "object" },
+        { "properties", JSON::Object{
+            { "path", JSON::Object{
+                { "type", "string" },
+                { "description", "absolute or relative path to a single file" }
+            }},
+            { "paths", JSON::Object{
+                { "type", "array" },
+                { "items", JSON::Object{ { "type", "string" } } },
+                { "description", "read several files at once (their contents are returned together, each under a header); use this instead of many separate calls. offset/limit do not apply in this mode" }
+            }},
+            { "offset", JSON::Object{
+                { "type", "integer" },
+                { "description", "1-based line number to start reading from (single-file mode, optional)" }
+            }},
+            { "limit", JSON::Object{
+                { "type", "integer" },
+                { "description", "maximum number of lines to read (single-file mode, optional)" }
+            }}
+        }},
+        { "required", JSON::Array{}}
+    };
+}
+
+std::string ReadFile::execute(const JSON& args) {
+    // Bulk mode: read several files in one call, sharing one output budget.
+    if ( args.contains("paths") && args["paths"] == JSON::TYPE::ARRAY ) {
+        JSON arr = args["paths"];
+        std::string out;
+        int shown = 0;
+        for ( size_t i = 0; i < arr.size(); ++i ) {
+            std::string p = common::trim_ws(arr[i].to_string());
+            if ( p.empty())
+                continue;
+            size_t remaining = out.size() < MAX_TOTAL_BYTES ? MAX_TOTAL_BYTES - out.size() : 0;
+            if ( remaining < 256 ) {
+                out += "\n\n[remaining files omitted: output cap reached]";
+                break;
+            }
+            std::string section = read_file_section(p, 1, static_cast<long>(DEFAULT_LINES), remaining);
+            if ( !out.empty()) out += "\n\n";
+            out += "===== " + p + " =====\n" + section;
+            ++shown;
+        }
+        if ( shown == 0 )
+            return "error: no readable files given in paths";
+        return out;
+    }
+
+    // Single-file mode (with optional offset/limit windowing).
+    if ( !args.contains("path"))
+        return "error: provide `path` (a file) or `paths` (a list of files)";
+    std::string path = common::trim_ws(args["path"].to_string());
+    long offset = args.contains("offset") ? json_long(args["offset"], 1) : 1;
+    long limit  = args.contains("limit")  ? json_long(args["limit"], DEFAULT_LINES)
+                                          : static_cast<long>(DEFAULT_LINES);
+    return read_file_section(path, offset, limit, MAX_TOTAL_BYTES);
 }
 
 } // namespace agent::tools

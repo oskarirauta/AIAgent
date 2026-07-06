@@ -877,9 +877,23 @@ static void test_read_file_robustness() {
     std::string empty = rf.execute(JSON::Object{{ "path", "/tmp/ai_rf_empty.txt" }});
     check(empty.find("empty file") != std::string::npos, "empty file reported");
 
+    // Bulk read: several files in one call, each under a header.
+    { std::ofstream o("/tmp/ai_rf_a.txt"); o << "alpha one\nalpha two\n"; }
+    { std::ofstream o("/tmp/ai_rf_b.txt"); o << "beta one\n"; }
+    std::string bulk = rf.execute(JSON::Object{ { "paths", JSON::Array{ "/tmp/ai_rf_a.txt", "/tmp/ai_rf_b.txt" } } });
+    check(bulk.find("===== /tmp/ai_rf_a.txt =====") != std::string::npos &&
+          bulk.find("===== /tmp/ai_rf_b.txt =====") != std::string::npos, "bulk read shows a header per file");
+    check(bulk.find("alpha one") != std::string::npos && bulk.find("beta one") != std::string::npos, "bulk read returns each file's content");
+
+    // A missing file in the list is noted, the rest still read.
+    std::string bulk2 = rf.execute(JSON::Object{ { "paths", JSON::Array{ "/tmp/ai_rf_a.txt", "/tmp/nope_xyz.txt" } } });
+    check(bulk2.find("alpha one") != std::string::npos && bulk2.find("cannot open") != std::string::npos, "bulk read notes a missing file but keeps going");
+
     std::filesystem::remove("/tmp/ai_rf.txt");
     std::filesystem::remove("/tmp/ai_rf.bin");
     std::filesystem::remove("/tmp/ai_rf_empty.txt");
+    std::filesystem::remove("/tmp/ai_rf_a.txt");
+    std::filesystem::remove("/tmp/ai_rf_b.txt");
 }
 
 static void test_run_command_options() {

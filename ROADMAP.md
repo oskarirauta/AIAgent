@@ -69,6 +69,10 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **Bulk `read_file`**: a `paths` array reads several files in one call (each
+  under a `===== path =====` header, sharing one output budget; a missing file is
+  noted and the rest still read), cutting tool round-trips. Single-file
+  `path` + `offset`/`limit` windowing unchanged.
 - **`fetch_url`**: fetch an http/https page and return its text — HTML reduced to
   readable text (`html_to_text`: drop script/style/comments, block tags → line
   breaks, tags stripped, named + numeric entities decoded, whitespace tidied).
@@ -133,8 +137,6 @@ each list is roughly the current priority order.
 
 ### From the second Kimi review (assessed, top picks)
 
-- **Quick wins**: bulk/array `read_file` (line ranges already done via
-  offset/limit). (`run_command` timeout/cwd/env and `fetch_url` shipped — see Done.)
 - **Prompt caching** (Anthropic + Moonshot/Kimi): `cache_control: ephemeral` on the
   system prompt + tools + stable history prefix — cuts input cost ~90% and latency
   on cache hits. High value for heavy interactive use.
