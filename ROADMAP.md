@@ -146,51 +146,65 @@ each list is roughly the current priority order.
 
 ## Planned
 
-### From the second Kimi review (assessed, top picks)
+Roughly in priority order for real coding use. Kept only what is genuinely useful
+*and* buildable well; the rest is dropped below.
 
-- **Parallel tool calls**: run independent read-only tool calls concurrently in
-  `process_turn` (writes/commands stay serial).
-- **DeepSeek + OpenRouter providers**: both OpenAI-compatible → small.
-- **Native git tools** (`git_status/diff/log/show`, commit-with-confirm) — partly
-  redundant with the auto-safe `run_command`, but gives structured output.
-- Assessed low/covered: format/lint (→ run_command/MCP), code interpreters
-  (→ run_command), file-watch, image input (CLI out of scope), command macros.
+- **`edit_file` multi-edit**: an `edits` array applying several `old→new`
+  replacements to one file atomically (all-or-nothing). Fewer round-trips and
+  fewer failed one-shot edits. Small–medium.
+- **`find_references`**: a tool that finds a symbol's *call sites* (as `find_symbol`
+  finds definitions) — definition-biased grep for usages. Small, high coding value.
+- **Diff preview in the confirm dialog**: show the actual diff `edit_file`/
+  `write_file` would apply *before* it runs (today the confirm shows raw args and
+  `/changes` shows it after). Safer, better UX for edits.
+- **`/tasks`** (agent todo list): a lightweight, persisted checklist the model
+  maintains so long refactors don't drop half-finished steps. Provider-agnostic.
+- **Autocomplete**: Tab-complete slash commands, file paths and provider/model
+  names in the inline REPL.
+- **OpenRouter provider**: OpenAI-compatible → small, and testable on its free
+  tier. (DeepSeek/Gemini deferred — no subscription here to test against.)
+- **Config-extensible danger/safe command lists**: let a project add its own
+  safe/danger rules instead of the hard-coded lists only.
+- **Project map**: parse the build/manifest files present (`Makefile`,
+  `CMakeLists.txt`, `package.json`, `Cargo.toml`, `pyproject.toml`, `go.mod`, …)
+  into a short overview of modules / entry points, fed to the model on demand.
+  Medium; reduces "which files matter?" exploration.
+- **Context pin**: keep flagged messages (key decisions, code facts) verbatim
+  through `/compact` and auto-compact instead of summarising everything. Medium.
+- **`/workflows` enhancements**: parallel steps, push notifications on completion,
+  and cancel/retry of a run.
+- **UI polish**: settable paste thresholds in `/settings`, interactive paste-block
+  expand/collapse, and word-boundary wrapping in multi-line input.
+- **skills** (power-user): reusable, named instruction sets beyond `AGENTS.md`.
+- **`/rc`** / **`/plan`** (mode helpers), **more providers** (enough, not every one).
 
-- **Autocomplete**: slash commands and file paths.
-- **Settable paste thresholds** in `/settings` (the char/line/ms thresholds exist in
-  config but are not yet exposed in the menu).
-- **Config-extensible danger/safe command lists**.
-- **`/tasks`** (agent todo list) — Claude Code-style harness feature; provider-
-  agnostic if built as an app feature, sizeable. (`/btw` shipped, see Done.)
-- **paste-block expand**: the preview (first N lines + "… N more lines") ships via
-  `paste_preview`; interactive expand/collapse of a previewed block is still open
-  and under evaluation.
-- **`/workflows` enhancements**: parallel steps, live push notifications on
-  completion, and cancel/retry of a run.
-- **`/rc` command** for claude only
-- **`/plan` command** for plan mode
-- **More proviers** We don't aim to support every provider, we aim to support enough, most
-  common and most useful ones.
-- **word splitting to prompt** when multi-line mode is used, try to avoid cutting
-  to next line mid-word
-- **skills** support skills
+## Considered / dropped
 
-## Considered / out of scope
+Deliberately out — either covered by something we already have, or low return for
+a coding tool (it's a tool, not a toy).
 
-- **Multi-agent orchestration** (cloud code review, hundreds of agents) — the local
-  `/workflows` is the lightweight take; full cloud orchestration is a large
-  separate project, out of scope.
-- **Internal commands** replacing busybox coreutils — high effort, uncertain model
-  uptake; prefer clean errors + date-in-context instead.
-- **Filesystem snapshots before dangerous ops** — overkill; per-session change
-  tracking (`/changes` + revert, above) covers the useful part far more cheaply.
-- **Custom tools defined in config** — largely covered by `run_command` (the model
-  can already run `make test`, `build`, etc.), so a config `tools:` section is
-  mostly sugar; low marginal value.
-- **Automated test run after edits** — better expressed as a project instruction
-  in `AGENTS.md` ("run `make test` before finishing") which the model then does via
-  `run_command`; not worth a hard-coded hook.
+- **Native git tools** — the auto-safe `run_command` already runs read-only git
+  (`status/diff/log/show`); a commit-with-confirm wrapper is marginal over that.
+- **Auto-fix loop** (build/test fail → fix → retry) — already emergent: the model
+  sees the failing tool output and iterates. Better nudged via `AGENTS.md` than a
+  hard-coded loop.
+- **Linter / formatter / test-runner tools** — `run_command` + an `AGENTS.md` line
+  ("run `clang-format` / `make test` after edits") covers it; or an MCP server.
+- **Code eval** (`python -c`, `node -e`, regex tester) — `run_command` already does
+  this.
+- **Refactoring tools** (rename / extract / move) — `edit_file` (+ multi-edit) +
+  `find_references` + `grep` cover the practical need; full semantic refactors are
+  high-effort and low-reliability in plain text.
+- **File watch / auto-run on change** — niche for an interactive CLI.
+- **Command macros / snippets / templates** — prompt history + `AGENTS.md` conventions
+  cover most of it.
+- **Multi-agent cloud orchestration** — the local `/workflows` is the lightweight
+  take; full cloud orchestration is a separate project.
+- **Internal commands** replacing busybox coreutils — high effort, uncertain uptake;
+  prefer clean errors + date-in-context.
+- **Filesystem snapshots before dangerous ops** — `/changes` + revert covers the
+  useful part far more cheaply.
+- **Custom tools defined in config** — largely `run_command` sugar.
 - **Named session save/load** — history is already auto-saved per provider *and*
-  per project directory; named parallel sessions would be a minor enhancement, low
-  priority.
-- **Image input** — provider-dependent and of little use in a text CLI.
+  per project dir; named parallel sessions are a minor add.
+- **Image input** — provider-dependent, little use in a text CLI.
