@@ -3,6 +3,7 @@
 #include <iostream>
 #include <unistd.h>
 #include <cctype>
+#include <ctime>
 #include <filesystem>
 #include "json.hpp"
 #include "logger.hpp"
@@ -14,6 +15,19 @@
 #include "agent/text_utils.hpp"
 
 namespace agent {
+
+// A line stating today's date, appended to the system prompt so the model does not
+// have to shell out to `date` (which busybox may lack) to know the current day.
+static std::string current_date_line() {
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    if ( !localtime_r(&t, &tm))
+        return "";
+    char buf[64];
+    if ( std::strftime(buf, sizeof(buf), "%Y-%m-%d (%A)", &tm) == 0 )
+        return "";
+    return "\n\nThe current date is " + std::string(buf) + ".";
+}
 
 Repl::Repl(const Config& config)
     : _config(config), _provider(providers::create(config)) {
@@ -33,7 +47,7 @@ Repl::Repl(const Config& config)
     // always reflect the running config rather than whatever was saved earlier.
     _conversation.load(conversation_path());
 
-    std::string system = config.system_prompt;
+    std::string system = config.system_prompt + current_date_line();
     std::string memories = load_memories(config.home_dir, config.provider);
     if ( !memories.empty())
         system += memories;
@@ -445,7 +459,7 @@ std::string Repl::handle_command(const std::string& line) {
 
     if ( cmd == "/clear" ) {
         _conversation.clear();
-        std::string system = _config.system_prompt;
+        std::string system = _config.system_prompt + current_date_line();
         std::string memories = load_memories(_config.home_dir, _config.provider);
         if ( !memories.empty())
             system += memories;
