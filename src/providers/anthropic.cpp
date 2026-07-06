@@ -1,9 +1,49 @@
 #include "agent/providers/anthropic.hpp"
 
+#include <cctype>
 #include "throws.hpp"
 #include "logger.hpp"
 
 namespace agent::providers {
+
+long Anthropic::thinking_budget_for(const std::string& effort, const std::string& model) {
+    std::string m;
+    for ( char c : model ) m += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    long cap = ( m.find("sonnet") != std::string::npos ) ? 64000 : 32000; // output ceiling
+    long margin = 8192;        // leave room for the visible answer
+    long maxb = cap - margin;
+
+    long b;
+    if ( effort == "low" ) b = 2048;
+    else if ( effort == "medium" ) b = 8192;
+    else if ( effort == "high" ) b = 16000;
+    else if ( effort == "xhigh" ) b = 24000;
+    else if ( effort == "max" ) b = maxb;   // Claude-specific: the model's ceiling
+    else b = 8192;                          // plain "on" / enabled default
+    if ( b > maxb ) b = maxb;
+    if ( b < 1024 ) b = 1024;
+    return b;
+}
+
+void Anthropic::apply_provider_options(const JSON& options) {
+    if ( options.contains("thinking") && options["thinking"] == JSON::TYPE::STRING ) {
+        std::string v = options["thinking"].to_string();
+        std::string lower;
+        for ( char c : v ) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        if ( lower == "off" || lower == "false" || lower == "disabled" || lower == "0" ) {
+            _thinking_enabled = false;
+            _thinking_effort.clear();
+        } else if ( lower == "on" || lower == "true" || lower == "enabled" || lower == "1" || lower.empty()) {
+            _thinking_enabled = true;
+            _thinking_effort.clear();
+        } else {
+            _thinking_enabled = true;
+            _thinking_effort = lower;
+        }
+    }
+}
 
 static long json_long(const JSON& v) {
     if ( v == JSON::TYPE::INT ) return static_cast<long>(static_cast<long long>(v));
@@ -109,6 +149,18 @@ JSON Anthropic::build_request(const Conversation& conv, const JSON& tools_schema
         { "messages", messages }
     };
 
+    // Extended thinking: budget_tokens must be < max_tokens, so raise max_tokens
+    // above the budget. Temperature is left unset (Anthropic requires it to be 1
+    // with thinking; unset defaults to 1).
+    if ( _thinking_enabled ) {
+        long budget = thinking_budget_for(_thinking_effort, _config.model);
+        req["thinking"] = JSON::Object{
+            { "type", "enabled" },
+            { "budget_tokens", static_cast<long long>(budget) }
+        };
+        req["max_tokens"] = static_cast<long long>(budget + 8192);
+    }
+
     if ( !system.empty())
         req["system"] = system;
 
@@ -137,6 +189,8 @@ Response Anthropic::parse_response(const JSON& response) {
             std::string type = block.contains("type") ? block["type"].to_string() : "";
             if ( type == "text" && block.contains("text")) {
                 r.message += block["text"].to_string();
+            } else if ( type == "thinking" && block.contains("thinking")) {
+                r.thinking += block["thinking"].to_string();
             } else if ( type == "tool_use" ) {
                 ToolCall tc;
                 if ( block.contains("id"))

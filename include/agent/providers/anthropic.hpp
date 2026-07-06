@@ -21,6 +21,15 @@ public:
     JSON build_request(const Conversation& conv, const JSON& tools_schema) override;
     Response parse_response(const JSON& response) override;
     JSON make_tool_result(const std::string& tool_call_id, const std::string& result) override;
+    void apply_provider_options(const JSON& options) override;
+
+    // Extended-thinking budget (tokens) for an effort level and model. `max` is
+    // the model's ceiling (opus ~24k, sonnet ~56k) — a Claude-specific top level.
+    static long thinking_budget_for(const std::string& effort, const std::string& model);
+
+protected:
+    bool _thinking_enabled = false;   // off by default (unlike Kimi)
+    std::string _thinking_effort;     // low|medium|high|xhigh|max ("" = enabled, default budget)
 
 private:
     JSON message_to_json(const Message& msg);

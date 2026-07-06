@@ -164,6 +164,39 @@ static void test_kimi_thinking_effort() {
     check(req["thinking"]["type"].to_string() == "disabled", "off disables thinking");
 }
 
+static void test_anthropic_thinking() {
+    std::cout << "anthropic thinking" << std::endl;
+    agent::Config cfg;
+    cfg.model = "claude-opus-4-8";
+    agent::providers::Anthropic p(cfg);
+    agent::Conversation c;
+    c.add_user("hi");
+
+    JSON req = p.build_request(c, JSON::Array{});
+    check(!req.contains("thinking"), "no thinking by default");
+
+    p.apply_provider_options(JSON::Object{ { "thinking", "high" } });
+    req = p.build_request(c, JSON::Array{});
+    check(req.contains("thinking") && req["thinking"]["type"].to_string() == "enabled", "thinking enabled");
+    long budget = static_cast<long>(static_cast<long long>(req["thinking"]["budget_tokens"]));
+    long maxt = static_cast<long>(static_cast<long long>(req["max_tokens"]));
+    check(budget == 16000, "high effort budget");
+    check(maxt > budget, "max_tokens exceeds the thinking budget");
+
+    p.apply_provider_options(JSON::Object{ { "thinking", "max" } });
+    req = p.build_request(c, JSON::Array{});
+    check(static_cast<long>(static_cast<long long>(req["thinking"]["budget_tokens"])) == 32000 - 8192,
+          "max = opus ceiling minus answer margin");
+
+    JSON resp = JSON::Object{ { "content", JSON::Array{
+        JSON::Object{ { "type", "thinking" }, { "thinking", "reasoning here" } },
+        JSON::Object{ { "type", "text" }, { "text", "answer" } }
+    }}};
+    auto r = p.parse_response(resp);
+    check(r.thinking == "reasoning here", "parses the thinking block");
+    check(r.message == "answer", "parses the text block");
+}
+
 static void test_provider_capabilities() {
     std::cout << "provider capabilities" << std::endl;
     agent::Config cfg;
@@ -574,6 +607,7 @@ int main() {
     test_ollama_request();
     test_anthropic_request();
     test_kimi_thinking_effort();
+    test_anthropic_thinking();
     test_provider_capabilities();
     test_provider_options_config();
     test_claude_provider();

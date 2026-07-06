@@ -384,7 +384,8 @@ std::string Repl::handle_command(const std::string& line) {
         _config.thinking = common::to_lower(args);
         if ( _provider )
             _provider->apply_provider_options(JSON::Object{{ "thinking", _config.thinking }});
-        std::string note = ( _config.provider == "kimi" ) ? "" : "  (only Kimi applies thinking currently)";
+        bool applies = ( _config.provider == "kimi" || _config.provider == "claude" || _config.provider == "anthropic" );
+        std::string note = applies ? "" : "  (thinking is applied by Kimi and Claude/Anthropic)";
         return "thinking: " + _config.thinking + note;
     }
 
