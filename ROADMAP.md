@@ -69,14 +69,19 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
-- **MCP (Model Context Protocol) support** (v1, stdio): connect to MCP servers
-  defined in `mcp.json` / `.mcp.json` (`{"mcpServers": {name: {command,args,env}}}`),
-  run the JSON-RPC 2.0 initialize handshake + `tools/list`, and expose each server
-  tool to the model as `mcp__<server>__<tool>` (schema passed through). Tool calls
-  proxy to `tools/call`. `/mcp` lists servers + tools + status. Own stdio transport
-  (fork/exec + persistent pipes + poll-timeout reads) since `process_t` is
-  one-shot; servers spawned at startup, killed/reaped on exit. Scope: stdio +
-  tools only (HTTP/SSE, resources, prompts are follow-ups).
+- **MCP (Model Context Protocol) support**: connect to MCP servers defined in
+  `mcp.json` / `.mcp.json` — **stdio** (`{command,args,env}`, own fork/exec +
+  persistent-pipe transport) and **HTTP** (`{url,headers}`, Streamable HTTP with
+  `Mcp-Session-Id` + json-or-SSE responses). JSON-RPC 2.0 initialize handshake,
+  then `tools/list` + (by capability) `resources/list` + `prompts/list`. Each
+  server tool is exposed as `mcp__<server>__<tool>` (schema passed through);
+  **resources** get a per-server `mcp__<server>__read_resource(uri)` tool;
+  **prompts** load via `/mcp prompt <server> <name> [k=v]` (injected into context).
+  Servers connect **in parallel** at startup (bounded by the slowest handshake),
+  killed/reaped on exit. `/mcp` lists servers/tools/resources/prompts + status;
+  `/mcp refresh` re-lists a server whose offerings changed. Follow-up left:
+  automatic push refresh on `notifications/tools/list_changed` (needs a background
+  reader thread) — `/mcp refresh` covers it manually.
 - **`web_search` tool**: queries DuckDuckGo (html endpoint) and returns the top
   results (title, URL, snippet) for the model to read and cite. Especially useful
   for **local models (Ollama/llama.cpp)** with no MCP search server — it gives an
@@ -121,9 +126,6 @@ each list is roughly the current priority order.
 
 ### From the Kimi feature review (assessed)
 
-- **MCP enhancements**: HTTP/SSE transport (v1 is stdio only); resources and
-  prompts (v1 exposes tools only); lazy/async connect (v1 connects at startup);
-  live tool-list refresh on `notifications/tools/list_changed`.
 - **`/export <file>`** — write the transcript to Markdown for bug reports, sharing
   and docs. Trivial to build (the conversation is already in memory); small,
   occasional real value.

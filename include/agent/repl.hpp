@@ -62,7 +62,9 @@ private:
 
     // Connect configured MCP servers and register their tools; render /mcp.
     void connect_mcp();
+    void register_mcp_tools(); // (re)register proxy tools + resource readers
     std::string mcp_command(const std::string& args);
+    std::vector<std::string> _mcp_tool_names; // currently-registered mcp__ tools
 
     Config _config;
     api::Client _client;

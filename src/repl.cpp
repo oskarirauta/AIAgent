@@ -76,41 +76,123 @@ void Repl::connect_mcp() {
         return;
 
     _mcp.connect_all();
+    register_mcp_tools();
+}
+
+void Repl::register_mcp_tools() {
+    // Drop previously-registered MCP tools, then register the current set (called
+    // after connect and after /mcp refresh).
+    for ( const auto& name : _mcp_tool_names )
+        _registry.remove(name);
+    _mcp_tool_names.clear();
+
+    auto sanitise = [](const std::string& s) {
+        std::string o;
+        for ( char c : s )
+            o += ( std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' ) ? c : '_';
+        return o;
+    };
+
     for ( const auto& t : _mcp.tools()) {
         _registry.add(std::make_unique<tools::McpTool>(
             t.registered, t.description, t.input_schema, t.server, t.tool,
             [this](const std::string& s, const std::string& tool, const JSON& a) {
                 return _mcp.call_tool(s, tool, a);
             }));
+        _mcp_tool_names.push_back(t.registered);
+    }
+
+    // One read_resource tool per server that exposes resources; its description
+    // enumerates the available URIs so the model knows what it can read.
+    std::map<std::string, std::vector<mcp::ResourceDef>> by_server;
+    for ( const auto& r : _mcp.resources())
+        by_server[r.server].push_back(r);
+    for ( const auto& [server, rs] : by_server ) {
+        std::string desc = "Read a resource from MCP server '" + server + "'. Available resources:\n";
+        for ( const auto& r : rs )
+            desc += "  " + r.uri + ( r.description.empty() ? "" : "  — " + r.description ) + "\n";
+        JSON schema = JSON::Object{
+            { "type", "object" },
+            { "properties", JSON::Object{ { "uri", JSON::Object{
+                { "type", "string" }, { "description", "the resource URI to read" } } } } },
+            { "required", JSON::Array{ "uri" } }
+        };
+        std::string reg = "mcp__" + sanitise(server) + "__read_resource";
+        _registry.add(std::make_unique<tools::McpTool>(
+            reg, desc, schema, server, "read_resource",
+            [this](const std::string& s, const std::string&, const JSON& a) {
+                std::string uri = ( a == JSON::TYPE::OBJECT && a.contains("uri")) ? a["uri"].to_string() : "";
+                return _mcp.read_resource(s, uri);
+            }));
+        _mcp_tool_names.push_back(reg);
     }
 }
 
 std::string Repl::mcp_command(const std::string& args) {
-    (void)args;
     if ( !_mcp.any_configured())
         return "no MCP servers configured\n"
                "add them to " + _config.home_dir + "/mcp.json or ./.mcp.json, e.g.\n"
                "  {\"mcpServers\": {\"filesystem\": {\"command\": \"npx\", "
-               "\"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"]}}}";
+               "\"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \".\"]}}}\n"
+               "or an HTTP server: {\"mcpServers\": {\"remote\": {\"url\": \"https://host/mcp\"}}}";
+
+    std::istringstream iss(args);
+    std::string sub;
+    iss >> sub;
+    sub = common::to_lower(sub);
+
+    if ( sub == "refresh" ) {
+        int n = _mcp.refresh();
+        register_mcp_tools();
+        return "refreshed MCP servers — " + std::to_string(n) + " tool(s) available";
+    }
+
+    if ( sub == "prompt" ) {
+        std::string server, name;
+        iss >> server >> name;
+        if ( server.empty() || name.empty())
+            return "usage: /mcp prompt <server> <name> [key=value ...]";
+        std::map<std::string, std::string> pargs;
+        std::string kv;
+        while ( iss >> kv ) {
+            size_t eq = kv.find('=');
+            if ( eq != std::string::npos )
+                pargs[kv.substr(0, eq)] = kv.substr(eq + 1);
+        }
+        std::string text = _mcp.get_prompt(server, name, pargs);
+        if ( text.rfind("error:", 0) == 0 )
+            return text;
+        _conversation.add_user(text);
+        save_conversation();
+        return "loaded prompt '" + name + "' from " + server +
+               " into the context (send a message to continue):\n\n" + text;
+    }
 
     auto st = _mcp.status();
     std::string s = "MCP servers:\n";
     for ( const auto& si : st ) {
-        s += std::string("\n  ") + ( si.connected ? "✓" : "✗" ) + " " + si.name;
+        s += std::string("\n  ") + ( si.connected ? "✓" : "✗" ) + " " + si.name +
+             "  [" + si.transport + "]";
         if ( si.connected ) {
-            s += "  (" + std::to_string(si.tool_names.size()) + " tool" +
-                 ( si.tool_names.size() == 1 ? "" : "s" );
-            if ( !si.tool_names.empty()) {
-                s += ": ";
-                for ( size_t i = 0; i < si.tool_names.size(); ++i )
-                    s += ( i ? ", " : "" ) + si.tool_names[i];
+            s += "\n      tools: ";
+            if ( si.tool_names.empty()) s += "(none)";
+            else for ( size_t i = 0; i < si.tool_names.size(); ++i )
+                s += ( i ? ", " : "" ) + si.tool_names[i];
+            if ( !si.resource_uris.empty()) {
+                s += "\n      resources: " + std::to_string(si.resource_uris.size()) +
+                     " (read via mcp__" + si.name + "__read_resource)";
             }
-            s += ")";
+            if ( !si.prompt_names.empty()) {
+                s += "\n      prompts: ";
+                for ( size_t i = 0; i < si.prompt_names.size(); ++i )
+                    s += ( i ? ", " : "" ) + si.prompt_names[i];
+            }
         } else {
             s += "  — " + ( si.error.empty() ? std::string("not connected") : si.error );
         }
     }
-    s += "\n\nthe model calls these as mcp__<server>__<tool>";
+    s += "\n\nmodel calls tools as mcp__<server>__<tool>"
+         "\n/mcp refresh — re-list · /mcp prompt <server> <name> [k=v] — load a prompt";
     return s;
 }
 
@@ -574,7 +656,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /btw <note>              add a note to the context without asking for a reply (alias /note)\n"
                "  /advisor <on|off|model N>   (claude) let the model consult a stronger advisor model\n"
                "  /workflows [id]          (claude) view background workflow runs the model started\n"
-               "  /mcp                     list connected MCP servers and their tools\n"
+               "  /mcp [refresh|prompt <server> <name> [k=v]]   MCP servers, tools, resources, prompts\n"
                "  /tools <confirm|auto|insecure>   set the tool confirmation mode\n"
                "  /strict <on|off>         also confirm safe read-only commands\n"
                "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"

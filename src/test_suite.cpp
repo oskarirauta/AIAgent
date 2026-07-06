@@ -303,22 +303,29 @@ static void test_mcp_tool_and_config() {
         std::ofstream ofd(path);
         ofd << "{\"mcpServers\":{"
                "\"alpha\":{\"command\":\"/bin/true\",\"args\":[\"--x\"]},"
-               "\"beta\":{\"command\":\"/bin/false\"}}}";
+               "\"beta\":{\"command\":\"/bin/false\"},"
+               "\"gamma\":{\"url\":\"https://example.com/mcp\"}}}";
     }
     agent::mcp::Client c;
     int n = c.load_config(path);
-    check(n == 2, "load_config counts two servers");
+    check(n == 3, "load_config counts three servers (stdio + http)");
     auto st = c.status();
-    check(st.size() == 2, "status lists two servers");
-    bool found_alpha = false;
+    check(st.size() == 3, "status lists three servers");
+    bool found_alpha = false, found_gamma = false;
     for ( const auto& si : st ) {
         if ( si.name == "alpha" ) {
             found_alpha = true;
-            check(si.command == "/bin/true", "server command parsed");
+            check(si.command == "/bin/true", "stdio command parsed");
+            check(si.transport == "stdio", "stdio transport");
             check(!si.connected, "not connected before connect_all");
         }
+        if ( si.name == "gamma" ) {
+            found_gamma = true;
+            check(si.transport == "http", "url server uses http transport");
+            check(si.command == "https://example.com/mcp", "http url parsed");
+        }
     }
-    check(found_alpha, "alpha server present");
+    check(found_alpha && found_gamma, "stdio + http servers present");
     check(c.load_config("/tmp/does_not_exist_mcp.json") == 0, "missing config -> 0 servers");
 
     std::filesystem::remove(path);
