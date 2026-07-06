@@ -1020,6 +1020,29 @@ static void test_edit_file() {
     std::string mf = ef.execute(JSON::Object{{ "path", "/tmp/does_not_exist_edit.txt" }, { "old_string", "a" }, { "new_string", "b" }});
     check(mf.find("does not exist") != std::string::npos, "editing a missing file refused");
 
+    // Multi-edit: several edits in one atomic call, applied in order.
+    write("one\ntwo\nthree\n");
+    std::string me = ef.execute(JSON::Object{ { "path", path }, { "edits", JSON::Array{
+        JSON::Object{ { "old_string", "one" }, { "new_string", "1" } },
+        JSON::Object{ { "old_string", "three" }, { "new_string", "3" } } } } });
+    check(me.find("2 edits") != std::string::npos, "multi-edit reports the edit count");
+    check(read() == "1\ntwo\n3\n", "multi-edit applies all edits");
+
+    // Sequential: a later edit sees an earlier edit's result.
+    write("aaa\n");
+    ef.execute(JSON::Object{ { "path", path }, { "edits", JSON::Array{
+        JSON::Object{ { "old_string", "aaa" }, { "new_string", "bbb" } },
+        JSON::Object{ { "old_string", "bbb" }, { "new_string", "ccc" } } } } });
+    check(read() == "ccc\n", "multi-edit is sequential (later edit sees earlier result)");
+
+    // Atomic: if one edit fails, the file is left unchanged.
+    write("keep me\n");
+    std::string atom = ef.execute(JSON::Object{ { "path", path }, { "edits", JSON::Array{
+        JSON::Object{ { "old_string", "keep" }, { "new_string", "KEEP" } },
+        JSON::Object{ { "old_string", "nonexistent" }, { "new_string", "x" } } } } });
+    check(atom.find("edit #2") != std::string::npos && atom.find("left unchanged") != std::string::npos, "multi-edit reports which edit failed");
+    check(read() == "keep me\n", "a failed multi-edit leaves the file unchanged (atomic)");
+
     std::filesystem::remove(path);
 }
 
