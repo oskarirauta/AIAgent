@@ -41,6 +41,12 @@ private:
     // Rebuild the system prompt (config + current date + memories).
     std::string base_system_prompt() const;
 
+    // Agent todo list (model-maintained via the update_tasks tool; /tasks shows it).
+    struct Task { std::string title; std::string status; };
+    std::vector<Task> _tasks;
+    std::string set_tasks(const JSON& tasks);   // update_tasks handler
+    std::string tasks_command() const;          // /tasks view
+
     // Session change tracking for write_file (transparency + revert).
     struct FileChange { bool existed = false; std::string original; bool tracked = true; };
     std::map<std::string, FileChange> _changes; // absolute path -> pre-write state

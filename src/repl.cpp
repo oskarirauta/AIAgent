@@ -24,6 +24,7 @@
 #include "agent/tools/web_search.hpp"
 #include "agent/tools/fetch_url.hpp"
 #include "agent/tools/mcp_tool.hpp"
+#include "agent/tools/tasks_tool.hpp"
 
 namespace agent {
 
@@ -69,6 +70,41 @@ Repl::Repl(const Config& config)
     _registry.set_pre_run_callback([this](const std::string& n, const JSON& a) {
         record_file_change(n, a);
     });
+
+    // A todo list the model maintains (update_tasks tool), shown by /tasks.
+    if ( _config.tools_enabled )
+        _registry.add(std::make_unique<tools::TasksTool>(
+            [this](const JSON& t) { return set_tasks(t); }));
+}
+
+std::string Repl::set_tasks(const JSON& tasks) {
+    _tasks.clear();
+    size_t done = 0, in_progress = 0;
+    for ( size_t i = 0; i < tasks.size(); ++i ) {
+        JSON t = tasks[i];
+        std::string title = t.contains("title") ? common::trim_ws(t["title"].to_string()) : "";
+        if ( title.empty())
+            continue;
+        std::string status = t.contains("status") ? common::to_lower(t["status"].to_string()) : "pending";
+        if ( status != "done" && status != "in_progress" && status != "pending" )
+            status = "pending";
+        if ( status == "done" ) ++done;
+        else if ( status == "in_progress" ) ++in_progress;
+        _tasks.push_back({ title, status });
+    }
+    return "tasks updated: " + std::to_string(_tasks.size()) + " (" +
+           std::to_string(done) + " done, " + std::to_string(in_progress) + " in progress)";
+}
+
+std::string Repl::tasks_command() const {
+    if ( _tasks.empty())
+        return "no tasks yet (the model tracks them with the update_tasks tool during multi-step work)";
+    std::string s = "tasks:\n";
+    for ( const auto& t : _tasks ) {
+        std::string glyph = t.status == "done" ? "✓" : ( t.status == "in_progress" ? "▸" : "○" );
+        s += "\n  " + glyph + " " + t.title;
+    }
+    return s;
 }
 
 void Repl::record_file_change(const std::string& tool, const JSON& args) {
@@ -874,6 +910,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /history                 list the messages in the current context\n"
                "  /retry                   re-run your last message\n"
                "  /undo                    remove the last exchange from history\n"
+               "  /tasks                   show the agent's current todo list\n"
                "  /changes [diff|revert <path|all>]   files the agent changed this session\n"
                "  /export [file]           write the conversation to a Markdown file\n"
                "  /clear (/reset)          clear the conversation history\n"
@@ -1003,6 +1040,10 @@ std::string Repl::handle_command(const std::string& line) {
             return "nothing to undo";
         save_conversation();
         return "removed the last exchange";
+    }
+
+    if ( cmd == "/tasks" ) {
+        return tasks_command();
     }
 
     if ( cmd == "/changes" ) {

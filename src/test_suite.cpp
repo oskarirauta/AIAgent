@@ -33,6 +33,7 @@
 #include "agent/mcp/client.hpp"
 #include "agent/tools/advisor.hpp"
 #include "agent/tools/workflow_tool.hpp"
+#include "agent/tools/tasks_tool.hpp"
 #include "agent/workflow.hpp"
 #include "agent/text_utils.hpp"
 
@@ -476,6 +477,20 @@ static void test_find_symbol() {
     check(r5.rfind("error:", 0) == 0, "rejects a non-identifier name");
 
     std::filesystem::remove_all(dir);
+}
+
+static void test_tasks_tool() {
+    std::cout << "update_tasks tool" << std::endl;
+    JSON got;
+    agent::tools::TasksTool tool([&got](const JSON& t) { got = t; return std::string("ok: 2 tasks"); });
+    check(tool.name() == "update_tasks", "tool name");
+    std::string r = tool.execute(JSON::Object{ { "tasks", JSON::Array{
+        JSON::Object{ { "title", "explore" }, { "status", "done" } },
+        JSON::Object{ { "title", "implement" }, { "status", "in_progress" } } } } });
+    check(r == "ok: 2 tasks", "returns the handler result");
+    check(got == JSON::TYPE::ARRAY && got.size() == 2, "forwards the full task array");
+    check(got[0]["title"].to_string() == "explore", "task fields preserved");
+    check(tool.execute(JSON::Object{}).rfind("error:", 0) == 0, "missing tasks is an error");
 }
 
 static void test_block_diff() {
@@ -1230,6 +1245,7 @@ int main() {
     test_html_to_text();
     test_web_search_parse();
     test_find_symbol();
+    test_tasks_tool();
     test_block_diff();
     test_find_references();
     test_pricing_and_cost();
