@@ -848,6 +848,117 @@ void InlineRepl::backspace() {
     _cursor = p;
 }
 
+namespace {
+
+const std::vector<std::string>& slash_commands() {
+    static const std::vector<std::string> cmds = {
+        "/help", "/about", "/settings", "/provider", "/model", "/btw", "/note",
+        "/tools", "/strict", "/thinking", "/effort", "/theme", "/stream",
+        "/memories", "/context", "/cost", "/history", "/retry", "/undo", "/tasks",
+        "/changes", "/export", "/compact", "/clear", "/reset", "/mcp", "/advisor",
+        "/workflows", "/exit", "/quit"
+    };
+    return cmds;
+}
+
+std::string common_prefix(const std::vector<std::string>& v) {
+    if ( v.empty()) return "";
+    std::string p = v[0];
+    for ( size_t i = 1; i < v.size(); ++i ) {
+        size_t k = 0;
+        while ( k < p.size() && k < v[i].size() && p[k] == v[i][k] ) ++k;
+        p.resize(k);
+    }
+    return p;
+}
+
+} // namespace
+
+// Tab completion: complete a leading slash command, or a file-path token.
+void InlineRepl::handle_tab() {
+    // The token being completed runs from the last whitespace before the cursor.
+    size_t start = _cursor;
+    while ( start > 0 && _input[start - 1] != ' ' && _input[start - 1] != '\n' )
+        --start;
+    std::string token = _input.substr(start, _cursor - start);
+
+    std::vector<std::string> matches;   // full replacement text for the token
+    std::vector<std::string> display;   // what to show in an ambiguity list
+
+    bool is_command = ( start == 0 && !token.empty() && token[0] == '/' );
+    if ( is_command ) {
+        for ( const auto& c : slash_commands())
+            if ( c.rfind(token, 0) == 0 ) { matches.push_back(c); display.push_back(c); }
+    } else if ( !token.empty()) {
+        // Path completion: split into a directory part and a name prefix.
+        std::string dir, prefix;
+        size_t slash = token.rfind('/');
+        if ( slash == std::string::npos ) { dir = ""; prefix = token; }
+        else { dir = token.substr(0, slash + 1); prefix = token.substr(slash + 1); }
+        std::string fsdir = dir.empty() ? "." : dir;
+        std::error_code ec;
+        if ( std::filesystem::is_directory(fsdir, ec)) {
+            for ( const auto& e : std::filesystem::directory_iterator(
+                      fsdir, std::filesystem::directory_options::skip_permission_denied, ec)) {
+                std::string name = e.path().filename().string();
+                if ( name.empty()) continue;
+                // Hidden files only when the prefix explicitly starts with '.'.
+                if ( name[0] == '.' && ( prefix.empty() || prefix[0] != '.' )) continue;
+                if ( name.rfind(prefix, 0) != 0 ) continue;
+                std::error_code dec;
+                bool is_dir = e.is_directory(dec);
+                matches.push_back(dir + name + ( is_dir ? "/" : "" ));
+                display.push_back(name + ( is_dir ? "/" : "" ));
+            }
+            std::sort(matches.begin(), matches.end());
+            std::sort(display.begin(), display.end());
+        }
+    }
+
+    if ( matches.empty())
+        return; // nothing to complete
+
+    auto replace_token = [&](const std::string& text, bool add_space) {
+        _input.erase(start, _cursor - start);
+        std::string ins = text + ( add_space ? " " : "" );
+        _input.insert(start, ins);
+        _cursor = start + ins.size();
+        _input_window_start = 0;
+    };
+
+    if ( matches.size() == 1 ) {
+        // A directory completion keeps going (no trailing space); commands and
+        // files get a space so the next token can be typed.
+        bool is_dir = !matches[0].empty() && matches[0].back() == '/';
+        replace_token(matches[0], !is_dir);
+        draw_live();
+        return;
+    }
+
+    // Multiple: extend to the longest common prefix if that adds anything…
+    std::string cp = common_prefix(matches);
+    if ( cp.size() > token.size()) {
+        replace_token(cp, false);
+        draw_live();
+        return;
+    }
+
+    // …otherwise show the candidates above the input.
+    erase_live();
+    int cols = term_cols();
+    std::string line;
+    for ( const auto& d : display ) {
+        if ( !line.empty() && static_cast<int>(line.size() + d.size() + 2) > cols ) {
+            wr(_theme.dim + line + Theme::reset + "\n");
+            line.clear();
+        }
+        line += ( line.empty() ? "" : "  " ) + d;
+    }
+    if ( !line.empty())
+        wr(_theme.dim + line + Theme::reset + "\n");
+    draw_live();
+}
+
 // After deleting a span that may have contained paste placeholders, forget any
 // whose token no longer appears in the input (so their content isn't re-sent).
 void InlineRepl::prune_pastes() {
@@ -1913,6 +2024,9 @@ void InlineRepl::handle_byte(int c) {
         case 0x0b: // Ctrl-K -> delete to the end of the line
             kill_to_line_end();
             draw_live();
+            return;
+        case 0x09: // Tab -> autocomplete slash commands / file paths
+            handle_tab();
             return;
         case 0x1b: { // ESC: control sequence
             // Peek for a follow-up byte. A bare ESC has none, and a blocking read

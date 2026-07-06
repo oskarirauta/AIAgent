@@ -69,6 +69,17 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **Diff preview in the confirmation dialog**: `write_file`/`edit_file` confirms
+  show what would change — a block diff of the file vs the new content (write_file)
+  or the -old/+new snippets (edit_file, each multi-edit entry), coloured like a
+  diff — instead of a raw args dump. `block_diff` moved to `text_utils`, shared
+  with `/changes`.
+- **`/tasks`** (agent todo list): an `update_tasks` tool the model calls to keep a
+  short plan (title + status pending/in_progress/done) for multi-step work; `/tasks`
+  renders it with ✓/▸/○. Session-scoped, provider-agnostic.
+- **Autocomplete**: Tab in the inline REPL completes a leading slash command or a
+  file-path token — unique match completes (dirs get `/`, else a space), a shared
+  longer prefix extends, and an ambiguous prefix lists the candidates.
 - **Parallel tool calls**: when a model turn batches several read-only tools
   (read_file / grep / find_symbol / list_directory) they run concurrently on a
   bounded thread pool; results are recorded in the model's original order. Any
@@ -156,13 +167,6 @@ each list is roughly the current priority order.
 Roughly in priority order for real coding use. Kept only what is genuinely useful
 *and* buildable well; the rest is dropped below.
 
-- **Diff preview in the confirm dialog**: show the actual diff `edit_file`/
-  `write_file` would apply *before* it runs (today the confirm shows raw args and
-  `/changes` shows it after). Safer, better UX for edits.
-- **`/tasks`** (agent todo list): a lightweight, persisted checklist the model
-  maintains so long refactors don't drop half-finished steps. Provider-agnostic.
-- **Autocomplete**: Tab-complete slash commands, file paths and provider/model
-  names in the inline REPL.
 - **OpenRouter provider**: OpenAI-compatible → small, and testable on its free
   tier. (DeepSeek/Gemini deferred — no subscription here to test against.)
 - **Config-extensible danger/safe command lists**: let a project add its own

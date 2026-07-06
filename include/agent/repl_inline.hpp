@@ -123,6 +123,7 @@ private:
     void handle_byte(int c);
     void insert_text(const std::string& text);
     void backspace();
+    void handle_tab();          // autocomplete slash commands / file paths
     void delete_word_before();  // Ctrl-W
     void kill_to_line_start();  // Ctrl-U
     void kill_to_line_end();    // Ctrl-K
