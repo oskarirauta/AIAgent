@@ -16,10 +16,20 @@ public:
                                               const std::string& tool, const JSON& args)>;
 
     McpTool(std::string registered, std::string description, JSON schema,
-            std::string server, std::string tool, call_fn handler)
+            std::string server, std::string tool, call_fn handler,
+            bool read_only = false, bool destructive = false)
         : _name(std::move(registered)), _description(std::move(description)),
           _schema(std::move(schema)), _server(std::move(server)),
-          _tool(std::move(tool)), _handler(std::move(handler)) {}
+          _tool(std::move(tool)), _handler(std::move(handler)),
+          _read_only(read_only), _destructive(destructive) {}
+
+    // MCP annotations drive the confirmation policy: a tool the server marks
+    // readOnlyHint runs freely; anything else asks first (like write_file), and
+    // a destructiveHint tool always warns — even in automatic mode.
+    bool requires_confirmation() const override { return !_read_only; }
+    std::string danger_reason(const JSON&) const override {
+        return _destructive ? ( "the server marks `" + _tool + "` destructive" ) : "";
+    }
 
     std::string name() const override { return _name; }
     std::string description() const override {
@@ -44,6 +54,8 @@ private:
     std::string _server;
     std::string _tool;
     call_fn _handler;
+    bool _read_only = false;
+    bool _destructive = false;
 };
 
 } // namespace agent::tools

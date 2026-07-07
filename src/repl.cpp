@@ -322,7 +322,7 @@ void Repl::register_mcp_tools() {
             t.registered, t.description, t.input_schema, t.server, t.tool,
             [this](const std::string& s, const std::string& tool, const JSON& a) {
                 return _mcp.call_tool(s, tool, a);
-            }));
+            }, t.read_only, t.destructive));
         _mcp_tool_names.push_back(t.registered);
     }
 
@@ -347,7 +347,7 @@ void Repl::register_mcp_tools() {
             [this](const std::string& s, const std::string&, const JSON& a) {
                 std::string uri = ( a == JSON::TYPE::OBJECT && a.contains("uri")) ? a["uri"].to_string() : "";
                 return _mcp.read_resource(s, uri);
-            }));
+            }, /*read_only=*/true));
         _mcp_tool_names.push_back(reg);
     }
 }

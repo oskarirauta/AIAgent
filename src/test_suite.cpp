@@ -423,6 +423,42 @@ static void test_advisor_tool() {
     check(!reg.has("consult_advisor"), "advisor gone after remove");
 }
 
+static void test_mcp_annotations_policy() {
+    std::cout << "mcp annotations -> confirmation policy" << std::endl;
+    auto noop = [](const std::string&, const std::string&, const JSON&) { return std::string("done"); };
+    JSON schema = JSON::Object{ { "type", "object" }, { "properties", JSON::Object{} } };
+
+    // Default (no annotations): confirms like a writing tool.
+    agent::tools::McpTool plain("mcp__s__t", "d", schema, "s", "t", noop);
+    check(plain.requires_confirmation(), "un-annotated MCP tool requires confirmation");
+    check(plain.danger_reason(JSON::Object{}).empty(), "un-annotated tool is not danger-listed");
+
+    // readOnlyHint: runs freely.
+    agent::tools::McpTool ro("mcp__s__r", "d", schema, "s", "r", noop, true, false);
+    check(!ro.requires_confirmation(), "readOnlyHint tool runs without confirmation");
+
+    // destructiveHint: always warns, even in automatic mode.
+    agent::tools::McpTool boom("mcp__s__drop", "d", schema, "s", "drop", noop, false, true);
+    check(!boom.danger_reason(JSON::Object{}).empty(), "destructiveHint sets a danger reason");
+    {
+        agent::tools::Registry reg;
+        reg.add(std::make_unique<agent::tools::McpTool>(
+            "mcp__s__drop", "d", schema, "s", "drop",
+            [](const std::string&, const std::string&, const JSON&) { return std::string("ran"); },
+            false, true));
+        reg.set_mode(agent::tools::ConfirmMode::automatic);
+        int asked = 0;
+        reg.set_confirm_callback([&](const agent::tools::ConfirmRequest& rq) {
+            ++asked;
+            check(!rq.danger.empty(), "confirm request carries the danger reason");
+            return agent::tools::Decision::deny;
+        });
+        std::string res = reg.execute("mcp__s__drop", JSON::Object{});
+        check(asked == 1, "destructive MCP tool asks even in automatic mode");
+        check(res.find("declined") != std::string::npos, "deny blocks the call");
+    }
+}
+
 static void test_mcp_tool_and_config() {
     std::cout << "mcp proxy tool + config parse" << std::endl;
 
@@ -1647,6 +1683,7 @@ int main() {
     test_anthropic_thinking();
     test_provider_capabilities();
     test_advisor_tool();
+    test_mcp_annotations_policy();
     test_mcp_tool_and_config();
     test_html_to_text();
     test_web_search_parse();

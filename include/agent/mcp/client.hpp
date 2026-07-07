@@ -17,6 +17,11 @@ struct ToolDef {
     std::string registered;   // namespaced name exposed to the model (mcp__server__tool)
     std::string description;
     JSON input_schema;
+
+    // MCP tool annotations (the protocol's machine-readable safety signal).
+    std::string title;        // human-readable display name
+    bool read_only = false;   // readOnlyHint: no side effects — runs freely
+    bool destructive = false; // destructiveHint: always warn, even in auto mode
 };
 
 // A resource (readable data) exposed by a server.

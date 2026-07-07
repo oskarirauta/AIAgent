@@ -365,6 +365,16 @@ void Client::discover(Server& s) {
             td.description = t.contains("description") ? t["description"].to_string() : "";
             td.input_schema = t.contains("inputSchema") ? t["inputSchema"]
                                                         : JSON::Object{ { "type", "object" } };
+            // Optional annotations: the server's own safety/display hints.
+            if ( t.contains("annotations") && t["annotations"] == JSON::TYPE::OBJECT ) {
+                JSON a = t["annotations"];
+                if ( a.contains("title") && a["title"] == JSON::TYPE::STRING )
+                    td.title = a["title"].to_string();
+                if ( a.contains("readOnlyHint") && a["readOnlyHint"] == JSON::TYPE::BOOL )
+                    td.read_only = a["readOnlyHint"].to_bool();
+                if ( a.contains("destructiveHint") && a["destructiveHint"] == JSON::TYPE::BOOL )
+                    td.destructive = a["destructiveHint"].to_bool();
+            }
             s.tools.push_back(td);
         }
     }

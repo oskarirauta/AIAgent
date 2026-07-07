@@ -493,6 +493,8 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
         danger = classify_danger(command);
     else if (( name == "write_file" || name == "edit_file" ) && args.contains("path"))
         danger = classify_path_danger(args["path"].to_string());
+    if ( danger.empty())
+        danger = tool->danger_reason(args); // e.g. an MCP destructiveHint
 
     // Program / key used for "allow session" and "allow similar".
     std::string similar_key = name;
