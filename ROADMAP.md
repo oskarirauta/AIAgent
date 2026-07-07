@@ -1,7 +1,9 @@
 # Roadmap
 
-Ideas and planned work for AIAgent. Done items are kept for context; the top of
-each list is roughly the current priority order.
+Development history and forward-looking ideas for AIAgent. The **Done** sections
+record what shipped (kept for context); the only outstanding work is under
+**ROADMAP TO V2** near the bottom. **Considered / dropped** lists ideas
+deliberately left out.
 
 ## Done
 
@@ -62,8 +64,9 @@ each list is roughly the current priority order.
   Runs execute on background threads (`WorkflowManager`); the tool returns a run
   id immediately. `/workflows` lists runs + progress, `/workflows <id>` shows step
   results. Finished runs are folded into the conversation at the next turn's start.
-  NOTE: lightweight single-machine version — steps run sequentially and results
-  are pull-viewed; live push notifications and parallel steps are follow-ups.
+  NOTE: lightweight single-machine version — steps can run in parallel and results
+  are folded in on completion (with a bell notice or opt-in autoresume); full cloud
+  orchestration is a V2 item.
 - **Project instructions**: a project-local `AGENTS.md` (or `.ai-agent.md` /
   `AGENT.md`) in the working directory is read into the system prompt (after the
   long-term memories), so a project can pin coding style, testing conventions and
@@ -77,8 +80,9 @@ each list is roughly the current priority order.
 - **OpenRouter provider**: OpenAI-compatible gateway to many models
   (`vendor/model`, incl. `:free` variants). A thin `OpenAI` subclass — default
   endpoint `https://openrouter.ai/api/v1`, Bearer auth, plus OpenRouter's optional
-  `HTTP-Referer`/`X-Title` attribution headers. (DeepSeek/Gemini still deferred —
-  no key here to test against.)
+  `HTTP-Referer`/`X-Title` attribution headers. (DeepSeek, Gemini, Groq, Mistral,
+  xAI etc. work through the `openai` provider with a custom `api_url` — documented
+  in the README's OpenAI-compatible table.)
 - **Diff preview in the confirmation dialog**: `write_file`/`edit_file` confirms
   show what would change — a block diff of the file vs the new content (write_file)
   or the -old/+new snippets (edit_file, each multi-edit entry), coloured like a
@@ -218,28 +222,13 @@ each list is roughly the current priority order.
   subscriptions) show token usage only. Built on `TokenStats`; no built-in prices
   so nothing goes stale.
 
-## Planned
+## Done — final release cycle
 
-Roughly in priority order for real coding use. Kept only what is genuinely useful
-*and* buildable well; the rest is dropped below.
+Everything below shipped in the run-up to the 1.0-quality release; kept here as a
+record of what was completed and why. There is no outstanding "planned" work — the
+only forward-looking section is **ROADMAP TO V2** at the bottom.
 
-Batches 1 (edit-build-test loop: @path mentions, edit_file near-miss + verify
-snippet, run_command head+tail, !command passthrough) and 2 (trust & flow: MCP
-annotation gating, allow-for-this-turn, /trust, deny-with-note) are **done** —
-see the Done section above.
-
-Batch 3 — context & provider economy: **done**. max_tokens 8192 + truncation
-guard, cached-token accounting (+ OpenAI include_usage), /thinking on openai/
-openrouter, auto-retry with backoff, cache-stable hysteresis trimming, tool-
-result supersession, and rolling compact (keep-tail + verbatim tasks/changes).
-
-Batch 4 — **done**: `outline_file`, `.gitignore`-aware traversal, skills
-(/skill + use_skill), per-turn tool-call budget, attention cues (bell on a
-blocking confirm + long-turn digest), and `/plan` read-only mode. See Done.
-
-Still open:
-- **Menu-framework modernisation** (user-requested, one coherent pass, grouped
-  style chosen from mockups):
+- **Menu-framework modernisation** (one coherent pass, grouped style from mockups):
   1. ✅ Modernise the `/settings` menu — grouped sections, per-row help line,
      ‹enum›, arrow-adjust numbers with unit + `0 = all/unlimited`, clearer labels
      (the opaque "preview" is now "paste preview … N lines (0 = all)").
@@ -249,9 +238,8 @@ Still open:
      still queue. poll_worker holds streaming back while a modal menu is up.
   3. ✅ `/workflows` into a scrollable list menu (Enter drills into a run's
      steps) — a shared list/reader component.
-  4. ✅ Menu-as-reader for `/history`, `/memories`, `/tasks`, `/skills` on the
-     same component. (`/queue` drop-via-menu still open — it already lists + drops
-     by typing.)
+  4. ✅ Menu-as-reader for `/history`, `/memories`, `/tasks`, `/skills`, and a
+     `/queue` list menu with a drop action key — all on the same component.
   5. ✅ `/model` opens a picker of common models for the provider (curated + the
      active model; typing still reaches anything else).
   6. ✅ `/effort` (and `/thinking`) as a picker menu.
@@ -299,6 +287,21 @@ Working toward a long-lived "actually finished" release; going through each:
   the next configured, logged-in provider before anything streams.
 - ✅ **`--output-format json`** — scriptable headless mode: `-o json` emits one JSON
   object (response + provider/model + usage) on stdout.
+
+### Final adversarial code review
+
+- ✅ A multi-agent review (16 subsystem reviewers, each finding verified by an
+  independent skeptic) swept the whole tree for bugs and complexity. All confirmed
+  findings were fixed across 7 batches: **4 critical** (a use-after-free on
+  cross-provider failover; an SSRF IPv4-mapped-IPv6 bypass; the Anthropic
+  parallel-tool alternation 400; Ollama streaming that dropped every reply),
+  **~24 further bugs** (background-job concurrency, danger-classifier bypasses,
+  atomic file writes + normalised edit matching, ask_user teardown deadlock,
+  short-terminal settings viewport, provider/MCP/auth edge cases) and **7 perf
+  fixes** (single-pass redaction + ReDoS guard, grep size cap, search pre-filters).
+  Removed a dead, key-logging `create_claude_api_key` helper. Documentation, usage,
+  `-Wall`-clean build, `make release`/`make tests`, and the test suite (609 tests)
+  round it out.
 
 ## ROADMAP TO V2
  - **Multi-agent cloud orchestration** - full cloud orchestration
