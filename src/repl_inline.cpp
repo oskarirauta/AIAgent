@@ -2069,6 +2069,34 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         start_async_command(trimmed, "compacting");
         return;
     }
+    // Bare /model opens a picker of common models for the current provider (the
+    // active one pre-selected and always present); /model <name> sets any model
+    // directly. Curated rather than fetched: no per-provider /models endpoint
+    // derivation, and typing still reaches anything not listed.
+    if ( trimmed == "/model" ) {
+        static const std::map<std::string, std::vector<std::string>> curated = {
+            { "openai",     { "gpt-4o", "gpt-4o-mini", "o3-mini", "o1" }},
+            { "claude",     { "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-fable-5" }},
+            { "anthropic",  { "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-fable-5" }},
+            { "moonshot",   { "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k" }},
+            { "openrouter", { "openrouter/auto", "openrouter/free" }},
+        };
+        std::vector<std::string> models;
+        models.push_back(_config.model); // the active model is always offered
+        auto it = curated.find(_config.provider);
+        if ( it != curated.end())
+            for ( const auto& mdl : it->second )
+                if ( mdl != _config.model ) models.push_back(mdl);
+        ListMenu m;
+        m.title = "model · " + _config.provider;
+        m.rows = models;
+        m.keys = models;
+        m.select_cmd = "/model ";
+        m.current = _config.model;
+        open_list_menu(std::move(m));
+        return;
+    }
+
     // Bare /effort (or /thinking) opens a picker menu; with an argument it applies
     // directly. Selecting applies immediately (a setting — the running turn is
     // unaffected, it takes effect on the next request).
