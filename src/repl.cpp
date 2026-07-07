@@ -905,45 +905,68 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         bool can_stream = stream_cb && _provider->supports_streaming();
         providers::Response resp;
 
-        if ( can_stream ) {
-            request["stream"] = true;
-            std::string body = request.dump_minified();
-            std::string buffer;
-            bool done = false;
-            _provider->stream_reset();
+        // The network call, retried on transient errors (429/503/529) with
+        // exponential backoff — but only while nothing has been streamed yet, so
+        // a mid-stream failure never double-renders. `produced` tracks that.
+        bool produced = false;
+        for ( int attempt = 0; ; ++attempt ) {
+            try {
+                if ( can_stream ) {
+                    request["stream"] = true;
+                    std::string body = request.dump_minified();
+                    std::string buffer;
+                    bool done = false;
+                    _provider->stream_reset();
 
-            _client.post_stream(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body,
-                [&](const std::string& chunk) {
-                    logger::vverbose["http"] << "STREAM chunk\n" << chunk << std::endl;
-                    providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
-                    if ( _config.thinking_stream && !sc.reasoning.empty()) {
-                        // \x01 opens a dim reasoning region (on its own line).
-                        if ( !showing_thinking ) { stream_cb("\n\x01"); showing_thinking = true; }
-                        stream_cb(sc.reasoning);
+                    _client.post_stream(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body,
+                        [&](const std::string& chunk) {
+                            logger::vverbose["http"] << "STREAM chunk\n" << chunk << std::endl;
+                            providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
+                            if ( _config.thinking_stream && !sc.reasoning.empty()) {
+                                if ( !showing_thinking ) { stream_cb("\n\x01"); showing_thinking = true; }
+                                produced = true;
+                                stream_cb(sc.reasoning);
+                            }
+                            if ( !sc.content.empty()) {
+                                if ( showing_thinking ) { stream_cb("\n\x02\n\n"); showing_thinking = false; }
+                                produced = true;
+                                stream_cb(agent::normalize_text(sc.content));
+                            }
+                        }, abort_flag);
+
+                    if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
+                        _conversation.undo_last();
+                        return "";
                     }
-                    if ( !sc.content.empty()) {
-                        // \x02 closes the reasoning region before the answer resumes.
-                        if ( showing_thinking ) { stream_cb("\n\x02\n\n"); showing_thinking = false; }
-                        stream_cb(agent::normalize_text(sc.content));
+                    resp = _provider->stream_result();
+                } else {
+                    std::string body = request.dump_minified();
+                    std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body, abort_flag);
+                    if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
+                        _conversation.undo_last();
+                        return "";
                     }
-                }, abort_flag);
-
-            if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
-                _conversation.undo_last(); // drop the interrupted exchange from history
-                return "";
+                    resp = _provider->parse_response(JSON::parse(response_str));
+                }
+                break; // success
+            } catch ( const std::exception& e ) {
+                std::string m = e.what();
+                bool transient = m.find("http error") != std::string::npos &&
+                    ( m.find(" 429") != std::string::npos || m.find(" 503") != std::string::npos ||
+                      m.find(" 529") != std::string::npos );
+                bool aborting = abort_flag && abort_flag->load(std::memory_order_relaxed);
+                if ( !transient || produced || aborting || attempt >= 3 )
+                    throw;
+                // Backoff 0.5s, 1s, 2s — interruptible via the abort flag.
+                long ms = 500L << attempt;
+                if ( _progress_cb )
+                    _progress_cb("provider busy — retrying in " + std::to_string(ms / 1000.0).substr(0, 3) + "s");
+                for ( long slept = 0; slept < ms; slept += 100 ) {
+                    if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) { _conversation.undo_last(); return ""; }
+                    struct timespec ts { 0, 100L * 1000 * 1000 };
+                    nanosleep(&ts, nullptr);
+                }
             }
-
-            resp = _provider->stream_result();
-        } else {
-            std::string body = request.dump_minified();
-            std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body, abort_flag);
-
-            if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
-                _conversation.undo_last(); // drop the interrupted exchange from history
-                return "";
-            }
-
-            resp = _provider->parse_response(JSON::parse(response_str));
         }
 
         _stats.record(resp.input_tokens, resp.output_tokens);
