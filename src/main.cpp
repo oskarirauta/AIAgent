@@ -52,7 +52,8 @@ static usage_t make_usage(int argc, char **argv) {
             { "yes_tools", { "Y", "yes-tools", "run ordinary tools without confirmation (danger-listed commands still warn)" }},
             { "insecure", { "I", "insecure", "run ALL tools without any confirmation, including dangerous commands" }},
             { "prompt", { "P", "prompt", "single prompt mode, exit after answer", usage_t::OPTIONAL }},
-            { "output_format", { "o", "output-format", "single-prompt output: text (default) or json", usage_t::OPTIONAL }}
+            { "output_format", { "o", "output-format", "single-prompt output: text (default) or json", usage_t::OPTIONAL }},
+            { "dump_commands", { "", "dump-commands", "print the slash-command reference as Markdown (regenerates COMMANDS.md) and exit" }}
         }
     };
 }
@@ -81,6 +82,11 @@ int main(int argc, char **argv) {
 
     if ( usage["version"] ) {
         std::cout << usage.version() << std::endl;
+        return 0;
+    }
+
+    if ( usage["dump_commands"] ) {
+        std::cout << agent::commands_markdown();
         return 0;
     }
 

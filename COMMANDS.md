@@ -120,6 +120,10 @@ Lists skills discovered in <home>/skills and ./.agent/skills, with an active (�
 
 `/skill <name>` activates a skill's instructions for the session (injected into the system prompt, surviving /compact). `/skill off <name>` deactivates. The model can also load one itself via the use_skill tool.
 
+### `/autoresume [on|off]`
+
+When a background workflow finishes, automatically resume the conversation so the model reads its results and continues — instead of the results only folding in on your next message. Bounded to 2 auto-turns per real message. Also the "workflow resume" row in /settings.
+
 ### `/workflows [id | cancel <id> | retry <id>]`
 
 Lists background workflow runs the model started (via run_workflow). With an id, shows its steps; `cancel <id>` stops a run, `retry <id>` relaunches a finished one keeping succeeded steps.
@@ -129,7 +133,23 @@ Lists background workflow runs the model started (via run_workflow). With an id,
 
 ### `/settings [<key> <value>]`
 
-With no argument opens the interactive settings menu. With `<key> <value>` sets one directly (model, tools, thinking, theme, context, multiline, auto_compact, autoresume, max_tokens, tool_call_limit, paste_preview, …).
+With no argument opens the interactive settings menu. With `<key> <value>` sets one directly (model, tools, thinking, theme, context, multiline, auto_compact, autoresume, redact_secrets, max_tokens, tool_call_limit, …).
+
+### `/bell [never|ask_user|question|attention|always]`
+
+Controls the terminal bell. always: on every answer plus anything needing you. attention: only a workflow finishing, a tool-permission prompt, or an answer that is a question. question: only when the answer is a question. never: silent. Bare /bell opens a picker; also the "bell" row in /settings.
+
+### `/jobs [id | stop <id|all>]`
+
+Lists background jobs started with run_command(background:true) — a dev server, watcher, or tail -f — with running/exited status and runtime. `/jobs <id>` shows a job's captured output (scrollable); `/jobs stop <id|all>` stops jobs. The model inspects the same jobs via the check_job tool.
+
+### `/limits`
+
+Shows the rate-limit and quota headers the provider returned on the last request (e.g. requests/tokens remaining and reset times). Providers vary; subscription providers often don't expose quota this way, in which case it reports none were seen.
+
+### `/raw [request|response]`
+
+Shows the exact JSON request last sent to the provider and the response received (assembled from the stream when streaming), in a scrollable view — for debugging prompts, tools and provider quirks. `/raw request` or `/raw response` shows just one. Auth headers are not part of the body shown.
 
 ### `/theme <dark|light|warm>`
 
@@ -153,6 +173,10 @@ Exits the REPL. Settings and the conversation are saved on the way out.
 ### `!<command>`
 
 A line starting with `!` runs the rest as a shell command directly — no model turn, no confirmation (you typed it). The output prints locally AND is recorded, so `!make test` then "fix those" works. Not blocked by /plan.
+
+### `/paste [n]`
+
+A large paste collapses to a placeholder and its transcript echo is trimmed to the paste-preview length. /paste lists the large pastes you've sent this session (Enter opens the full text, scrollable and wrapped); /paste <n> jumps to one.
 
 ### `@path`
 

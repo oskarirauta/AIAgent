@@ -187,7 +187,11 @@ test: tests
 test_runner: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(ENV_OBJS) $(TEST_OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o test_runner $(LIBS);
 
-.PHONY: all world strip release tests test clean
+# Regenerate COMMANDS.md from the command catalogue in src/commands.cpp.
+docs: agent
+	./agent --dump-commands > COMMANDS.md
+
+.PHONY: all world strip release tests test docs clean
 clean:
 	@rm -rf objs agent test_runner
 

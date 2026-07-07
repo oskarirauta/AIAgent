@@ -11,12 +11,20 @@ Philosophy: **Support enough — not everything.**
 - Chat with LLMs from the command line
 - Providers: OpenAI, Ollama, Anthropic, Moonshot, **OpenRouter**, and native **Kimi** and **Claude** (subscription) providers
 - **Kimi** and **Claude** authenticate against the same subscriptions the official CLIs use — no API-key billing and no separate app to install
-- Built-in tools the model can call: `read_file`, `write_file`, `run_command`, `list_directory`, `grep`
+- Built-in tools the model can call: `read_file`, `write_file`, `edit_file`,
+  `run_command` (foreground or **background** — dev servers/watchers via `/jobs`),
+  `list_directory`, `grep`, `find_symbol`, `find_references`, `outline_file`,
+  `project_map`, `web_search`, `fetch_url`, `update_tasks`, and **`ask_user`** (the
+  model can pause and ask you a decision). Plus **MCP** servers and **skills**.
 - **Inline REPL** that prints to the terminal's normal buffer, so native scrollback and mouse copy work across the whole conversation
-- Streaming responses with lightweight syntax highlighting
-- Layered **tool-call safety**: per-call confirmation with *once / this-session / all-similar* choices, a **danger list** that warns on risky shell commands, and an `--insecure` escape hatch
+- Streaming responses (with reasoning/thinking) and lightweight syntax highlighting
+- Layered **tool-call safety**: per-call confirmation with *once / this-session / all-similar* choices, a **danger list** that warns on risky shell commands (every stage of a compound command is checked), a read-only **`/plan`** mode, and an `--insecure` escape hatch
+- **Security by default**: credentials in tool output are masked before being sent
+  to the provider (`redact_secrets`), and a stale-read guard refuses to silently
+  clobber a file that changed on disk since the model read it
 - Remembers the last provider/model and resumes them on a bare launch
 - Per-provider **and** per-project conversation history; per-provider long-term memory
+- **Cross-provider failover**, background **workflows**, context **`/compact`** (manual + auto), and a scriptable **`-o json`** single-prompt mode
 - Full logging to a file (the terminal stays clean)
 - Config file for defaults; everything overridable on the command line
 
@@ -30,15 +38,19 @@ Requirements:
 
 ```bash
 git submodule update --init --recursive   # if submodules are empty
-make
+make            # optimised build → ./agent
+make release    # build + strip (smaller binary, no symbols)
+make docs       # regenerate COMMANDS.md from the command catalogue
 ```
 
+The build defaults to `-O2` with no debug symbols; for a debug build override
+`CXXFLAGS` (e.g. `make CXXFLAGS='--std=c++17 -Wall -fPIC -I./include -g'`).
 The interactive UI is built on raw ANSI/termios — there is **no ncurses dependency**; the binary links only against libcurl.
 
 ## Running tests
 
 ```bash
-make test
+make tests      # builds test_runner and runs the suite (make test is an alias)
 ```
 
 ## Configuration
@@ -70,7 +82,16 @@ provider.claude.model: claude-opus-4-8
 # wrappers (env/timeout/xargs/…) cannot hide a listed program.
 # tools_safe: jq, rg
 # tools_danger: deploy, terraform
+
+# Mask credentials (API keys, tokens, private keys) in tool output before it is
+# sent to the model provider. On by default; the local transcript still shows the
+# real output. Toggle for a session in /settings ("redact secrets").
+# redact_secrets: true
 ```
+
+Most UI/behaviour options are also editable live in the interactive `/settings`
+menu (theme, bell, tool mode, redact secrets, context budget, …). The single-prompt
+mode (`-P`) can emit machine-readable JSON with `-o json` (pair with `-l quiet`).
 
 The API key for a plain key provider can be given three ways (in this order of
 precedence): `-k <key>`, `api_key:` in the config, or the environment variable
@@ -121,10 +142,10 @@ skills, so the model picks the one that fits the task.
 
 ### Commands
 
-The interactive REPL has ~35 slash commands. Type **`/help`** for the grouped
+The interactive REPL has ~40 slash commands. Type **`/help`** for the grouped
 list and **`/help <command>`** for the detail of one (e.g. `/help compact`).
-They are catalogued in **[COMMANDS.md](COMMANDS.md)** (generated from
-`src/commands.cpp`, the single source of truth shared with in-app help).
+They are catalogued in **[COMMANDS.md](COMMANDS.md)** (regenerated with `make docs`
+from `src/commands.cpp`, the single source of truth shared with in-app help).
 
 ### Prompt shortcuts
 

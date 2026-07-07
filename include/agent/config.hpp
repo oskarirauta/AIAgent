@@ -88,7 +88,7 @@ public:
     // default locations (<home>/mcp.json and ./.mcp.json).
     std::string mcp_config;
 
-    // ncurses paste detection thresholds
+    // Paste detection thresholds (bracketed paste + fast-input heuristics)
     size_t paste_threshold_chars = 500;        // characters for multi-line paste
     size_t paste_threshold_lines = 10;         // line breaks for multi-line paste
     size_t paste_single_line_chars = 350;      // characters for single-line paste
