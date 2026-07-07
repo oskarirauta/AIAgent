@@ -53,6 +53,12 @@ public:
     // and extra programs that always warn. Danger wins when a name is on both.
     std::vector<std::string> tools_safe;
     std::vector<std::string> tools_danger;
+
+    // Ordered fallback providers: if a request fails hard (persistent 429/5xx or a
+    // network error) before anything streamed, retry the turn on the next one that
+    // is configured and logged in. Config file only. e.g. `failover: kimi,openai`.
+    std::vector<std::string> failover;
+
     bool advisor = false;       // expose a tool letting the model consult a stronger advisor model (claude only)
     std::string advisor_model = "claude-opus-4-8"; // the model consulted by the advisor tool
 

@@ -56,6 +56,10 @@ provider.kimi.model: kimi-for-coding
 provider.kimi.thinking: on          # off | on | low | medium | high | xhigh | max
 provider.claude.model: claude-opus-4-8
 
+# Fallback providers: if a request fails hard (persistent 429/5xx or a network
+# error) before anything streamed, retry the turn on the next one that's logged in.
+# failover: kimi, openai
+
 # For plain API-key providers (openai / anthropic / moonshot / openrouter)
 # api_url: https://api.openai.com/v1
 # api_key: sk-your-key-here

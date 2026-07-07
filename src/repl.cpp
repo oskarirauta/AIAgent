@@ -1093,6 +1093,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     bool showing_thinking = false;
     size_t tools_this_turn = 0;                        // per-turn tool-call budget counter
     size_t next_tool_check = _config.tool_call_limit;  // ask again at each multiple
+    size_t failover_idx = 0;                            // next fallback provider to try this turn
 
     while ( true ) {
 
@@ -1118,6 +1119,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         // exponential backoff — but only while nothing has been streamed yet, so
         // a mid-stream failure never double-renders. `produced` tracks that.
         bool produced = false;
+        bool failed_over = false;
         for ( int attempt = 0; ; ++attempt ) {
             try {
                 if ( can_stream ) {
@@ -1169,8 +1171,31 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                     ( m.find(" 429") != std::string::npos || m.find(" 503") != std::string::npos ||
                       m.find(" 529") != std::string::npos );
                 bool aborting = abort_flag && abort_flag->load(std::memory_order_relaxed);
-                if ( !transient || produced || aborting || attempt >= 3 )
+                if ( !transient || produced || aborting || attempt >= 3 ) {
+                    // Give up on this provider. Before propagating the error, fail
+                    // over to the next configured provider — safe only if nothing
+                    // streamed yet, so a clean retry can't double-render.
+                    if ( !produced && !aborting ) {
+                        while ( failover_idx < _config.failover.size()) {
+                            std::string next = common::to_lower(common::trim_ws(_config.failover[failover_idx++]));
+                            if ( next.empty() || next == _config.provider )
+                                continue;
+                            std::string before = _config.provider;
+                            switch_provider(next); // no-op-safe; refuses if not logged in
+                            if ( _config.provider == next ) {
+                                if ( _progress_cb )
+                                    _progress_cb("failing over: " + before + " → " + next);
+                                logger::warning["agent"] << "failover " << before << " -> " << next
+                                                         << " after: " << m << std::endl;
+                                failed_over = true;
+                                break;
+                            }
+                        }
+                    }
+                    if ( failed_over )
+                        break; // leave the retry loop; the turn loop rebuilds for the new provider
                     throw;
+                }
                 // Backoff 0.5s, 1s, 2s — interruptible via the abort flag.
                 long ms = 500L << attempt;
                 if ( _progress_cb )
@@ -1182,6 +1207,11 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                 }
             }
         }
+
+        // Failed over to another provider — retry the same turn from the top, so the
+        // request/headers/tools are rebuilt for the new provider.
+        if ( failed_over )
+            continue;
 
         _stats.record(resp.input_tokens, resp.output_tokens, resp.cached_input_tokens);
 

@@ -241,6 +241,7 @@ void Config::load(const std::string& path) {
         else if ( key == "bell" ) bell = common::to_lower(value);
         else if ( key == "supersede_tools" ) supersede_tools = parse_bool(value);
         else if ( key == "redact_secrets" ) redact_secrets = parse_bool(value);
+        else if ( key == "failover" ) failover = parse_list(value);
         else if ( key == "tools_safe" ) tools_safe = parse_list(value);
         else if ( key == "tools_danger" ) tools_danger = parse_list(value);
         else if ( key == "max_tokens" ) max_tokens = parse_size(value, max_tokens, key);
