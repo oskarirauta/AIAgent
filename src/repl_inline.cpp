@@ -611,6 +611,8 @@ std::string InlineRepl::status_line() const {
 
     std::string tools = !_config.tools_enabled ? "tools off"
                         : (_config.confirm_tools ? "tools: confirm" : "tools: auto");
+    if ( _config.plan_mode )
+        tools += " · plan";
 
     std::string s = _config.provider + " · " + _config.model + " · " + cwd + " · " + tools;
 
@@ -1027,7 +1029,7 @@ const std::vector<std::string>& slash_commands() {
         "/help", "/about", "/settings", "/provider", "/model", "/btw", "/note",
         "/tools", "/strict", "/thinking", "/effort", "/theme", "/stream",
         "/memories", "/context", "/cost", "/history", "/retry", "/undo", "/tasks",
-        "/pin", "/pins", "/unpin", "/queue", "/trust", "/skills", "/skill",
+        "/pin", "/pins", "/unpin", "/queue", "/trust", "/skills", "/skill", "/plan",
         "/changes", "/export", "/compact", "/clear", "/reset", "/mcp", "/advisor",
         "/workflows", "/exit", "/quit"
     };

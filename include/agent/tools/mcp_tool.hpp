@@ -30,6 +30,8 @@ public:
     std::string danger_reason(const JSON&) const override {
         return _destructive ? ( "the server marks `" + _tool + "` destructive" ) : "";
     }
+    // Only a server-declared read-only tool is safe in plan mode.
+    bool mutates() const override { return !_read_only; }
 
     std::string name() const override { return _name; }
     std::string description() const override {

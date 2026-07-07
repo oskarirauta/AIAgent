@@ -1798,6 +1798,37 @@ static void test_trust_grants() {
     check(reg.grants().empty(), "no grants after revoke all");
 }
 
+static void test_plan_mode() {
+    std::cout << "plan mode (read-only tools only)" << std::endl;
+    using namespace agent::tools;
+    Registry reg;
+    reg.register_defaults();
+    reg.set_mode(ConfirmMode::insecure);
+    reg.set_plan_mode(true);
+
+    std::string wf = "/tmp/ai_plan_test.txt";
+    std::filesystem::remove(wf);
+    std::string w = reg.execute("write_file", JSON::Object{ { "path", wf }, { "content", "x" } });
+    check(w.find("plan mode is on") != std::string::npos, "write_file refused in plan mode");
+    check(!std::filesystem::exists(wf), "no file created while planning");
+    std::string rc = reg.execute("run_command", JSON::Object{ { "command", "echo hi" } });
+    check(rc.find("plan mode is on") != std::string::npos, "run_command refused in plan mode");
+
+    { std::ofstream o(wf); o << "hello\nworld\n"; }
+    std::string rd = reg.execute("read_file", JSON::Object{ { "path", wf } });
+    check(rd.find("hello") != std::string::npos, "read_file still works in plan mode");
+    std::string ls = reg.execute("list_directory", JSON::Object{ { "path", "/tmp" } });
+    check(ls.find("plan mode") == std::string::npos, "list_directory still works in plan mode");
+
+    reg.set_plan_mode(false);
+    std::string w2 = reg.execute("write_file", JSON::Object{ { "path", wf }, { "content", "y" } });
+    check(w2.rfind("ok:", 0) == 0, "write_file works again after /plan off");
+    std::filesystem::remove(wf);
+
+    check(EditFile().mutates(), "edit_file marked mutating");
+    check(!ReadFile().mutates(), "read_file marked read-only");
+}
+
 static void test_ask_continue() {
     std::cout << "per-turn tool budget (ask_continue)" << std::endl;
     using namespace agent::tools;
@@ -2085,6 +2116,7 @@ int main() {
     test_grep_robustness();
     test_token_usage();
     test_trust_grants();
+    test_plan_mode();
     test_ask_continue();
     test_deny_with_note();
     test_turn_scoped_grant();

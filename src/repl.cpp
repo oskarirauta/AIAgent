@@ -623,6 +623,13 @@ std::string Repl::base_system_prompt() const {
             system += "- " + p + "\n";
     }
 
+    // Plan mode: tell the model to plan, not act (its mutating tools are blocked).
+    if ( _config.plan_mode )
+        system += "\n\n## Plan mode\n\nYou are in PLAN MODE. Investigate with the "
+                  "read-only tools and PRESENT A PLAN — do not modify files or run "
+                  "commands (those tools are disabled and will refuse). Wait for the user "
+                  "to review and turn plan mode off before you make any changes.";
+
     // Active skills: their full instructions, so they persist across compaction.
     for ( const auto& s : _skills ) {
         if ( !_active_skills.count(s.name))
@@ -1287,6 +1294,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /workflows [id]          (claude) view background workflow runs the model started\n"
                "  /mcp [refresh|prompt <server> <name> [k=v]]   MCP servers, tools, resources, prompts\n"
                "  /tools <confirm|auto|insecure>   set the tool confirmation mode\n"
+               "  /plan [on|off]           read-only planning mode (no writes/runs until off)\n"
                "  /strict <on|off>         also confirm safe read-only commands\n"
                "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
                "  /theme <dark|light|warm> switch the colour theme\n"
@@ -1480,6 +1488,21 @@ std::string Repl::handle_command(const std::string& line) {
             s += "\n\n  /trust drop <n|all> to revoke";
         }
         return s;
+    }
+
+    if ( cmd == "/plan" ) {
+        std::string m = common::to_lower(common::trim_ws(args));
+        if ( m.empty())
+            m = _config.plan_mode ? "off" : "on"; // bare /plan toggles
+        if ( m == "on" || m == "true" || m == "1" ) _config.plan_mode = true;
+        else if ( m == "off" || m == "false" || m == "0" ) _config.plan_mode = false;
+        else return "usage: /plan [on|off]";
+        _registry.set_plan_mode(_config.plan_mode);
+        _conversation.set_system(base_system_prompt()); // the model learns the mode
+        return _config.plan_mode
+             ? "plan mode ON — read-only tools only; I'll investigate and propose a plan, "
+               "no changes until you /plan off"
+             : "plan mode OFF — I can edit files and run commands again";
     }
 
     if ( cmd == "/skills" ) {
@@ -1775,6 +1798,7 @@ std::string Repl::handle_command(const std::string& line) {
         else return "usage: /tools <confirm|auto|insecure>";
         _registry.set_mode(tool_mode());
         _registry.set_strict(_config.strict);
+    _registry.set_plan_mode(_config.plan_mode);
         return "tool mode: " + m;
     }
 
@@ -1801,6 +1825,7 @@ std::string Repl::handle_command(const std::string& line) {
         else if ( m == "off" || m == "false" ) _config.strict = false;
         else return "usage: /strict <on|off>";
         _registry.set_strict(_config.strict);
+    _registry.set_plan_mode(_config.plan_mode);
         return std::string("strict: ") + ( _config.strict ? "on" : "off" ) +
                ( _config.strict ? "  (safe read-only commands now also ask)" : "" );
     }
@@ -1850,6 +1875,7 @@ void Repl::run_plain() {
 
     _registry.set_mode(tool_mode());
     _registry.set_strict(_config.strict);
+    _registry.set_plan_mode(_config.plan_mode);
     if ( _config.tools_enabled && tool_mode() != tools::ConfirmMode::insecure ) {
         _registry.set_confirm_callback([](const tools::ConfirmRequest& req, std::string& note) -> tools::Decision {
             if ( !req.danger.empty())
@@ -1922,6 +1948,7 @@ void Repl::run_tty() {
 
     _registry.set_mode(tool_mode());
     _registry.set_strict(_config.strict);
+    _registry.set_plan_mode(_config.plan_mode);
     if ( _config.tools_enabled && tool_mode() != tools::ConfirmMode::insecure ) {
         _registry.set_confirm_callback([&inline_repl](const tools::ConfirmRequest& req, std::string& note) { return inline_repl.confirm(req, note); });
     }
@@ -1982,6 +2009,7 @@ void Repl::run_once(const std::string& prompt) {
     // otherwise confirmation-required tools fail safe (deny).
     _registry.set_mode(tool_mode());
     _registry.set_strict(_config.strict);
+    _registry.set_plan_mode(_config.plan_mode);
 
     try {
         std::string reply = process_turn(prompt, [](const std::string& chunk) {

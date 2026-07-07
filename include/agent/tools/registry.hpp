@@ -52,6 +52,8 @@ public:
     void set_pre_run_callback(pre_run_cb_t cb) { _pre_run_cb = std::move(cb); }
     void set_mode(ConfirmMode mode) { _mode = mode; }
     void set_strict(bool strict) { _strict = strict; } // ignore the safe-command list when true
+    void set_plan_mode(bool plan) { _plan_mode = plan; } // block mutating tools (read-only planning)
+    bool plan_mode() const { return _plan_mode; }
 
     // Visible session state for /trust: the standing grants (exact + similar)
     // with a use counter, whether a turn grant is active, and the mode/strict.
@@ -101,6 +103,7 @@ private:
     pre_run_cb_t _pre_run_cb;
     ConfirmMode _mode = ConfirmMode::confirm;
     bool _strict = false;
+    bool _plan_mode = false;
 
     // Session-scoped approvals granted via "allow session" / "allow similar".
     std::set<std::string> _allow_exact;   // full command / action strings

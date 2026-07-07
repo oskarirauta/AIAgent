@@ -105,6 +105,12 @@ each list is roughly the current priority order.
   prompt, which carries the pins). `/pins` lists them, `/unpin <n|all>` removes.
   Session-scoped. For "don't forget this decision / constraint" that must outlast
   summarisation.
+- **`/plan` (read-only planning mode)**: `/plan on` (or bare `/plan` to toggle)
+  blocks every mutating tool — write_file, edit_file, run_command, non-read-only
+  MCP tools — so the model investigates with read-only tools and proposes a plan
+  instead of acting; a refused call tells it to present the plan. A system-prompt
+  note primes the model, the status line shows "· plan", and `/plan off` restores
+  writes. `!command` passthrough still works (it is user-driven). Session-only.
 - **Attention cues**: when a confirm dialog appears after the turn has already
   run unattended (≥4s), the terminal bell rings once — the agent is blocked on
   you. And a turn that ran ≥8s ends with a one-line digest ("● done in Ns · N
@@ -233,7 +239,7 @@ Batch 4 — remaining:
 - **`.gitignore`-aware traversal** (90% semantics) for the search tools.
 - **UI polish**: settable paste thresholds in `/settings`, `/paste <n>` to
   expand a collapsed paste block.
-- **`/plan`** (read-only planning mode), **more providers** (enough, not all).
+- **more providers** (enough, not every one).
 
 ## Considered / dropped
 

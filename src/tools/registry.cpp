@@ -480,6 +480,13 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
 
     Tool* tool = it->second.get();
 
+    // Plan mode: read-only tools work; anything that writes or runs is refused
+    // so the model produces a plan instead of acting.
+    if ( _plan_mode && tool->mutates())
+        return "plan mode is on — `" + name + "` is disabled (no file writes or "
+               "commands). Present your plan for the user to review; they will turn "
+               "plan mode off (/plan off) before you make any changes.";
+
     const bool is_shell = ( name == "run_command" && args.contains("command"));
     std::string command = is_shell ? common::trim_ws(args["command"].to_string()) : "";
     std::string summary;

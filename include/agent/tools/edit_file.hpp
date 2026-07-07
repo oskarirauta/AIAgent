@@ -9,6 +9,7 @@ namespace agent::tools {
 class EditFile : public Tool {
 public:
     std::string name() const override { return "edit_file"; }
+    bool mutates() const override { return true; }
     std::string description() const override {
         return "Make a targeted edit to an existing file by replacing an exact snippet. "
                "Provide `old_string` (the exact text to replace, with enough surrounding "
