@@ -13,6 +13,7 @@
 #include <sstream>
 #include <algorithm>
 #include <map>
+#include <cctype>
 #include <utility>
 #include <vector>
 
@@ -2129,6 +2130,20 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
             std::string ln;
             while ( std::getline(is, ln))
                 m.rows.push_back(ln);
+            // /workflows: Enter on a run drills into its steps. Parse the "#<id>".
+            if ( base == "/workflows" ) {
+                m.drill_cmd = "/workflows ";
+                for ( const auto& row : m.rows ) {
+                    std::string key;
+                    size_t h = row.find('#');
+                    if ( h != std::string::npos ) {
+                        size_t i = h + 1;
+                        while ( i < row.size() && std::isdigit(static_cast<unsigned char>(row[i])))
+                            key += row[i++];
+                    }
+                    m.keys.push_back(key);
+                }
+            }
             open_list_menu(std::move(m));
             return;
         }

@@ -247,13 +247,16 @@ Still open:
      `/queue`: /about /info /help /theme /settings /workflows /trust /history
      /memories /tasks /skills /pins /context /cost /changes /mcp. Mutating ones
      still queue. poll_worker holds streaming back while a modal menu is up.
-  3. `/workflows` into an interactive list menu (a long workflow floods the
-     transcript today) — needs a shared read/list-menu component.
-  4. Menu-as-reader: use that list component for `/history`, `/memories`,
-     `/tasks`, `/skills`, and `/queue` (drop entries) too.
-  5. `/model` opens a pick-menu of the provider's available models where a model
-     list is obtainable (investigate Kimi/Claude model listing).
-  6. `/effort` (thinking level) as a menu as well.
+  3. ✅ `/workflows` into a scrollable list menu (Enter drills into a run's
+     steps) — a shared list/reader component.
+  4. ✅ Menu-as-reader for `/history`, `/memories`, `/tasks`, `/skills` on the
+     same component. (`/queue` drop-via-menu still open — it already lists + drops
+     by typing.)
+  5. ✅ `/model` opens a picker of common models for the provider (curated + the
+     active model; typing still reaches anything else).
+  6. ✅ `/effort` (and `/thinking`) as a picker menu.
+  Still open (polish): action keys in the list menu (queue drop, workflow
+  cancel/retry), a mini toggle for on/off commands, and a live model-list fetch.
 - **UI polish**: `/paste <n>` to expand a collapsed paste block (settable paste
   thresholds already shipped as the `paste_preview` setting).
 - **more providers** (enough, not every one) — the one open-ended item; the
