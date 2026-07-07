@@ -66,6 +66,15 @@ precedence): `-k <key>`, `api_key:` in the config, or the environment variable
 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `MOONSHOT_API_KEY` / `OPENROUTER_API_KEY`
 (or a generic `AI_AGENT_API_KEY`).
 
+### Large pastes
+
+A large paste collapses into a placeholder in the input (`[paste #1: 500 lines]`)
+and, on send, echoes into the transcript as a framed box showing only the first
+few lines dimmed plus `… N more lines` — the model always receives the full text;
+only the on-screen echo is trimmed. The preview length is the **preview** row in
+`/settings` (default 8; `0` echoes everything), persisted across sessions as
+`paste_preview`.
+
 If `model` is not set (via config or `-m`), each provider falls back to a sensible default (e.g. `claude-opus-4-8`, `kimi-for-coding`, `gpt-4o-mini`, `llama3`, `openrouter/free`).
 
 ### Data directory
