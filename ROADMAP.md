@@ -205,19 +205,16 @@ snippet, run_command head+tail, !command passthrough) and 2 (trust & flow: MCP
 annotation gating, allow-for-this-turn, /trust, deny-with-note) are **done** —
 see the Done section above.
 
-Batch 3 — context & provider economy:
-- **max_tokens 8192 default + configurable; stop_reason/finish_reason guard**:
-  warn visibly when an answer was truncated by the output cap.
-- **Cached-token accounting**: parse cache_read/creation fields (+ OpenAI
-  stream_options.include_usage) so /cost and budgets are correct.
+Batch 3 — context & provider economy. Done: max_tokens 8192 + truncation guard,
+cached-token accounting (+ OpenAI include_usage), /thinking on openai/openrouter,
+auto-retry with backoff. Remaining (higher-risk — history/trim mutation, review
+carefully):
 - **Cache-stable trimming (hysteresis)**: pin the trim boundary so long
   sessions keep a byte-identical prefix for prompt caching.
 - **Tool-result supersession**: at request build, elide older tool outputs made
   stale by newer runs of the same command / reads of the same file.
 - **Rolling compact**: summarise the old half, keep the recent exchanges
   verbatim; compaction also carries /tasks + /changes state verbatim.
-- **/thinking on openai/openrouter**: map to reasoning_effort / reasoning.
-- **Auto-retry with backoff** on 429/503/529 transient errors.
 
 Batch 4 — remaining:
 - **`outline_file` tool**: symbols of one file with line numbers (find_symbol

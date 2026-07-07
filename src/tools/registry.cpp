@@ -20,6 +20,7 @@
 #include "agent/tools/find_symbol.hpp"
 #include "agent/tools/find_references.hpp"
 #include "agent/tools/project_map.hpp"
+#include "agent/tools/outline_file.hpp"
 
 namespace agent::tools {
 
@@ -33,6 +34,7 @@ void Registry::register_defaults() {
     add(std::make_unique<FindSymbol>());
     add(std::make_unique<FindReferences>());
     add(std::make_unique<ProjectMap>());
+    add(std::make_unique<OutlineFile>());
 }
 
 void Registry::add(std::unique_ptr<Tool> tool) {

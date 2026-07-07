@@ -31,6 +31,7 @@
 #include "agent/tools/find_symbol.hpp"
 #include "agent/tools/find_references.hpp"
 #include "agent/tools/project_map.hpp"
+#include "agent/tools/outline_file.hpp"
 #include "agent/tools/web_search.hpp"
 #include "agent/tools/fetch_url.hpp"
 #include "agent/tools/mcp_tool.hpp"
@@ -780,6 +781,34 @@ static void test_block_diff() {
     check(d.find("--- a") != std::string::npos && d.find("+++ b") != std::string::npos, "diff has labelled headers");
     check(d.find("- two") != std::string::npos && d.find("+ TWO") != std::string::npos, "diff shows the changed line");
     check(d.find("- one") == std::string::npos && d.find("- three") == std::string::npos, "unchanged edges are not shown as removed");
+}
+
+static void test_outline_file() {
+    std::cout << "outline_file" << std::endl;
+    std::string p = "/tmp/ai_outline.cpp";
+    {
+        std::ofstream o(p);
+        o << "#include <x>\n"
+          << "int add(int a, int b) {\n"
+          << "    return a + b;\n"
+          << "}\n"
+          << "class Widget {\n"
+          << "  void draw();\n"
+          << "};\n"
+          << "static void helper(int n)\n"
+          << "{\n"
+          << "    if (n > 0) {}\n"
+          << "}\n";
+    }
+    agent::tools::OutlineFile ol;
+    std::string r = ol.execute(JSON::Object{ { "path", p } });
+    check(r.find("2: int add(int a, int b) {") != std::string::npos, "function signature outlined");
+    check(r.find("5: class Widget {") != std::string::npos, "class outlined");
+    check(r.find("8: static void helper(int n)") != std::string::npos, "multi-line signature outlined");
+    check(r.find("return a + b") == std::string::npos, "body lines excluded");
+    check(r.find("void draw();") == std::string::npos, "prototype (;) excluded");
+    check(ol.execute(JSON::Object{ { "path", "/no/such/file" } }).rfind("error:", 0) == 0, "missing file errors");
+    std::filesystem::remove(p);
 }
 
 static void test_project_map() {
@@ -1881,6 +1910,7 @@ int main() {
     test_file_mentions();
     test_ultra_keyword();
     test_block_diff();
+    test_outline_file();
     test_project_map();
     test_find_references();
     test_pricing_and_cost();
