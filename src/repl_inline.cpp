@@ -55,7 +55,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
         // read-only displays / menus
         "/about", "/info", "/help", "/theme", "/settings", "/workflows",
         "/trust", "/history", "/memories", "/tasks", "/skills", "/pins",
-        "/context", "/cost", "/changes", "/mcp", "/paste", "/raw",
+        "/context", "/cost", "/changes", "/mcp", "/paste", "/raw", "/limits",
         // settings that only affect the NEXT request — running them mid-turn just
         // updates local state (last value wins: /effort medium then /effort max
         // leaves only max, a natural dedup), applied before the next prompt. They
@@ -1094,12 +1094,12 @@ namespace {
 
 const std::vector<std::string>& slash_commands() {
     static const std::vector<std::string> cmds = {
-        "/help", "/about", "/settings", "/provider", "/model", "/btw", "/note",
-        "/tools", "/strict", "/thinking", "/effort", "/theme", "/stream",
+        "/help", "/about", "/info", "/settings", "/provider", "/model", "/btw", "/note",
+        "/tools", "/strict", "/thinking", "/effort", "/theme", "/stream", "/bell",
         "/memories", "/context", "/cost", "/history", "/retry", "/undo", "/tasks",
         "/pin", "/pins", "/unpin", "/queue", "/trust", "/skills", "/skill", "/plan",
         "/changes", "/export", "/compact", "/clear", "/reset", "/mcp", "/advisor",
-        "/workflows", "/exit", "/quit"
+        "/autoresume", "/paste", "/raw", "/limits", "/workflows", "/exit", "/quit"
     };
     return cmds;
 }

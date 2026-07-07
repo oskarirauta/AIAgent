@@ -1,6 +1,7 @@
 #include "agent/api/client.hpp"
 
 #include <curl/curl.h>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -96,6 +97,26 @@ static size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdat
     return size * nmemb;
 }
 
+// Capture each response header line as a (lowercased key, value) pair. curl calls
+// this once per header; the status line and the blank terminator have no colon
+// and are ignored.
+static size_t header_capture(char* buffer, size_t size, size_t nitems, void* userdata) {
+    size_t total = size * nitems;
+    auto* hdrs = static_cast<std::vector<std::pair<std::string, std::string>>*>(userdata);
+    std::string line(buffer, total);
+    while ( !line.empty() && ( line.back() == '\r' || line.back() == '\n' )) line.pop_back();
+    size_t colon = line.find(':');
+    if ( colon != std::string::npos ) {
+        std::string k = line.substr(0, colon);
+        std::string v = line.substr(colon + 1);
+        size_t s = v.find_first_not_of(" \t");
+        v = ( s == std::string::npos ) ? "" : v.substr(s);
+        for ( char& ch : k ) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        hdrs->push_back({ k, v });
+    }
+    return total;
+}
+
 // A NAMED function, not a lambda: curl_easy_setopt is variadic, and a lambda
 // object passed there is not converted to a function pointer (it becomes garbage
 // libcurl then calls — a crash). userdata is the std::function<void(chunk)>.
@@ -165,6 +186,9 @@ std::string Client::post(const std::string& url, const std::string& auth_header,
     curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &response);
+    _headers.clear();
+    curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, header_capture);
+    curl_easy_setopt(c, CURLOPT_HEADERDATA, &_headers);
     curl_easy_setopt(c, CURLOPT_TIMEOUT, 120L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
@@ -239,6 +263,9 @@ void Client::post_stream(const std::string& url, const std::string& auth_header,
     curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, stream_write_callback);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &sink);
+    _headers.clear();
+    curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, header_capture);
+    curl_easy_setopt(c, CURLOPT_HEADERDATA, &_headers);
     // No hard total timeout for streaming — a long answer (deep thinking + a long
     // reply) legitimately takes minutes. Instead abort only if the connection
     // stalls: less than 1 byte/s for 120s. Plus a bounded connect timeout.

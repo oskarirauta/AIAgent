@@ -132,6 +132,11 @@ const std::vector<CommandDoc>& command_catalog() {
       "attention: only a workflow finishing, a tool-permission prompt, or an answer that "
       "is a question. question: only when the answer is a question. never: silent. Bare "
       "/bell opens a picker; also the \"bell\" row in /settings." },
+    { "/limits", "", "", "Session & UI", "rate-limit / quota headers from the last response",
+      "Shows the rate-limit and quota headers the provider returned on the last "
+      "request (e.g. requests/tokens remaining and reset times). Providers vary; "
+      "subscription providers often don't expose quota this way, in which case it "
+      "reports none were seen." },
     { "/raw", "", "[request|response]", "Session & UI", "inspect the last model request/response",
       "Shows the exact JSON request last sent to the provider and the response "
       "received (assembled from the stream when streaming), in a scrollable view — "

@@ -1714,6 +1714,29 @@ std::string Repl::handle_command(const std::string& line) {
                "\n\n── response ──\n" + _last_response;
     }
 
+    if ( cmd == "/limits" ) {
+        const auto& hs = _client.last_headers();
+        if ( hs.empty())
+            return "no model request has been sent yet this session";
+        std::vector<std::pair<std::string, std::string>> hits;
+        for ( const auto& h : hs ) {
+            const std::string& k = h.first;
+            if ( k.find("ratelimit") != std::string::npos ||
+                 k.find("rate-limit") != std::string::npos ||
+                 k.find("retry-after") != std::string::npos ||
+                 k.find("quota") != std::string::npos )
+                hits.push_back(h);
+        }
+        if ( hits.empty())
+            return "the " + _config.provider + " provider returned no rate-limit headers (" +
+                   std::to_string(hs.size()) + " headers seen). Subscription providers often "
+                   "don't expose quota this way.";
+        std::string out = "rate limits (from the last " + _config.provider + " response):\n";
+        for ( const auto& h : hits )
+            out += "  " + h.first + ": " + h.second + "\n";
+        return out;
+    }
+
     if ( cmd == "/info" || cmd == "/about" ) {
         return std::string("agent version ") + agent::VERSION + "\n"
                "A lightweight, local C++ AI assistant for the command line, a\n"

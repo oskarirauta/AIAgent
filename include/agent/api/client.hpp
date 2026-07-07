@@ -42,8 +42,13 @@ public:
                      const std::vector<std::pair<std::string, std::string>>& extra_headers,
                      const std::string& body, std::function<void(const std::string&)> callback, std::atomic<bool>* abort_flag = nullptr);
 
+    // Response headers (lowercased keys) captured from the most recent post /
+    // post_stream — used by /limits to surface rate-limit / quota headers.
+    const std::vector<std::pair<std::string, std::string>>& last_headers() const { return _headers; }
+
 private:
     void* curl = nullptr;
+    std::vector<std::pair<std::string, std::string>> _headers;
 };
 
 } // namespace agent::api
