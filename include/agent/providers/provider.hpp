@@ -32,6 +32,10 @@ struct Response {
     // The reply was cut off by the output-token cap (Anthropic stop_reason
     // "max_tokens" / OpenAI finish_reason "length"), not finished naturally.
     bool truncated = false;
+
+    // Portion of input_tokens served from the prompt cache (billed ~10%).
+    // input_tokens is the TOTAL prompt size; cached_input_tokens is the subset.
+    long cached_input_tokens = 0;
 };
 
 // Visible deltas produced by one streamed chunk. Content and reasoning are
@@ -83,6 +87,10 @@ public:
     // Apply provider-specific options loaded from config (e.g. provider.kimi.model).
     // Override in subclasses that expose custom settings.
     virtual void apply_provider_options(const JSON& options) { (void)options; }
+
+    // Called after "stream": true is set, so a provider can add streaming-only
+    // request fields (e.g. OpenAI's stream_options.include_usage). Default no-op.
+    virtual void prepare_stream_request(JSON& req) { (void)req; }
 
     // Change the active model at runtime (used by the /model slash command).
     void set_model(const std::string& model) { _config.model = model; }

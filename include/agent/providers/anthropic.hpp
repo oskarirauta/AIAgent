@@ -47,6 +47,7 @@ protected:
     long _s_input_tokens = 0;
     long _s_output_tokens = 0;
     bool _s_truncated = false;
+    long _s_cached_tokens = 0;
 
     // Add cache_control breakpoints to the stable prefix (tools/system/last
     // message) of a built request. No-op fields are left untouched.

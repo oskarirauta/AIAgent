@@ -155,6 +155,9 @@ Response OpenAI::parse_response(const JSON& response) {
         JSON u = response["usage"];
         if ( u.contains("prompt_tokens")) r.input_tokens = json_long(u["prompt_tokens"]);
         if ( u.contains("completion_tokens")) r.output_tokens = json_long(u["completion_tokens"]);
+        if ( u.contains("prompt_tokens_details") && u["prompt_tokens_details"] == JSON::TYPE::OBJECT &&
+             u["prompt_tokens_details"].contains("cached_tokens"))
+            r.cached_input_tokens = json_long(u["prompt_tokens_details"]["cached_tokens"]);
     }
 
     return r;
@@ -175,6 +178,7 @@ void OpenAI::stream_reset() {
     _s_input_tokens = 0;
     _s_output_tokens = 0;
     _s_truncated = false;
+    _s_cached_tokens = 0;
 }
 
 StreamChunk OpenAI::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
@@ -206,6 +210,9 @@ StreamChunk OpenAI::parse_stream(const std::string& chunk, std::string& buffer, 
                 if ( u != JSON::TYPE::OBJECT ) return;
                 if ( u.contains("prompt_tokens")) _s_input_tokens = json_long(u["prompt_tokens"]);
                 if ( u.contains("completion_tokens")) _s_output_tokens = json_long(u["completion_tokens"]);
+                if ( u.contains("prompt_tokens_details") && u["prompt_tokens_details"] == JSON::TYPE::OBJECT &&
+                     u["prompt_tokens_details"].contains("cached_tokens"))
+                    _s_cached_tokens = json_long(u["prompt_tokens_details"]["cached_tokens"]);
             };
             // Usage is top-level with stream_options.include_usage, but Kimi puts
             // it inside choices[0] on the final chunk.
@@ -264,6 +271,7 @@ Response OpenAI::stream_result() {
     r.input_tokens = _s_input_tokens;
     r.output_tokens = _s_output_tokens;
     r.truncated = _s_truncated;
+    r.cached_input_tokens = _s_cached_tokens;
     for ( const auto& [idx, p] : _s_tools ) {
         if ( p.name.empty())
             continue;

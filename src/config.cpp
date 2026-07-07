@@ -155,11 +155,16 @@ std::optional<ModelPricing> Config::pricing_for(const std::string& model) const 
     return std::nullopt;
 }
 
-double Config::session_cost(long input_tokens, long output_tokens) const {
+double Config::session_cost(long input_tokens, long output_tokens, long cached_input) const {
     auto p = pricing_for(model);
     if ( !p )
         return -1.0;
-    return static_cast<double>(input_tokens) / 1e6 * p->input_per_mtok +
+    // Cache-read input is billed at ~10% of the normal input rate; the rest of
+    // the input at full price. cached_input is a subset of input_tokens.
+    long full_input = input_tokens - cached_input;
+    if ( full_input < 0 ) full_input = input_tokens;
+    return static_cast<double>(full_input) / 1e6 * p->input_per_mtok +
+           static_cast<double>(cached_input) / 1e6 * p->input_per_mtok * 0.1 +
            static_cast<double>(output_tokens) / 1e6 * p->output_per_mtok;
 }
 

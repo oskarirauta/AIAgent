@@ -275,7 +275,11 @@ Response Anthropic::parse_response(const JSON& response) {
 
     if ( response.contains("usage") && response["usage"] == JSON::TYPE::OBJECT ) {
         JSON u = response["usage"];
-        if ( u.contains("input_tokens")) r.input_tokens = json_long(u["input_tokens"]);
+        long inp = u.contains("input_tokens") ? json_long(u["input_tokens"]) : 0;
+        long cr = u.contains("cache_read_input_tokens") ? json_long(u["cache_read_input_tokens"]) : 0;
+        long cc = u.contains("cache_creation_input_tokens") ? json_long(u["cache_creation_input_tokens"]) : 0;
+        r.input_tokens = inp + cr + cc;         // total prompt size
+        r.cached_input_tokens = cr;             // cache-read subset (billed ~10%)
         if ( u.contains("output_tokens")) r.output_tokens = json_long(u["output_tokens"]);
     }
 
@@ -302,6 +306,7 @@ void Anthropic::stream_reset() {
     _s_input_tokens = 0;
     _s_output_tokens = 0;
     _s_truncated = false;
+    _s_cached_tokens = 0;
 }
 
 StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
@@ -329,8 +334,16 @@ StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffe
 
             if ( type == "message_start" && j.contains("message") && j["message"].contains("usage")) {
                 JSON u = j["message"]["usage"];
-                if ( u == JSON::TYPE::OBJECT && u.contains("input_tokens"))
-                    _s_input_tokens = json_long(u["input_tokens"]);
+                if ( u == JSON::TYPE::OBJECT ) {
+                    // Anthropic's input_tokens EXCLUDES cached tokens; add cache
+                    // read+creation so input reflects the TOTAL prompt size, and
+                    // track the cache-read subset (billed ~10%).
+                    long inp = u.contains("input_tokens") ? json_long(u["input_tokens"]) : 0;
+                    long cr = u.contains("cache_read_input_tokens") ? json_long(u["cache_read_input_tokens"]) : 0;
+                    long cc = u.contains("cache_creation_input_tokens") ? json_long(u["cache_creation_input_tokens"]) : 0;
+                    _s_input_tokens = inp + cr + cc;
+                    _s_cached_tokens = cr;
+                }
             } else if ( type == "content_block_start" && j.contains("index") && j.contains("content_block")) {
                 int idx = static_cast<int>(json_long(j["index"]));
                 JSON b = j["content_block"];
@@ -384,6 +397,7 @@ Response Anthropic::stream_result() {
     r.input_tokens = _s_input_tokens;
     r.output_tokens = _s_output_tokens;
     r.truncated = _s_truncated;
+    r.cached_input_tokens = _s_cached_tokens;
     // Reassemble thinking blocks in index order for verbatim replay.
     for ( const auto& [idx, blk] : _s_blocks ) {
         if ( blk.type == "thinking" && !blk.signature.empty())

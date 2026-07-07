@@ -628,7 +628,8 @@ std::string InlineRepl::status_line() const {
         };
         s += " · ctx " + fmt(ctx) + " · " + fmt(total) + " tok";
         double cost = _config.session_cost(_stats.session_input.load(std::memory_order_relaxed),
-                                           _stats.session_output.load(std::memory_order_relaxed));
+                                           _stats.session_output.load(std::memory_order_relaxed),
+                                           _stats.session_cached.load(std::memory_order_relaxed));
         if ( cost >= 0 ) {
             char buf[32];
             std::snprintf(buf, sizeof(buf), " · $%.4f", cost);
@@ -1698,7 +1699,7 @@ std::string InlineRepl::budget_warning() {
     double frac = 0.0;
     std::string detail;
     if ( _config.budget_usd > 0.0 ) {
-        double cost = _config.session_cost(in, out);
+        double cost = _config.session_cost(in, out, _stats.session_cached.load(std::memory_order_relaxed));
         if ( cost >= 0 ) {
             double f = cost / _config.budget_usd;
             if ( f > frac ) {

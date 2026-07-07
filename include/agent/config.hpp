@@ -159,7 +159,7 @@ public:
     std::optional<ModelPricing> pricing_for(const std::string& model) const;
 
     // Estimated session cost in USD for the current model, or -1 if unpriced.
-    double session_cost(long input_tokens, long output_tokens) const;
+    double session_cost(long input_tokens, long output_tokens, long cached_input = 0) const;
 
     // The token budget to actually apply when trimming history: the model's
     // window (with response headroom) in auto mode, else `context_limit`.

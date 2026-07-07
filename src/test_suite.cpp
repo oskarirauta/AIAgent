@@ -210,6 +210,43 @@ static void test_anthropic_request() {
     check(req["messages"][0]["role"].to_string() == "user", "user role");
 }
 
+static void test_cached_token_accounting() {
+    std::cout << "cached-token accounting" << std::endl;
+    {
+        agent::Config cfg; cfg.provider = "openai";
+        agent::providers::OpenAI p(cfg);
+        JSON req = JSON::Object{}; p.prepare_stream_request(req);
+        check(req.contains("stream_options") && req["stream_options"]["include_usage"].to_bool(),
+              "openai requests include_usage on streamed turns");
+        p.stream_reset();
+        std::string buf; bool done = false;
+        p.parse_stream("data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n", buf, done);
+        p.parse_stream("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":50,"
+                       "\"prompt_tokens_details\":{\"cached_tokens\":800}}}\n\n", buf, done);
+        auto r = p.stream_result();
+        check(r.input_tokens == 1000 && r.cached_input_tokens == 800, "openai cached_tokens captured");
+    }
+    {
+        agent::Config cfg; cfg.provider = "anthropic"; cfg.model = "claude-opus-4-8";
+        agent::providers::Anthropic p(cfg);
+        p.stream_reset();
+        std::string buf; bool done = false;
+        p.parse_stream("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100,"
+                       "\"cache_read_input_tokens\":900,\"cache_creation_input_tokens\":50}}}\n\n", buf, done);
+        auto r = p.stream_result();
+        check(r.input_tokens == 1050, "anthropic total input includes cache read+create");
+        check(r.cached_input_tokens == 900, "anthropic cache-read tracked");
+    }
+    {
+        agent::Config cfg; cfg.model = "priced-model";
+        cfg.pricing["priced-model"] = agent::ModelPricing{ 10.0, 30.0 };
+        double full = cfg.session_cost(1000000, 0, 0);
+        double cached = cfg.session_cost(1000000, 0, 1000000);
+        check(full > 9.9 && full < 10.1, "full input priced at input rate");
+        check(cached > 0.9 && cached < 1.1, "fully-cached input priced at ~10%");
+    }
+}
+
 static void test_max_tokens_and_truncation() {
     std::cout << "max_tokens config + truncation guard" << std::endl;
     {
@@ -1826,6 +1863,7 @@ int main() {
     test_openrouter_provider();
     test_ollama_request();
     test_anthropic_request();
+    test_cached_token_accounting();
     test_max_tokens_and_truncation();
     test_thinking_block_replay();
     test_prompt_caching();

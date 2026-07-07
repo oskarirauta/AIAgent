@@ -21,6 +21,11 @@ public:
     Response parse_response(const JSON& response) override;
     JSON make_tool_result(const std::string& tool_call_id, const std::string& result) override;
     void apply_provider_options(const JSON& options) override;
+    void prepare_stream_request(JSON& req) override {
+        // Ask for a final usage chunk on streamed responses (OpenAI/OpenRouter/
+        // Moonshot); without it a streamed turn reports zero tokens.
+        req["stream_options"] = JSON::Object{ { "include_usage", true } };
+    }
 
 protected:
     // /thinking maps to the chat-completions `reasoning_effort` (o-series / gpt-5).
@@ -40,6 +45,7 @@ private:
     long _s_input_tokens = 0;
     long _s_output_tokens = 0;
     bool _s_truncated = false;
+    long _s_cached_tokens = 0;
 };
 
 } // namespace agent::providers

@@ -913,6 +913,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             try {
                 if ( can_stream ) {
                     request["stream"] = true;
+                    _provider->prepare_stream_request(request); // e.g. stream_options.include_usage
                     std::string body = request.dump_minified();
                     std::string buffer;
                     bool done = false;
@@ -969,7 +970,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             }
         }
 
-        _stats.record(resp.input_tokens, resp.output_tokens);
+        _stats.record(resp.input_tokens, resp.output_tokens, resp.cached_input_tokens);
 
         if ( !resp.success )
             throws << "provider response error: " << resp.message << std::endl;
@@ -1213,13 +1214,17 @@ std::string Repl::handle_command(const std::string& line) {
 
         long in = _stats.session_input.load(std::memory_order_relaxed);
         long out = _stats.session_output.load(std::memory_order_relaxed);
+        long cached = _stats.session_cached.load(std::memory_order_relaxed);
         long total = in + out;
         std::string s = "session usage (" + _config.provider + " · " + _config.model + "):\n";
-        s += "  input:   " + std::to_string(in) + " tokens\n";
+        s += "  input:   " + std::to_string(in) + " tokens";
+        if ( cached > 0 )
+            s += " (" + std::to_string(cached) + " cached, billed ~10%)";
+        s += "\n";
         s += "  output:  " + std::to_string(out) + " tokens\n";
         s += "  total:   " + std::to_string(total) + " tokens\n";
 
-        double cost = _config.session_cost(in, out);
+        double cost = _config.session_cost(in, out, cached);
         if ( cost < 0 ) {
             s += "  cost:    (no price configured for this model — usage only)\n";
             s += "           set one with `price." + _config.model + ": <in>/<out>` (USD per Mtok)";
