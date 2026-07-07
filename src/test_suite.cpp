@@ -448,7 +448,7 @@ static void test_mcp_annotations_policy() {
             false, true));
         reg.set_mode(agent::tools::ConfirmMode::automatic);
         int asked = 0;
-        reg.set_confirm_callback([&](const agent::tools::ConfirmRequest& rq) {
+        reg.set_confirm_callback([&](const agent::tools::ConfirmRequest& rq, std::string&) {
             ++asked;
             check(!rq.danger.empty(), "confirm request carries the danger reason");
             return agent::tools::Decision::deny;
@@ -1097,7 +1097,7 @@ static void test_tools() {
     std::cout << "tools" << std::endl;
     agent::tools::Registry r;
     r.register_defaults();
-    r.set_confirm_callback([](const agent::tools::ConfirmRequest&) { return agent::tools::Decision::once; });
+    r.set_confirm_callback([](const agent::tools::ConfirmRequest&, std::string&) { return agent::tools::Decision::once; });
 
     JSON write = JSON::Object{
         { "path", "/tmp/ai_agent_tool_test.txt" },
@@ -1519,7 +1519,7 @@ static void test_trust_grants() {
     reg.set_mode(ConfirmMode::confirm);
     reg.set_strict(true);
     Decision give = Decision::session;
-    reg.set_confirm_callback([&](const ConfirmRequest&) { return give; });
+    reg.set_confirm_callback([&](const ConfirmRequest&, std::string&) { return give; });
 
     reg.execute("run_command", JSON::Object{ { "command", "echo one" } }); // grant session for "echo one"
     give = Decision::similar;
@@ -1542,6 +1542,29 @@ static void test_trust_grants() {
     check(reg.grants().empty(), "no grants after revoke all");
 }
 
+static void test_deny_with_note() {
+    std::cout << "deny with a note" << std::endl;
+    using namespace agent::tools;
+    Registry reg;
+    reg.register_defaults();
+    reg.set_mode(ConfirmMode::confirm);
+    reg.set_strict(true);
+
+    reg.set_confirm_callback([](const ConfirmRequest&, std::string& note) {
+        note = "use /tmp for scratch files instead";
+        return Decision::deny;
+    });
+    std::string r = reg.execute("run_command", JSON::Object{ { "command", "echo hi" } });
+    check(r.find("declined") != std::string::npos, "still a decline");
+    check(r.find("use /tmp for scratch files instead") != std::string::npos,
+          "the reason reaches the tool result");
+
+    reg.set_confirm_callback([](const ConfirmRequest&, std::string&) { return Decision::deny; });
+    std::string r2 = reg.execute("run_command", JSON::Object{ { "command", "echo hi" } });
+    check(r2.find("declined") != std::string::npos && r2.find(" — ") == std::string::npos,
+          "a plain deny carries no reason");
+}
+
 static void test_turn_scoped_grant() {
     std::cout << "allow-for-the-rest-of-this-turn grant" << std::endl;
     using namespace agent::tools;
@@ -1552,7 +1575,7 @@ static void test_turn_scoped_grant() {
 
     int asks = 0;
     Decision give = Decision::turn;
-    reg.set_confirm_callback([&](const ConfirmRequest&) { ++asks; return give; });
+    reg.set_confirm_callback([&](const ConfirmRequest&, std::string&) { ++asks; return give; });
 
     reg.execute("run_command", JSON::Object{ { "command", "echo one" } });
     check(asks == 1, "first call asks");
@@ -1774,6 +1797,7 @@ int main() {
     test_grep_robustness();
     test_token_usage();
     test_trust_grants();
+    test_deny_with_note();
     test_turn_scoped_grant();
     test_danger_list();
     test_list_directory();

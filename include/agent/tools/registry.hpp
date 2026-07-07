@@ -36,7 +36,9 @@ struct ConfirmRequest {
 
 class Registry {
 public:
-    using confirm_cb_t = std::function<Decision(const ConfirmRequest&)>;
+    // Returns the decision; on deny, may fill `note` with a one-line reason that
+    // is handed back to the model (so a decline can steer instead of just block).
+    using confirm_cb_t = std::function<Decision(const ConfirmRequest&, std::string& note)>;
     using activity_cb_t = std::function<void(const std::string&)>;
     // Invoked just before a tool actually runs (after any confirmation), so the
     // app can observe it — e.g. snapshot a file before write_file overwrites it.

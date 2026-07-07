@@ -565,11 +565,14 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
     req.preview = change_preview(name, args);
     req.can_similar = true;
 
-    Decision d = _confirm_cb(req);
+    std::string note;
+    Decision d = _confirm_cb(req, note);
     switch ( d ) {
         case Decision::deny:
             logger::info["tool"] << "user declined " << name << std::endl;
-            return "user declined to run " + name;
+            return note.empty()
+                ? "user declined to run " + name
+                : "user declined to run " + name + " — " + note;
         case Decision::turn:
             _turn_grant = true;
             break;

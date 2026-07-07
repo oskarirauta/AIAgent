@@ -1760,6 +1760,7 @@ static std::vector<std::pair<std::string, tools::Decision>>
 confirm_choices(const tools::ConfirmRequest& req) {
     std::vector<std::pair<std::string, tools::Decision>> c = {
         { "Deny", tools::Decision::deny },
+        { "Deny with a reason", tools::Decision::deny },
         { "Allow once", tools::Decision::once },
         { "Allow for the rest of this turn", tools::Decision::turn },
         { "Allow for this session", tools::Decision::session },
@@ -1777,13 +1778,23 @@ static std::vector<std::string> confirm_options(const tools::ConfirmRequest& req
 }
 
 void InlineRepl::draw_confirm_menu(const tools::ConfirmRequest& req, bool redraw) {
-    std::vector<std::string> opts = confirm_options(req);
-    int n = static_cast<int>(opts.size());
-
     std::string out;
     if ( redraw && _confirm_menu_lines > 0 )
-        out += "\r\033[" + std::to_string(_confirm_menu_lines) + "A"; // back up to the first option
-    out += "\033[J"; // clear the menu region
+        out += "\r\033[" + std::to_string(_confirm_menu_lines) + "A"; // back up to the top
+    out += "\033[J"; // clear the region
+
+    if ( _confirm_note_mode ) {
+        // A single input line for the deny reason.
+        out += _theme.dim + "reason (Enter to deny, Esc to cancel):" + Theme::reset + "\r\n";
+        out += "\033[1;7m ❯ \033[0m " + _confirm_note_buf;
+        out += "\r\n";
+        wr(out);
+        _confirm_menu_lines = 2;
+        return;
+    }
+
+    std::vector<std::string> opts = confirm_options(req);
+    int n = static_cast<int>(opts.size());
     for ( int i = 0; i < n; ++i ) {
         if ( i == _confirm_selection )
             out += "\033[1;7m ❯ " + opts[i] + " \033[0m";  // highlighted (reverse video)
@@ -1905,11 +1916,14 @@ void InlineRepl::commit_confirm(tools::Decision d, const std::string& label) {
     {
         std::lock_guard<std::mutex> lk(_mx);
         _confirm_decision = d;
+        _confirm_note = _confirm_note_buf;
         _confirm_answered = true;
         _confirm_pending = false;
     }
     _cv.notify_all();
     _confirming = false;
+    _confirm_note_mode = false;
+    _confirm_note_buf.clear();
     draw_live();
 }
 
@@ -2275,7 +2289,33 @@ void InlineRepl::handle_settings_key(int c) {
 }
 
 void InlineRepl::handle_confirm_key(int c) {
-    int nopts = 3 + (_confirm_req.can_similar ? 1 : 0);
+    // Note sub-mode: type the deny reason. Enter submits, Esc cancels back to the
+    // menu, Backspace edits; printable bytes append.
+    if ( _confirm_note_mode ) {
+        if ( c == '\r' || c == '\n' ) {
+            std::string reason = common::trim_ws(_confirm_note_buf);
+            commit_confirm(tools::Decision::deny,
+                           reason.empty() ? "denied" : "denied: " + reason);
+        } else if ( c == 0x1b ) {
+            _confirm_note_mode = false;
+            _confirm_note_buf.clear();
+            draw_confirm_menu(_confirm_req, false);
+        } else if ( c == 0x7f || c == 0x08 ) {
+            if ( !_confirm_note_buf.empty()) {
+                _confirm_note_buf.pop_back();
+                while ( !_confirm_note_buf.empty() &&
+                        (static_cast<unsigned char>(_confirm_note_buf.back()) & 0xC0) == 0x80 )
+                    _confirm_note_buf.pop_back();
+            }
+            draw_confirm_menu(_confirm_req, true);
+        } else if ( c >= 0x20 ) {
+            _confirm_note_buf += static_cast<char>(c);
+            draw_confirm_menu(_confirm_req, true);
+        }
+        return;
+    }
+
+    int nopts = confirm_choices(_confirm_req).size();
 
     if ( c == 0x1b ) {
         // Distinguish an arrow key (ESC [ A/B) from a bare Esc (deny).
@@ -2305,6 +2345,13 @@ void InlineRepl::handle_confirm_key(int c) {
         auto choices = confirm_choices(_confirm_req);
         int sel = ( _confirm_selection >= 0 && _confirm_selection < static_cast<int>(choices.size()))
                   ? _confirm_selection : 0;
+        // "Deny with a reason": switch to the note input instead of committing.
+        if ( choices[sel].first == "Deny with a reason" ) {
+            _confirm_note_mode = true;
+            _confirm_note_buf.clear();
+            draw_confirm_menu(_confirm_req, false);
+            return;
+        }
         tools::Decision d = choices[sel].second;
         static const std::map<tools::Decision, std::string> labels = {
             { tools::Decision::deny,    "denied" },
@@ -2464,17 +2511,19 @@ void InlineRepl::handle_byte(int c) {
 
 // ── tool confirmation ───────────────────────────────────────────────────
 
-tools::Decision InlineRepl::confirm(const tools::ConfirmRequest& req) {
+tools::Decision InlineRepl::confirm(const tools::ConfirmRequest& req, std::string& note) {
     // Called on the worker thread. Hand the request to the main (UI) thread and
     // block until it renders the prompt and reads the user's choice.
     std::unique_lock<std::mutex> lk(_mx);
     _confirm_req = req;
     _confirm_answered = false;
     _confirm_pending = true;
+    _confirm_note.clear();
     _cv.wait(lk, [this]() {
         return _confirm_answered || !agent::running.load(std::memory_order_relaxed);
     });
     _confirm_pending = false;
+    note = _confirm_note;
     return _confirm_answered ? _confirm_decision : tools::Decision::deny;
 }
 

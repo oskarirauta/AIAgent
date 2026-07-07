@@ -46,7 +46,7 @@ public:
 
     // Tool-confirmation request from the worker thread. Blocks the worker until
     // the main (UI) thread renders the prompt and reads the user's choice.
-    tools::Decision confirm(const tools::ConfirmRequest& req);
+    tools::Decision confirm(const tools::ConfirmRequest& req, std::string& note);
 
     // Publish what the worker is currently doing (e.g. a running command) so the
     // status line can show it. Thread-safe.
@@ -229,6 +229,7 @@ private:
     tools::ConfirmRequest _confirm_req;
     bool _confirm_answered = false;
     tools::Decision _confirm_decision = tools::Decision::deny;
+    std::string _confirm_note;          // one-line reason captured with a "Deny with a reason"
 
     // Main-thread turn state.
     bool _turn_running = false;
@@ -237,6 +238,8 @@ private:
     bool _confirming = false;
     int _confirm_selection = 0;   // highlighted option (0 = Deny, the safe default)
     int _confirm_menu_lines = 0;  // option lines currently drawn (for in-place redraw)
+    bool _confirm_note_mode = false; // typing a deny reason instead of picking an option
+    std::string _confirm_note_buf;   // the reason being typed
 
     bool _in_settings = false;
     bool _settings_editing = false;    // typing a free-text value into the selected row

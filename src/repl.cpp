@@ -1609,14 +1609,14 @@ void Repl::run_plain() {
     _registry.set_mode(tool_mode());
     _registry.set_strict(_config.strict);
     if ( _config.tools_enabled && tool_mode() != tools::ConfirmMode::insecure ) {
-        _registry.set_confirm_callback([](const tools::ConfirmRequest& req) -> tools::Decision {
+        _registry.set_confirm_callback([](const tools::ConfirmRequest& req, std::string& note) -> tools::Decision {
             if ( !req.danger.empty())
                 std::cout << "\n⚠ dangerous command — " << req.danger << std::endl;
             std::cout << "\n" << req.tool << " wants to run:\n" << req.summary << "\n";
             std::cout << "[y] once  [s] session";
             if ( req.can_similar )
                 std::cout << "  [a] all `" << req.similar_key << "`";
-            std::cout << "  [N] deny\nchoice: " << std::flush;
+            std::cout << "  [N] deny  [d] deny+reason\nchoice: " << std::flush;
 
             std::string answer;
             if ( !std::getline(std::cin, answer))
@@ -1625,6 +1625,11 @@ void Repl::run_plain() {
             if ( a == "y" || a == "yes" || a == "once" ) return tools::Decision::once;
             if ( a == "s" || a == "session" )            return tools::Decision::session;
             if ( ( a == "a" || a == "all" ) && req.can_similar ) return tools::Decision::similar;
+            if ( a == "d" ) {
+                std::cout << "reason: " << std::flush;
+                std::getline(std::cin, note);
+                note = common::trim_ws(note);
+            }
             return tools::Decision::deny;
         });
     }
@@ -1676,7 +1681,7 @@ void Repl::run_tty() {
     _registry.set_mode(tool_mode());
     _registry.set_strict(_config.strict);
     if ( _config.tools_enabled && tool_mode() != tools::ConfirmMode::insecure ) {
-        _registry.set_confirm_callback([&inline_repl](const tools::ConfirmRequest& req) { return inline_repl.confirm(req); });
+        _registry.set_confirm_callback([&inline_repl](const tools::ConfirmRequest& req, std::string& note) { return inline_repl.confirm(req, note); });
     }
     if ( _config.tools_enabled ) {
         _registry.set_activity_callback([&inline_repl](const std::string& a) { inline_repl.set_activity(a); });
