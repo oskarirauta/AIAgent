@@ -86,7 +86,7 @@ size_t curl_header(char* p, size_t sz, size_t nm, void* ud) {
 
 Client::~Client() { shutdown(); }
 
-int Client::load_config(const std::string& path) {
+int Client::load_config(const std::string& path, bool trusted) {
     std::ifstream ifd(path, std::ios::in);
     if ( !ifd.is_open())
         return 0;
@@ -106,11 +106,12 @@ int Client::load_config(const std::string& path) {
         return 0;
 
     JSON servers = root["mcpServers"];
-    servers.for_each([this](JSON::fe_iterator& it, JSON& def) {
+    servers.for_each([this, trusted](JSON::fe_iterator& it, JSON& def) {
         if ( !it.is_object() || def != JSON::TYPE::OBJECT )
             return;
         auto s = std::make_unique<Server>();
         s->name = it.name();
+        s->needs_approval = !trusted; // an untrusted config waits for the user
         if ( def.contains("url") && def["url"] == JSON::TYPE::STRING ) {
             s->transport = Transport::http;
             s->url = def["url"].to_string();
@@ -456,12 +457,42 @@ void Client::connect_all() {
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
     // Connect all servers in parallel so startup is bounded by the slowest one,
-    // not the sum of every handshake.
+    // not the sum of every handshake. Servers from an untrusted config wait for
+    // the user's approval (pending_approvals / approve_connect) and are skipped.
     std::vector<std::thread> threads;
-    for ( auto& sp : _servers )
+    for ( auto& sp : _servers ) {
+        if ( sp->needs_approval && !sp->connected )
+            continue;
         threads.emplace_back([this, s = sp.get()]() { connect_one(*s); });
+    }
     for ( auto& t : threads )
         if ( t.joinable()) t.join();
+}
+
+std::vector<std::pair<std::string, std::string>> Client::pending_approvals() const {
+    std::vector<std::pair<std::string, std::string>> out;
+    for ( const auto& sp : _servers ) {
+        if ( !sp->needs_approval || sp->connected )
+            continue;
+        std::string what = sp->command;
+        for ( const auto& a : sp->args )
+            what += " " + a;
+        if ( sp->transport == Transport::http )
+            what = sp->url;
+        out.push_back({ sp->name, what });
+    }
+    return out;
+}
+
+bool Client::approve_connect(const std::string& name) {
+    for ( auto& sp : _servers ) {
+        if ( sp->name != name || sp->connected )
+            continue;
+        sp->needs_approval = false; // approved
+        connect_one(*sp);
+        return sp->connected;
+    }
+    return false;
 }
 
 int Client::refresh() {

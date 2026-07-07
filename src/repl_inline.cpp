@@ -1324,6 +1324,14 @@ void InlineRepl::run() {
     _history_index = _prompt_history.size();
     draw_live();
 
+    // Terminal is now in raw mode: safe to run any startup confirm (e.g. approving
+    // a project-local MCP server) before entering the event loop.
+    if ( _on_ready ) {
+        _on_ready();
+        _on_ready = nullptr;
+        draw_live();
+    }
+
     // Event loop: the LLM turn runs on a worker thread, so here we just service
     // the keyboard and the worker's output/confirm queues. select() gives a
     // short timeout that both keeps the spinner animating and lets streamed
@@ -2581,6 +2589,33 @@ void InlineRepl::handle_byte(int c) {
 }
 
 // ── tool confirmation ───────────────────────────────────────────────────
+
+tools::Decision InlineRepl::confirm_on_main(const tools::ConfirmRequest& req, std::string& note) {
+    // Main-thread confirm: render the dialog and drive the key loop here, since
+    // the event loop that normally services confirm() is not running yet.
+    _confirm_req = req;
+    _confirm_answered = false;
+    _confirm_note.clear();
+    render_confirm_dialog(req);
+    _confirming = true;
+    while ( _confirming && agent::running.load(std::memory_order_relaxed)) {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(STDIN_FILENO, &fds);
+        struct timeval tv { 0, 80 * 1000 };
+        int r = select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv);
+        if ( r > 0 && FD_ISSET(STDIN_FILENO, &fds)) {
+            int c = read_byte();
+            if ( c < 0 ) {
+                if ( errno == EINTR ) continue;
+                break;
+            }
+            handle_confirm_key(c);
+        }
+    }
+    note = _confirm_note;
+    return _confirm_answered ? _confirm_decision : tools::Decision::deny;
+}
 
 tools::Decision InlineRepl::confirm(const tools::ConfirmRequest& req, std::string& note) {
     // Called on the worker thread. Hand the request to the main (UI) thread and

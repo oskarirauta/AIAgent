@@ -112,6 +112,8 @@ private:
     // Connect configured MCP servers and register their tools; render /mcp.
     void connect_mcp();
     void register_mcp_tools(); // (re)register proxy tools + resource readers
+    // Prompt for untrusted (project ./.mcp.json) servers and connect the approved.
+    void approve_project_mcp(const std::function<bool(const std::string&, const std::string&)>& ask);
     std::string mcp_command(const std::string& args);
     std::vector<std::string> _mcp_tool_names; // currently-registered mcp__ tools
 

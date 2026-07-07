@@ -314,16 +314,35 @@ void Repl::connect_mcp() {
 
     int n = 0;
     if ( !_config.mcp_config.empty()) {
-        n = _mcp.load_config(_config.mcp_config);
+        n = _mcp.load_config(_config.mcp_config, /*trusted=*/true);
     } else {
-        n += _mcp.load_config(_config.home_dir + "/mcp.json");
-        n += _mcp.load_config(".mcp.json"); // project-local
+        n += _mcp.load_config(_config.home_dir + "/mcp.json", /*trusted=*/true);
+        // A project's ./.mcp.json is untrusted — anyone who shares the repo can
+        // write it, and a stdio server runs an arbitrary binary. Load it, but
+        // don't spawn until the user approves (approve_project_mcp, once the
+        // confirm UI exists).
+        n += _mcp.load_config(".mcp.json", /*trusted=*/false);
     }
     if ( n == 0 )
         return;
 
     _mcp.connect_all();
     register_mcp_tools();
+}
+
+// Prompt for each untrusted (project-local) MCP server and connect the approved
+// ones. Called from run_tty once the confirm callback is wired.
+void Repl::approve_project_mcp(const std::function<bool(const std::string&, const std::string&)>& ask) {
+    auto pending = _mcp.pending_approvals();
+    if ( pending.empty())
+        return;
+    bool any = false;
+    for ( const auto& [name, what] : pending ) {
+        if ( ask(name, what) && _mcp.approve_connect(name))
+            any = true;
+    }
+    if ( any )
+        register_mcp_tools();
 }
 
 void Repl::register_mcp_tools() {
@@ -1946,6 +1965,19 @@ void Repl::run_tty() {
     if ( _config.tools_enabled ) {
         _registry.set_activity_callback([&inline_repl](const std::string& a) { inline_repl.set_activity(a); });
     }
+    // Once the terminal is in raw mode (inside run()), ask before spawning any
+    // project-local MCP server — the confirm dialog needs the raw-mode terminal.
+    inline_repl.set_on_ready([this, &inline_repl]() {
+        approve_project_mcp([&inline_repl](const std::string& name, const std::string& what) {
+            tools::ConfirmRequest req;
+            req.tool = "start MCP server '" + name + "'";
+            req.summary = "./.mcp.json (project-local) wants to start: " + what;
+            req.danger = "a project file wants to run a program — only allow if you trust this repo";
+            req.can_similar = false;
+            std::string note;
+            return inline_repl.confirm_on_main(req, note) != tools::Decision::deny;
+        });
+    });
     inline_repl.set_command_callback([this](const std::string& cmd) { return handle_command(cmd); });
     set_progress_callback([&inline_repl](const std::string& s) { inline_repl.set_activity(s); });
     set_tool_notice_callback([&inline_repl](const std::string& s) { inline_repl.notify_tool(s); });

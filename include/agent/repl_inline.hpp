@@ -48,6 +48,11 @@ public:
     // the main (UI) thread renders the prompt and reads the user's choice.
     tools::Decision confirm(const tools::ConfirmRequest& req, std::string& note);
 
+    // Synchronous confirm on the MAIN thread (renders and reads keys itself) —
+    // for a startup prompt (e.g. approving project MCP) run from set_on_ready,
+    // before the event loop exists to service the worker-thread confirm() above.
+    tools::Decision confirm_on_main(const tools::ConfirmRequest& req, std::string& note);
+
     // Publish what the worker is currently doing (e.g. a running command) so the
     // status line can show it. Thread-safe.
     void set_activity(const std::string& activity);
@@ -74,6 +79,9 @@ public:
     // Handler for slash commands (other than /exit and /quit), run locally on the
     // main thread; returns text to show as a system message.
     void set_command_callback(command_cb_t cb) { _command_cb = std::move(cb); }
+    // Run once after the terminal is in raw mode but before the input loop — the
+    // right moment for a startup confirm (e.g. approving project-local MCP).
+    void set_on_ready(std::function<void()> cb) { _on_ready = std::move(cb); }
 
     // Restore the terminal from raw mode. Safe to call more than once.
     void teardown();
@@ -175,6 +183,7 @@ private:
 
     callback_t _callback;
     command_cb_t _command_cb;
+    std::function<void()> _on_ready;
     Config& _config;
     const Conversation& _conversation;
     const TokenStats& _stats;

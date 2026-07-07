@@ -49,7 +49,18 @@ public:
 
     // Parse a config file ({"mcpServers": { name: {command,args,env} | {url,headers} }}).
     // Returns the number of servers configured, or 0 if the file is absent/empty.
-    int load_config(const std::string& path);
+    // Load servers from a config file. `trusted` = the user set this config up
+    // (home mcp.json or an explicit -mcp_config); untrusted configs (a project's
+    // ./.mcp.json, which anyone who shares the repo can write) are loaded but not
+    // auto-connected — see pending_approvals()/approve_connect().
+    int load_config(const std::string& path, bool trusted = true);
+
+    // Servers awaiting the user's approval before being spawned: {name, what}
+    // where `what` is the command line (stdio) or url (http).
+    std::vector<std::pair<std::string, std::string>> pending_approvals() const;
+
+    // Approve and connect one pending server by name; returns true if it connected.
+    bool approve_connect(const std::string& name);
 
     // Spawn/contact every configured server, run the initialize handshake and list
     // tools/resources/prompts. Runs the servers in parallel; failures are recorded
@@ -111,6 +122,7 @@ private:
         std::string session_id;
 
         bool connected = false;
+        bool needs_approval = false; // from an untrusted config; not auto-connected
         std::string error;
         std::vector<ToolDef> tools;
         std::vector<ResourceDef> resources;
