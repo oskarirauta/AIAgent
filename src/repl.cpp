@@ -1709,6 +1709,7 @@ std::string Repl::handle_command(const std::string& line) {
             if ( key == "tools" ) return handle_command("/tools " + val);
             if ( key == "strict" ) return handle_command("/strict " + val);
             if ( key == "thinking" || key == "effort" ) return handle_command("/thinking " + val);
+            if ( key == "bell" ) return handle_command("/bell " + val);
             if ( key == "context" || key == "context_limit" ) {
                 if ( val.empty())
                     return "usage: /settings context <auto|tokens|0>  (e.g. auto, 64K, 0 = unlimited)";
@@ -1911,6 +1912,22 @@ std::string Repl::handle_command(const std::string& line) {
         return std::string("workflow autoresume: ") + ( _config.workflow_autoresume
              ? "on — a finished workflow will resume the conversation automatically"
              : "off" );
+    }
+
+    if ( cmd == "/bell" ) {
+        std::string m = common::to_lower(common::trim_ws(args));
+        static const std::vector<std::string> modes = { "never", "question", "attention", "always" };
+        if ( m.empty())
+            return "bell: " + _config.bell +
+                   "\n  always    — ring on every answer + when your attention is needed"
+                   "\n  attention — ring on a workflow finishing, a tool-permission prompt, or a question"
+                   "\n  question  — ring only when the answer is a question"
+                   "\n  never     — never ring";
+        if ( std::find(modes.begin(), modes.end(), m) == modes.end())
+            return "usage: /bell <never|question|attention|always>";
+        _config.bell = m;
+        _config.save_settings(_config.home_dir);
+        return "bell: " + _config.bell;
     }
 
     if ( cmd == "/thinking" || cmd == "/effort" ) {

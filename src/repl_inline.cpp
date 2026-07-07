@@ -31,6 +31,15 @@ namespace agent {
 static struct termios g_orig_termios;
 static bool g_termios_saved = false;
 
+// Terminal-bell policy as an ordered level: never < question < attention < always.
+// An event rings if the configured level is at least the event's threshold.
+static int bell_level(const std::string& mode) {
+    if ( mode == "never" ) return 0;
+    if ( mode == "question" ) return 1;
+    if ( mode == "always" ) return 3;
+    return 2; // attention (default)
+}
+
 // Local/display-only slash commands: safe to run mid-turn because they only read
 // state or change the UI — they never touch the running conversation, the model,
 // or the provider. Anything not listed here queues while a turn is streaming.
@@ -47,7 +56,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
         // updates local state (last value wins: /effort medium then /effort max
         // leaves only max, a natural dedup), applied before the next prompt. They
         // don't change the running turn's tool gating or rebuild the conversation.
-        "/effort", "/thinking", "/stream", "/model", "/autoresume"
+        "/effort", "/thinking", "/stream", "/model", "/autoresume", "/bell"
     };
     return immediate.count(cmd) > 0;
 }
@@ -746,7 +755,7 @@ void InlineRepl::drain_notices() {
             wr(_theme.dim + n.text + Theme::reset + "\r\n");
         }
     }
-    if ( ring )
+    if ( ring && bell_level(_config.bell) >= 2 ) // a notice (workflow done) is "attention"
         wr("\a"); // bell: the user may be looking elsewhere
     draw_live();
 }
@@ -1745,6 +1754,8 @@ void InlineRepl::finish_turn() {
     erase_live();
     _think_preview.clear();
     _stream_in_think = false;
+    // The tail of the answer, to tell a question from a statement for the bell.
+    std::string answer_tail = streamed ? _line_buf : reply;
     if ( !streamed && !reply.empty())
         _line_buf += reply;
     flush_lines();
@@ -1770,7 +1781,20 @@ void InlineRepl::finish_turn() {
         std::string d = "done in " + std::to_string(secs) + "s";
         if ( tools > 0 )
             d += " · " + std::to_string(tools) + ( tools == 1 ? " tool call" : " tool calls" );
-        wr("\n" + _theme.accent + "● " + d + Theme::reset + "\a\n");
+        wr("\n" + _theme.accent + "● " + d + Theme::reset + "\n"); // digest line (bell is separate)
+    }
+
+    // Terminal bell on a finished answer, gated by the `bell` setting: `always`
+    // rings on every answer; `question`/`attention` ring only when the answer is a
+    // question; `never` stays silent. (Tool-permission and workflow bells below.)
+    {
+        std::string tail = answer_tail;
+        while ( !tail.empty() && std::isspace(static_cast<unsigned char>(tail.back())))
+            tail.pop_back();
+        bool is_question = !tail.empty() && tail.back() == '?';
+        int need = is_question ? 1 /*question*/ : 3 /*always*/;
+        if ( bell_level(_config.bell) >= need )
+            wr("\a");
     }
 
     // Warn once when the session crosses 80% / 100% of a configured cost/token budget.
@@ -1993,7 +2017,8 @@ void InlineRepl::render_confirm_dialog(const tools::ConfirmRequest& req) {
     // ring the bell once — the agent is now blocked waiting on you.
     auto ran = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::steady_clock::now() - _turn_start).count();
-    if ( ran >= 4 && !_confirm_belled ) {
+    // A tool-permission prompt is an "attention" event.
+    if ( ran >= 4 && !_confirm_belled && bell_level(_config.bell) >= 2 ) {
         wr("\a");
         _confirm_belled = true;
     }
@@ -2122,6 +2147,16 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         m.keys = m.rows;
         m.select_cmd = "/thinking ";
         m.current = _config.thinking.empty() ? "off" : _config.thinking;
+        open_list_menu(std::move(m));
+        return;
+    }
+    if ( trimmed == "/bell" ) {
+        ListMenu m;
+        m.title = "terminal bell";
+        m.rows = { "never", "question", "attention", "always" };
+        m.keys = m.rows;
+        m.select_cmd = "/bell ";
+        m.current = _config.bell.empty() ? "attention" : _config.bell;
         open_list_menu(std::move(m));
         return;
     }
@@ -2407,6 +2442,9 @@ void InlineRepl::open_settings_menu() {
 
     add("theme", "theme", _theme.name, UI,
         "colour theme (never sets the terminal background)", { "dark", "light", "warm" });
+    add("bell", "bell", _config.bell, UI,
+        "terminal bell: always answer · attention (workflow/tool/question) · question only · never",
+        { "never", "question", "attention", "always" });
     add("multiline", "multiline", _config.multiline ? "on" : "off", UI,
         "Enter inserts a newline; Alt+Enter sends the message", { "off", "on" });
     add("paste_preview", "paste preview",

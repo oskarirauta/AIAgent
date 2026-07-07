@@ -238,6 +238,7 @@ void Config::load(const std::string& path) {
         else if ( key == "auto_compact" ) auto_compact = parse_bool(value);
         else if ( key == "auto_compact_pct" ) auto_compact_pct = parse_size(value, auto_compact_pct, key);
         else if ( key == "workflow_autoresume" ) workflow_autoresume = parse_bool(value);
+        else if ( key == "bell" ) bell = common::to_lower(value);
         else if ( key == "supersede_tools" ) supersede_tools = parse_bool(value);
         else if ( key == "tools_safe" ) tools_safe = parse_list(value);
         else if ( key == "tools_danger" ) tools_danger = parse_list(value);
@@ -374,6 +375,8 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.auto_compact = s["auto_compact"].to_bool();
             if ( s.contains("workflow_autoresume") && s["workflow_autoresume"] == JSON::TYPE::BOOL )
                 last.workflow_autoresume = s["workflow_autoresume"].to_bool();
+            if ( s.contains("bell") && s["bell"] == JSON::TYPE::STRING )
+                last.bell = s["bell"].to_string();
             if ( s.contains("advisor") && s["advisor"] == JSON::TYPE::BOOL )
                 last.advisor = s["advisor"].to_bool();
             if ( s.contains("advisor_model") && s["advisor_model"] == JSON::TYPE::STRING )
@@ -409,6 +412,7 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "context_limit", static_cast<long long>(last.context_limit) },
             { "auto_compact", last.auto_compact },
             { "workflow_autoresume", last.workflow_autoresume },
+            { "bell", last.bell },
             { "advisor", last.advisor },
             { "advisor_model", last.advisor_model },
             { "paste_preview", static_cast<long long>(last.paste_preview) }
@@ -455,6 +459,7 @@ void Config::save_settings(const std::string& home_dir) const {
     last.context_limit = context_limit;
     last.auto_compact = auto_compact;
     last.workflow_autoresume = workflow_autoresume;
+    last.bell = bell;
     last.advisor = advisor;
     last.advisor_model = advisor_model;
     last.paste_preview = paste_preview;
@@ -473,6 +478,7 @@ void Config::apply_settings(const LastUsed& last) {
     context_limit = last.context_limit;
     auto_compact = last.auto_compact;
     workflow_autoresume = last.workflow_autoresume;
+    bell = last.bell;
     advisor = last.advisor;
     if ( !last.advisor_model.empty())
         advisor_model = last.advisor_model;

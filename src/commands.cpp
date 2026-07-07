@@ -126,6 +126,12 @@ const std::vector<CommandDoc>& command_catalog() {
       "With no argument opens the interactive settings menu. With `<key> <value>` "
       "sets one directly (model, tools, thinking, theme, context, multiline, "
       "auto_compact, autoresume, max_tokens, tool_call_limit, paste_preview, …)." },
+    { "/bell", "", "[never|question|attention|always]", "Session & UI",
+      "when the terminal bell rings",
+      "Controls the terminal bell. always: on every answer plus anything needing you. "
+      "attention: only a workflow finishing, a tool-permission prompt, or an answer that "
+      "is a question. question: only when the answer is a question. never: silent. Bare "
+      "/bell opens a picker; also the \"bell\" row in /settings." },
     { "/theme", "", "<dark|light|warm>", "Session & UI", "switch the colour theme",
       "Changes the terminal colour theme. Persisted across sessions. Never sets the "
       "terminal background." },
