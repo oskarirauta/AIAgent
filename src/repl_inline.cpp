@@ -51,7 +51,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
         // read-only displays / menus
         "/about", "/info", "/help", "/theme", "/settings", "/workflows",
         "/trust", "/history", "/memories", "/tasks", "/skills", "/pins",
-        "/context", "/cost", "/changes", "/mcp",
+        "/context", "/cost", "/changes", "/mcp", "/paste",
         // settings that only affect the NEXT request — running them mid-turn just
         // updates local state (last value wins: /effort medium then /effort max
         // leaves only max, a natural dedup), applied before the next prompt. They
@@ -1550,6 +1550,7 @@ void InlineRepl::on_enter() {
         _input.clear();
         _cursor = 0;
         _input_window_start = 0;
+        for ( auto& p : _pastes ) _sent_pastes.push_back(p); // keep for /paste <n>
         _pastes.clear();
         draw_live();
         return;
@@ -1564,6 +1565,7 @@ void InlineRepl::on_enter() {
     _input.clear();
     _cursor = 0;
     _input_window_start = 0;
+    for ( auto& p : _pastes ) _sent_pastes.push_back(p); // keep for /paste <n>
     _pastes.clear();
     start_turn(line, display);
 }
@@ -2160,6 +2162,42 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         open_list_menu(std::move(m));
         return;
     }
+    // /paste reviews the large pastes sent this session — bare opens a list
+    // (Enter shows the full text), /paste <n> jumps straight to one.
+    if ( trimmed == "/paste" || trimmed.rfind("/paste ", 0) == 0 ) {
+        std::string arg = trimmed.size() > 6 ? common::trim_ws(trimmed.substr(6)) : "";
+        if ( _sent_pastes.empty()) {
+            render_command(trimmed, "no pastes sent this session");
+            return;
+        }
+        if ( !arg.empty()) {
+            int n = 0;
+            try { n = std::stoi(arg); } catch ( ... ) { n = 0; }
+            if ( n < 1 || n > static_cast<int>(_sent_pastes.size())) {
+                render_command(trimmed, "no paste #" + arg + " (see /paste)");
+                return;
+            }
+            open_list_detail("paste #" + arg, _sent_pastes[n - 1].content);
+            return;
+        }
+        ListMenu m;
+        m.title = "pastes this session";
+        for ( size_t i = 0; i < _sent_pastes.size(); ++i ) {
+            const std::string& body = _sent_pastes[i].content;
+            size_t lines = static_cast<size_t>(std::count(body.begin(), body.end(), '\n')) +
+                           ( body.empty() || body.back() == '\n' ? 0 : 1 );
+            std::string first = body.substr(0, body.find('\n'));
+            for ( char& ch : first ) if ( ch == '\t' ) ch = ' ';
+            if ( first.size() > 50 ) first = first.substr(0, 50) + "…";
+            m.rows.push_back("#" + std::to_string(i + 1) + " · " + std::to_string(lines) +
+                             " lines · " + first);
+            m.keys.push_back(std::to_string(i + 1));
+            m.details.push_back(body);
+        }
+        open_list_menu(std::move(m));
+        return;
+    }
+
     if ( trimmed == "/bell" ) {
         ListMenu m;
         m.title = "terminal bell";
@@ -2685,7 +2723,7 @@ void InlineRepl::draw_list_menu(bool redraw) {
     } else {
         std::string hint = "↑↓ move · esc close";
         if ( !_list.select_cmd.empty()) hint += " · ⏎ select";
-        if ( !_list.drill_cmd.empty()) hint += " · ⏎ open";
+        if ( !_list.drill_cmd.empty() || !_list.details.empty()) hint += " · ⏎ open";
         for ( const auto& a : _list.actions )
             hint += std::string(" · ") + a.key + " " + a.label;
         out += _theme.command + "  " + _list.title + Theme::reset + "   " +
@@ -2765,14 +2803,24 @@ void InlineRepl::handle_list_key(int c) {
         return;
     }
 
-    if (( c == '\r' || c == '\n' ) && !_list.drill_cmd.empty() &&
-        _list_sel < static_cast<int>(_list.keys.size()) && !_list.keys[_list_sel].empty()) {
-        std::string detail = _command_cb ? _command_cb(_list.drill_cmd + _list.keys[_list_sel]) : "";
-        _list_detail_rows = wrap_to_rows(detail, term_cols() - 4);
-        _list_detail = true;
-        _list_detail_top = 0;
-        draw_list_menu(true);
-        return;
+    if ( c == '\r' || c == '\n' ) {
+        std::string detail;
+        bool have = false;
+        if ( !_list.drill_cmd.empty() && _list_sel < static_cast<int>(_list.keys.size()) &&
+             !_list.keys[_list_sel].empty()) {
+            detail = _command_cb ? _command_cb(_list.drill_cmd + _list.keys[_list_sel]) : "";
+            have = true;
+        } else if ( _list_sel < static_cast<int>(_list.details.size())) {
+            detail = _list.details[_list_sel]; // pre-loaded content (e.g. /paste)
+            have = true;
+        }
+        if ( have ) {
+            _list_detail_rows = wrap_to_rows(detail, term_cols() - 4);
+            _list_detail = true;
+            _list_detail_top = 0;
+            draw_list_menu(true);
+            return;
+        }
     }
 
     for ( const auto& a : _list.actions ) {

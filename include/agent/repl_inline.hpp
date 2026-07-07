@@ -105,6 +105,7 @@ private:
         std::vector<std::string> rows;   // one display line per entry
         std::vector<std::string> keys;   // per-row drill/action key (parallel; may be empty)
         std::string drill_cmd;           // Enter runs this + keys[sel] and shows the result
+        std::vector<std::string> details; // pre-loaded per-row detail (Enter shows details[sel])
         std::string select_cmd;          // (picker) Enter runs this + keys[sel] and CLOSES
         std::string current;             // pre-select the row whose key equals this
         struct Action { char key; std::string cmd; std::string label; };
@@ -225,6 +226,7 @@ private:
     size_t _input_window_start = 0;     // horizontal scroll offset (display cells) for the prompt
     bool _esc_pending = false;          // a lone ESC seen; the next key is its (possibly delayed) follow-up
     std::vector<PasteItem> _pastes;     // large pastes referenced by inline placeholders
+    std::vector<PasteItem> _sent_pastes; // pastes from sent messages, for /paste <n>
     size_t _paste_counter = 0;
 
     std::vector<std::string> _prompt_history; // previous user inputs

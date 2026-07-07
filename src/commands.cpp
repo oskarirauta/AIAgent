@@ -149,6 +149,10 @@ const std::vector<CommandDoc>& command_catalog() {
       "A line starting with `!` runs the rest as a shell command directly — no model "
       "turn, no confirmation (you typed it). The output prints locally AND is "
       "recorded, so `!make test` then \"fix those\" works. Not blocked by /plan." },
+    { "/paste", "", "[n]", "Input shortcuts", "review large pastes sent this session",
+      "A large paste collapses to a placeholder and its transcript echo is trimmed to "
+      "the paste-preview length. /paste lists the large pastes you've sent this session "
+      "(Enter opens the full text, scrollable and wrapped); /paste <n> jumps to one." },
     { "@path", "", "", "Input shortcuts", "attach a file to your message",
       "`@src/foo.cpp` inside a message expands the file inline (when the token starts "
       "with @ and the path exists — emails and @decorators are left alone). Size-"
