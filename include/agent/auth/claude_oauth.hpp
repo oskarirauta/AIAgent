@@ -59,10 +59,4 @@ ClaudeToken refresh_access_token(
     api::Client& client,
     const std::string& refresh_token);
 
-// Create a long-lived Anthropic API key from a Console OAuth access token.
-// Returns the raw API key (e.g. sk-ant-api03-...).
-std::string create_claude_api_key(
-    api::Client& client,
-    const std::string& access_token);
-
 } // namespace agent::auth

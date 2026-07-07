@@ -3252,7 +3252,7 @@ void InlineRepl::handle_byte(int c) {
             break;
     }
 
-    if ( c >= 0x20 || c >= 0x80 ) {
+    if ( c >= 0x20 ) { // printable ASCII or a UTF-8 lead/continuation byte (>= 0x80)
         // Printable byte: read the rest of the UTF-8 sequence if any.
         std::string ch(1, static_cast<char>(c));
         int extra = 0;

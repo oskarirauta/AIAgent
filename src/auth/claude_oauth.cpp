@@ -262,23 +262,6 @@ ClaudeToken refresh_access_token(
     return token_from_json(j);
 }
 
-std::string create_claude_api_key(
-    api::Client& client,
-    const std::string& access_token) {
-
-    static constexpr const char* API_KEY_URL = "https://api.anthropic.com/api/oauth/claude_cli/create_api_key";
-
-    std::string response = client.post(API_KEY_URL, "Authorization", "Bearer " + access_token, "null");
-    logger::debug["claude"] << "create_api_key response: " << response << std::endl;
-    JSON j = JSON::parse(response);
-    if ( !j.contains("raw_key"))
-        throws << "create_api_key response missing raw_key" << std::endl;
-
-    std::string key = j["raw_key"].to_string();
-    logger::debug["claude"] << "create_api_key raw_key prefix: " << key.substr(0, std::min<size_t>(key.size(), 20)) << std::endl;
-    return key;
-}
-
 std::string prompt_for_authorization_code() {
     std::cout << "Paste the authorization code shown in the browser and press Enter: ";
     std::cout.flush();

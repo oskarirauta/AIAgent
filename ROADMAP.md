@@ -300,6 +300,10 @@ Working toward a long-lived "actually finished" release; going through each:
 - ✅ **`--output-format json`** — scriptable headless mode: `-o json` emits one JSON
   object (response + provider/model + usage) on stdout.
 
+## ROADMAP TO V2
+ - **Multi-agent cloud orchestration** - full cloud orchestration
+ - **Overlows** - Improve user interface
+
 ## Considered / dropped
 
 Deliberately out — either covered by something we already have, or low return for
