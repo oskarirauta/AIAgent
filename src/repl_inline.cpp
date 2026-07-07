@@ -1650,12 +1650,9 @@ void InlineRepl::poll_worker() {
         }
     }
 
-    if ( need_confirm ) {
-        render_confirm_dialog(req);
-        _confirming = true;
-        return;
-    }
-
+    // Flush any streamed output we just drained BEFORE showing a confirm dialog —
+    // otherwise those chunks (the model's text leading up to the tool call) are
+    // silently dropped when a confirm request arrives in the same poll.
     if ( !chunks.empty()) {
         erase_live();
         bool collapse = _config.thinking_collapse && _config.thinking_stream;
@@ -1667,6 +1664,12 @@ void InlineRepl::poll_worker() {
         }
         flush_lines();
         draw_live();
+    }
+
+    if ( need_confirm ) {
+        render_confirm_dialog(req);
+        _confirming = true;
+        return;
     }
 
     if ( done && !_confirming ) {
@@ -2378,7 +2381,7 @@ void InlineRepl::handle_confirm_key(int c) {
         } else if ( c == 0x1b ) {
             _confirm_note_mode = false;
             _confirm_note_buf.clear();
-            draw_confirm_menu(_confirm_req, false);
+            draw_confirm_menu(_confirm_req, true); // clear the note line before redrawing the menu
         } else if ( c == 0x7f || c == 0x08 ) {
             if ( !_confirm_note_buf.empty()) {
                 _confirm_note_buf.pop_back();
@@ -2428,7 +2431,7 @@ void InlineRepl::handle_confirm_key(int c) {
         if ( choices[sel].first == "Deny with a reason" ) {
             _confirm_note_mode = true;
             _confirm_note_buf.clear();
-            draw_confirm_menu(_confirm_req, false);
+            draw_confirm_menu(_confirm_req, true); // clear the option list before the note input
             return;
         }
         tools::Decision d = choices[sel].second;

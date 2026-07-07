@@ -238,6 +238,20 @@ Batch 4 — **done**: `outline_file`, `.gitignore`-aware traversal, skills
 blocking confirm + long-turn digest), and `/plan` read-only mode. See Done.
 
 Still open:
+- **Menu-framework modernisation** (user-requested, do as one coherent pass so
+  every menu shares a style):
+  1. Modernise/clarify the `/settings` menu (visuals, navigation, comfort).
+  2. Settings clarity: the "preview" row is opaque — relabel it to say it is the
+     paste-block preview length, show `0 = all/unlimited`, and adjust the number
+     with arrow keys (arrow-adjust chosen over free numeric entry, which also
+     keeps values in range) rather than free text.
+  3. Put the `/workflows` list into the same menu component (a long workflow
+     floods the transcript today).
+  4. Give every other menu the same (or near-same) unified style.
+  5. `/model` opens a pick-menu of the provider's available models where a model
+     list is obtainable (investigate Kimi/Claude model listing); `/about` could
+     surface it too.
+  6. `/effort` (thinking level) as a menu as well.
 - **UI polish**: `/paste <n>` to expand a collapsed paste block (settable paste
   thresholds already shipped as the `paste_preview` setting).
 - **more providers** (enough, not every one) — the one open-ended item; the
