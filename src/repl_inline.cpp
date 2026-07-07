@@ -1,4 +1,5 @@
 #include "agent/repl_inline.hpp"
+#include <set>
 
 #include <termios.h>
 #include <unistd.h>
@@ -28,6 +29,21 @@ namespace agent {
 // ── terminal state, shared with the signal handler's emergency restore ──
 static struct termios g_orig_termios;
 static bool g_termios_saved = false;
+
+// Local/display-only slash commands: safe to run mid-turn because they only read
+// state or change the UI — they never touch the running conversation, the model,
+// or the provider. Anything not listed here queues while a turn is streaming.
+static bool command_runs_immediately(const std::string& trimmed) {
+    std::string cmd = trimmed;
+    size_t sp = cmd.find_first_of(" \t");
+    if ( sp != std::string::npos ) cmd = cmd.substr(0, sp);
+    static const std::set<std::string> immediate = {
+        "/about", "/info", "/help", "/theme", "/settings", "/workflows",
+        "/trust", "/history", "/memories", "/tasks", "/skills", "/pins",
+        "/context", "/cost", "/changes", "/mcp"
+    };
+    return immediate.count(cmd) > 0;
+}
 
 static void wr(const std::string& s) {
     if ( !s.empty())
@@ -1475,11 +1491,12 @@ void InlineRepl::on_enter() {
             return;
         }
 
-        // While a turn is streaming, queue the command so it runs when the queue
-        // advances, instead of interleaving with (and cluttering) the output.
-        // Flush type-ahead so keys aimed at a not-yet-open interactive menu can't
-        // trigger anything by accident.
-        if ( _turn_running ) {
+        // Local/display-only commands (menus, readers, UI settings) don't touch
+        // the running conversation, model or provider, so they run NOW even
+        // mid-turn — like /queue. Everything that mutates the conversation or
+        // starts work (clear, undo, compact, model/provider switch, …) queues so
+        // it runs when the turn finishes, instead of interleaving with the output.
+        if ( _turn_running && !command_runs_immediately(trimmed)) {
             {
                 std::lock_guard<std::mutex> lk(_mx);
                 _pending.push_back(trimmed);
@@ -1631,6 +1648,10 @@ void InlineRepl::finish_async_command() {
 
 void InlineRepl::poll_worker() {
     if ( !_turn_running )
+        return;
+    // A modal menu (opened mid-turn) owns the screen — don't let streamed output
+    // draw over it. The chunks stay buffered and flush when the menu closes.
+    if ( _in_settings )
         return;
 
     std::vector<std::string> chunks;
