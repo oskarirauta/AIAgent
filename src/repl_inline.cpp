@@ -2069,6 +2069,20 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         start_async_command(trimmed, "compacting");
         return;
     }
+    // Bare /effort (or /thinking) opens a picker menu; with an argument it applies
+    // directly. Selecting applies immediately (a setting — the running turn is
+    // unaffected, it takes effect on the next request).
+    if ( trimmed == "/effort" || trimmed == "/thinking" ) {
+        ListMenu m;
+        m.title = "reasoning effort";
+        m.rows = { "off", "on", "low", "medium", "high", "xhigh", "max" };
+        m.keys = m.rows;
+        m.select_cmd = "/thinking ";
+        m.current = _config.thinking.empty() ? "off" : _config.thinking;
+        open_list_menu(std::move(m));
+        return;
+    }
+
     // Reader commands open a scrollable, dismissable list menu instead of dumping
     // a long block into the transcript (a big /workflows or /history used to flood
     // it). Works for the bare list and the detail form (e.g. /workflows 3).
@@ -2448,6 +2462,10 @@ void InlineRepl::open_list_menu(ListMenu menu) {
     _list_sel = 0;
     _list_top = 0;
     _list_lines = 0;
+    // Pre-select the row matching the current value (pickers).
+    if ( !_list.current.empty())
+        for ( size_t i = 0; i < _list.keys.size(); ++i )
+            if ( _list.keys[i] == _list.current ) { _list_sel = static_cast<int>(i); break; }
     draw_list_menu(false);
 }
 
@@ -2481,6 +2499,7 @@ void InlineRepl::draw_list_menu(bool redraw) {
         }
     } else {
         std::string hint = "↑↓ move · esc close";
+        if ( !_list.select_cmd.empty()) hint += " · ⏎ select";
         if ( !_list.drill_cmd.empty()) hint += " · ⏎ open";
         if ( _list.action_key )
             hint += std::string(" · ") + _list.action_key + " " + _list.action_label;
@@ -2550,6 +2569,16 @@ void InlineRepl::handle_list_key(int c) {
 
     if ( _list_detail )
         return; // only scroll / esc in detail view
+
+    // Picker: Enter applies the selected value and closes the menu.
+    if (( c == '\r' || c == '\n' ) && !_list.select_cmd.empty() &&
+        _list_sel < static_cast<int>(_list.keys.size()) && !_list.keys[_list_sel].empty()) {
+        std::string cmd = _list.select_cmd + _list.keys[_list_sel];
+        if ( _command_cb )
+            _command_cb(cmd);
+        close_list_menu();
+        return;
+    }
 
     if (( c == '\r' || c == '\n' ) && !_list.drill_cmd.empty() &&
         _list_sel < static_cast<int>(_list.keys.size()) && !_list.keys[_list_sel].empty()) {
