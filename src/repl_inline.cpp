@@ -1754,11 +1754,25 @@ bool InlineRepl::maybe_auto_compact() {
     return true;
 }
 
-static std::vector<std::string> confirm_options(const tools::ConfirmRequest& req) {
-    // Safe option first so the default selection can never approve anything.
-    std::vector<std::string> opts = { "Deny", "Allow once", "Allow for this session" };
+// The confirm menu is one source of truth: (label, decision) pairs, index 0
+// always the safe Deny so the default selection can never approve anything.
+static std::vector<std::pair<std::string, tools::Decision>>
+confirm_choices(const tools::ConfirmRequest& req) {
+    std::vector<std::pair<std::string, tools::Decision>> c = {
+        { "Deny", tools::Decision::deny },
+        { "Allow once", tools::Decision::once },
+        { "Allow for the rest of this turn", tools::Decision::turn },
+        { "Allow for this session", tools::Decision::session },
+    };
     if ( req.can_similar )
-        opts.push_back("Allow all `" + req.similar_key + "`");
+        c.push_back({ "Allow all `" + req.similar_key + "`", tools::Decision::similar });
+    return c;
+}
+
+static std::vector<std::string> confirm_options(const tools::ConfirmRequest& req) {
+    std::vector<std::string> opts;
+    for ( const auto& c : confirm_choices(req))
+        opts.push_back(c.first);
     return opts;
 }
 
@@ -2288,14 +2302,20 @@ void InlineRepl::handle_confirm_key(int c) {
     }
 
     if ( c == '\r' || c == '\n' ) {
-        tools::Decision d;
-        std::string label;
-        switch ( _confirm_selection ) {
-            case 1: d = tools::Decision::once;    label = "allowed once"; break;
-            case 2: d = tools::Decision::session; label = "allowed for this session"; break;
-            case 3: d = tools::Decision::similar; label = "allowed all `" + _confirm_req.similar_key + "`"; break;
-            default: d = tools::Decision::deny;   label = "denied"; break;
-        }
+        auto choices = confirm_choices(_confirm_req);
+        int sel = ( _confirm_selection >= 0 && _confirm_selection < static_cast<int>(choices.size()))
+                  ? _confirm_selection : 0;
+        tools::Decision d = choices[sel].second;
+        static const std::map<tools::Decision, std::string> labels = {
+            { tools::Decision::deny,    "denied" },
+            { tools::Decision::once,    "allowed once" },
+            { tools::Decision::turn,    "allowed for the rest of this turn" },
+            { tools::Decision::session, "allowed for this session" },
+            { tools::Decision::similar, "allowed all `" + std::string() },
+        };
+        std::string label = d == tools::Decision::similar
+            ? ( "allowed all `" + _confirm_req.similar_key + "`" )
+            : labels.at(d);
         commit_confirm(d, label);
         return;
     }

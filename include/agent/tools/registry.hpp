@@ -19,6 +19,7 @@ enum class ConfirmMode { confirm, automatic, insecure };
 enum class Decision {
     deny,     // do not run
     once,     // run this one time
+    turn,     // run, and don't ask again until this turn ends (except danger-listed)
     session,  // run, and don't ask again for this exact command this session
     similar   // run, and don't ask again for similar commands (same program) this session
 };
@@ -86,6 +87,12 @@ private:
     // Session-scoped approvals granted via "allow session" / "allow similar".
     std::set<std::string> _allow_exact;   // full command / action strings
     std::set<std::string> _allow_similar; // program names / tool names
+
+    // Turn-scoped grant: "allow for the rest of this turn". Reset by begin_turn()
+    // at each new user turn, so autonomy never leaks past the task just reviewed.
+    bool _turn_grant = false;
+public:
+    void begin_turn() { _turn_grant = false; }
 };
 
 } // namespace agent::tools

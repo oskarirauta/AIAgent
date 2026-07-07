@@ -1511,6 +1511,35 @@ static void test_token_usage() {
     check(stats.session_total() == 1200 + 34 + 1500 + 40, "session total accumulates");
 }
 
+static void test_turn_scoped_grant() {
+    std::cout << "allow-for-the-rest-of-this-turn grant" << std::endl;
+    using namespace agent::tools;
+    Registry reg;
+    reg.register_defaults();
+    reg.set_mode(ConfirmMode::confirm);
+    reg.set_strict(true); // so even ordinary commands must be confirmed
+
+    int asks = 0;
+    Decision give = Decision::turn;
+    reg.set_confirm_callback([&](const ConfirmRequest&) { ++asks; return give; });
+
+    reg.execute("run_command", JSON::Object{ { "command", "echo one" } });
+    check(asks == 1, "first call asks");
+    reg.execute("run_command", JSON::Object{ { "command", "echo two" } });
+    reg.execute("run_command", JSON::Object{ { "command", "echo three" } });
+    check(asks == 1, "further calls in the same turn do not ask");
+
+    give = Decision::deny;
+    std::string r = reg.execute("run_command", JSON::Object{ { "command", "rm -rf /tmp/x" } });
+    check(asks == 2, "danger-listed call still asks despite the turn grant");
+    check(r.find("declined") != std::string::npos, "danger deny respected");
+
+    reg.begin_turn();
+    give = Decision::deny;
+    reg.execute("run_command", JSON::Object{ { "command", "echo four" } });
+    check(asks == 3, "grant is cleared at the next turn");
+}
+
 static void test_danger_list() {
     std::cout << "danger list" << std::endl;
     using agent::tools::Registry;
@@ -1713,6 +1742,7 @@ int main() {
     test_edit_file();
     test_grep_robustness();
     test_token_usage();
+    test_turn_scoped_grant();
     test_danger_list();
     test_list_directory();
     test_config_booleans();

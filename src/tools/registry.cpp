@@ -542,6 +542,10 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
          !_strict && classify_safe(command))
         return run();
 
+    // Granted for the rest of this turn (danger-listed calls still ask)?
+    if ( _turn_grant && danger.empty())
+        return run();
+
     // Previously granted this session?
     if ( _allow_exact.count(exact_key) || _allow_similar.count(similar_key))
         return run();
@@ -566,6 +570,9 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
         case Decision::deny:
             logger::info["tool"] << "user declined " << name << std::endl;
             return "user declined to run " + name;
+        case Decision::turn:
+            _turn_grant = true;
+            break;
         case Decision::session:
             _allow_exact.insert(exact_key);
             break;

@@ -861,6 +861,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     deliver_workflow_results();
 
     _conversation.add_user(prompt);
+    _registry.begin_turn(); // reset any "allow for the rest of this turn" grant
 
     // "ultracode" / "ultrathink": for this one turn, raise the Anthropic thinking
     // effort to max. The keyword is intentionally kept in the prompt (the model
