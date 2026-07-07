@@ -1224,10 +1224,27 @@ void InlineRepl::prune_pastes() {
 void InlineRepl::delete_word_before() {
     if ( _cursor == 0 )
         return;
+    // A paste box just before the cursor is atomic — remove the whole box, like
+    // backspace, rather than word-deleting into "[paste #1: 5 " and corrupting it.
+    auto box = placeholder_ending_at(_cursor);
+    if ( box.first != std::string::npos ) {
+        std::string token = _input.substr(box.first, box.second - box.first);
+        _input.erase(box.first, box.second - box.first);
+        _cursor = box.first;
+        drop_paste(token);
+        return;
+    }
     auto is_space = [](char ch) { return ch == ' ' || ch == '\t' || ch == '\n'; };
     size_t p = _cursor;
     while ( p > 0 && is_space(_input[p - 1]) ) --p;
     while ( p > 0 && !is_space(_input[p - 1]) ) --p;
+    // If the word-delete span would cut INTO a paste box (whose text contains
+    // spaces), extend the start to the box start so the box is removed whole.
+    for ( const auto& pi : _pastes ) {
+        size_t ps = _input.find(pi.placeholder);
+        if ( ps != std::string::npos && ps < p && ps + pi.placeholder.size() > p )
+            p = ps;
+    }
     _input.erase(p, _cursor - p);
     _cursor = p;
     prune_pastes();
@@ -1404,7 +1421,9 @@ void InlineRepl::run() {
             if ( _in_list )
                 draw_list_menu(true); // back up over the old render, don't stack it
             else if ( _in_settings )
-                draw_settings_menu(false);
+                draw_settings_menu(true); // redraw=true so it doesn't stack a copy
+            else if ( _asking )
+                draw_ask_menu(true);      // reflow the ask dialog, don't draw over it
             else if ( !_confirming )
                 draw_live();
         }
@@ -1451,7 +1470,10 @@ void InlineRepl::run() {
                         handle_byte(b);
                     }
                     _defer_draw = false;
-                    draw_live();
+                    // A byte-fed command may have opened a modal mid-burst (the loop
+                    // stops for that) — don't draw the live block over it.
+                    if ( !_confirming && !_asking && !_in_settings && !_in_list )
+                        draw_live();
                 } else {
                     handle_byte(c);
                 }
@@ -1471,6 +1493,7 @@ void InlineRepl::run() {
         std::lock_guard<std::mutex> lk(_mx);
         _confirm_decision = tools::Decision::deny;
         _confirm_answered = true;
+        _ask_answered = true; // release a worker blocked in ask_user() too, else join() hangs
     }
     _cv.notify_all();
     if ( _worker.joinable())
@@ -2565,50 +2588,74 @@ std::string InlineRepl::setting_display_value(const SettingRow& row) const {
     return s;
 }
 
+namespace { std::string clip_cells(const std::string& s, int cols); } // defined below
+
 void InlineRepl::draw_settings_menu(bool redraw) {
     int n = static_cast<int>(_settings_rows.size());
-    std::string out;
-    if ( redraw && _settings_menu_lines > 0 )
-        out += "\r\033[" + std::to_string(_settings_menu_lines) + "A";
-    out += "\033[J";
-
-    int lines = 0;
-    std::string group;
     constexpr size_t LW = 16; // label column width (fits the longest label + a gap)
+    int cols = term_cols();
+    int valw = cols - static_cast<int>(LW) - 10; // room for prefix "❯ "/brackets/reset
+    if ( valw < 8 ) valw = 8;
+
+    // Build the physical lines first (group headers, rows, the selected row's help
+    // line), so a scrolling viewport can window them on a short terminal without
+    // miscounting the backup. Each row's VALUE is clipped to width so no line wraps.
+    std::vector<std::string> phys;
+    int sel_line = 0;
+    std::string group;
     for ( int i = 0; i < n; ++i ) {
         const SettingRow& row = _settings_rows[i];
-        if ( row.group != group ) {           // section header
+        if ( row.group != group ) {
             group = row.group;
-            out += ( lines ? "\r\n" : "" ) + _theme.accent + "  " + group + Theme::reset + "\r\n";
-            lines += lines ? 2 : 1;
+            if ( !phys.empty()) phys.push_back(""); // blank spacer before a section
+            phys.push_back(_theme.accent + "  " + group + Theme::reset);
         }
         std::string label = row.label;
         while ( label.size() < LW ) label += ' ';
         bool selected = ( i == _settings_selection );
-        std::string val = setting_display_value(row);
-
+        std::string val = clip_cells(setting_display_value(row), valw);
+        std::string line;
         if ( selected && _settings_editing ) {
-            out += "\033[1;7m ❯ " + label + _settings_edit_buf + "▏ \033[0m"
+            line = "\033[1;7m ❯ " + label + clip_cells(_settings_edit_buf, valw) + "▏ \033[0m"
                  + _theme.dim + "  (⏎ apply · esc cancel)" + Theme::reset;
         } else if ( selected ) {
-            // Changeable with ←/→ (enum or number) gets angle brackets; free text
-            // is just shown (Enter edits it).
             std::string shown = ( row.options.empty() && !row.is_number ) ? val : "‹ " + val + " ›";
-            out += "\033[1;7m ❯ " + label + shown + " \033[0m";
+            line = "\033[1;7m ❯ " + label + shown + " \033[0m";
         } else {
-            out += "   " + label + _theme.dim + val + Theme::reset; // label default, value dim
+            line = "   " + label + _theme.dim + val + Theme::reset;
         }
-        out += "\r\n";
-        lines++;
+        if ( selected ) sel_line = static_cast<int>(phys.size());
+        phys.push_back(line);
 
-        // One-line help under the selected row.
         if ( selected && !_settings_editing && !row.desc.empty()) {
             std::string help = row.desc;
             if ( row.is_number && !row.zero_label.empty())
                 help += "  ·  0 = " + row.zero_label;
-            out += _theme.dim + "     └ " + help + Theme::reset + "\r\n";
-            lines++;
+            phys.push_back(_theme.dim + "     └ " + clip_cells(help, cols - 8) + Theme::reset);
         }
+    }
+
+    // Viewport: on a terminal too short to hold the whole menu, window the lines
+    // around the selection so the backup count never exceeds the physical screen.
+    int vh = term_rows() - 1;
+    if ( vh < 3 ) vh = 3;
+    int top = 0;
+    int total = static_cast<int>(phys.size());
+    if ( total > vh ) {
+        if ( sel_line >= vh - 1 ) top = sel_line - vh + 2;
+        if ( top + vh > total ) top = total - vh;
+        if ( top < 0 ) top = 0;
+    }
+    int end = std::min(total, top + vh);
+
+    std::string out;
+    if ( redraw && _settings_menu_lines > 0 )
+        out += "\r\033[" + std::to_string(_settings_menu_lines) + "A";
+    out += "\033[J";
+    int lines = 0;
+    for ( int i = top; i < end; ++i ) {
+        out += phys[i] + "\r\n";
+        lines++;
     }
     wr(out);
     _settings_menu_lines = lines;
