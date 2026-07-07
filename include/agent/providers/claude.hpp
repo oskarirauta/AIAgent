@@ -29,20 +29,19 @@ public:
     // Anthropic's OAuth beta header is required for the access token to be
     // accepted against /v1/messages, alongside the usual API version header.
     //
-    // NOTE: the subscription (OAuth) API redacts extended-thinking TEXT — a
-    // thinking block streams only a `signature_delta` (an opaque signed blob),
-    // never `thinking_delta`, so `Response::thinking` is always empty for Claude.
-    // The model still reasons (and answers better); the plaintext just is not
-    // returned over this channel. Verified against forced computation with the
-    // claude-code / interleaved-thinking betas added — none unlock the text. So
-    // do not expect a live thinking transcript for Claude the way Kimi provides
-    // one. The signature must still be preserved across tool calls (Anthropic::
-    // message_to_json replays the stored thinking blocks verbatim).
-    //
-    // Re-verified 2026-07-07 with the full CLI beta set (claude-code-20250219,
-    // interleaved-thinking-2025-05-14, fine-grained-tool-streaming-2025-05-14)
-    // and a claude-cli User-Agent: the thinking block arrives, but with only a
-    // signature_delta — 0 thinking_delta events. Server-side redaction stands.
+    // NOTE: extended-thinking TEXT on the subscription (OAuth) channel is
+    // redacted PER MODEL, not per channel (verified live 2026-07-07):
+    //   - claude-opus-4-8:   thinking block arrives EMPTY — "thinking":"" plus a
+    //     signature_delta; zero thinking_delta events. No client-side setting
+    //     unlocks it: tried the full CLI beta set (claude-code-20250219,
+    //     interleaved-thinking-2025-05-14, fine-grained-tool-streaming-…), a
+    //     claude-cli User-Agent, non-streaming, and tools+interleaved.
+    //   - claude-sonnet-4-6: full thinking text streams via thinking_delta and
+    //     displays in our UI (💭 …) with /thinking on — no extra betas needed.
+    // The model always reasons (and answers better) either way; opus just does
+    // not return the plaintext on this channel. The signature must still be
+    // preserved across tool calls (Anthropic::message_to_json replays the
+    // stored thinking blocks verbatim).
     std::vector<std::pair<std::string, std::string>> extra_headers() const override {
         return {
             { "anthropic-version", "2023-06-01" },
