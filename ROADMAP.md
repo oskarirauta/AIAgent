@@ -238,19 +238,21 @@ Batch 4 — **done**: `outline_file`, `.gitignore`-aware traversal, skills
 blocking confirm + long-turn digest), and `/plan` read-only mode. See Done.
 
 Still open:
-- **Menu-framework modernisation** (user-requested, do as one coherent pass so
-  every menu shares a style):
-  1. Modernise/clarify the `/settings` menu (visuals, navigation, comfort).
-  2. Settings clarity: the "preview" row is opaque — relabel it to say it is the
-     paste-block preview length, show `0 = all/unlimited`, and adjust the number
-     with arrow keys (arrow-adjust chosen over free numeric entry, which also
-     keeps values in range) rather than free text.
-  3. Put the `/workflows` list into the same menu component (a long workflow
-     floods the transcript today).
-  4. Give every other menu the same (or near-same) unified style.
+- **Menu-framework modernisation** (user-requested, one coherent pass, grouped
+  style chosen from mockups):
+  1. ✅ Modernise the `/settings` menu — grouped sections, per-row help line,
+     ‹enum›, arrow-adjust numbers with unit + `0 = all/unlimited`, clearer labels
+     (the opaque "preview" is now "paste preview … N lines (0 = all)").
+  2. ✅ Local/display commands run immediately mid-turn (not queued), like
+     `/queue`: /about /info /help /theme /settings /workflows /trust /history
+     /memories /tasks /skills /pins /context /cost /changes /mcp. Mutating ones
+     still queue. poll_worker holds streaming back while a modal menu is up.
+  3. `/workflows` into an interactive list menu (a long workflow floods the
+     transcript today) — needs a shared read/list-menu component.
+  4. Menu-as-reader: use that list component for `/history`, `/memories`,
+     `/tasks`, `/skills`, and `/queue` (drop entries) too.
   5. `/model` opens a pick-menu of the provider's available models where a model
-     list is obtainable (investigate Kimi/Claude model listing); `/about` could
-     surface it too.
+     list is obtainable (investigate Kimi/Claude model listing).
   6. `/effort` (thinking level) as a menu as well.
 - **UI polish**: `/paste <n>` to expand a collapsed paste block (settable paste
   thresholds already shipped as the `paste_preview` setting).
