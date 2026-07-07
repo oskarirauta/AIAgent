@@ -200,10 +200,52 @@ each list is roughly the current priority order.
 Roughly in priority order for real coding use. Kept only what is genuinely useful
 *and* buildable well; the rest is dropped below.
 
-- **UI polish**: settable paste thresholds in `/settings`, interactive paste-block
-  expand/collapse.
-- **skills** (power-user): reusable, named instruction sets beyond `AGENTS.md`.
-- **`/rc`** / **`/plan`** (mode helpers), **more providers** (enough, not every one).
+Batch 1 — the edit-build-test loop:
+- **`@path` file mentions**: `@src/foo.cpp` in a prompt expands the file inline
+  (read_file's caps), only when the token starts with `@` and the path exists.
+- **`edit_file` near-miss diagnosis**: on a failed match, return the closest
+  on-disk region (line span + snippet) instead of a bare "not found".
+- **`run_command` head+tail truncation**: keep the END of over-long output —
+  that's where make errors and test summaries live.
+- **Post-edit verification snippet**: edit_file/write_file return the changed
+  region with context lines, killing the verification re-read.
+- **`!command` passthrough**: run a shell command directly (no model turn); the
+  output echoes locally AND is recorded so the model sees it next turn.
+
+Batch 2 — trust & flow:
+- **MCP tool annotations → confirm policy**: readOnlyHint runs free, others
+  confirm, destructiveHint always warns (today MCP tools bypass confirms).
+- **"Allow for the rest of this turn"** confirm option (turn-scoped autonomy).
+- **Deny with a note**: a declined tool returns the user's one-line reason so
+  the model course-corrects mid-turn.
+- **`/trust`**: list + revoke session grants (allow-session/similar, counters).
+
+Batch 3 — context & provider economy:
+- **max_tokens 8192 default + configurable; stop_reason/finish_reason guard**:
+  warn visibly when an answer was truncated by the output cap.
+- **Cached-token accounting**: parse cache_read/creation fields (+ OpenAI
+  stream_options.include_usage) so /cost and budgets are correct.
+- **Cache-stable trimming (hysteresis)**: pin the trim boundary so long
+  sessions keep a byte-identical prefix for prompt caching.
+- **Tool-result supersession**: at request build, elide older tool outputs made
+  stale by newer runs of the same command / reads of the same file.
+- **Rolling compact**: summarise the old half, keep the recent exchanges
+  verbatim; compaction also carries /tasks + /changes state verbatim.
+- **/thinking on openai/openrouter**: map to reasoning_effort / reasoning.
+- **Auto-retry with backoff** on 429/503/529 transient errors.
+
+Batch 4 — remaining:
+- **`outline_file` tool**: symbols of one file with line numbers (find_symbol
+  logic on a single file).
+- **`.gitignore`-aware traversal** (90% semantics) for the search tools.
+- **skills**: named instruction sets in `skills/` dirs; `/skills` lists,
+  `/skill <name>` loads for the session, plus a model-invocable load tool.
+- **UI polish**: settable paste thresholds in `/settings`, `/paste <n>` to
+  expand a collapsed paste block.
+- **Attention cues**: bell when a confirm blocks an unattended turn; one-line
+  digest after long turns.
+- **Per-turn tool-call budget** (default ~40) with a continue/stop checkpoint.
+- **`/plan`** (read-only planning mode), **more providers** (enough, not all).
 
 ## Considered / dropped
 
