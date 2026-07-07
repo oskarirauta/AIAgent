@@ -2120,6 +2120,8 @@ void InlineRepl::open_settings_menu() {
     _settings_rows.push_back({ "paste_preview", "preview",
         _config.paste_preview == 0 ? "all" : std::to_string(_config.paste_preview), {} });
     _settings_rows.push_back({ "max_tokens", "max_tokens", std::to_string(_config.max_tokens), {} });
+    _settings_rows.push_back({ "tool_call_limit", "tool budget",
+        _config.tool_call_limit == 0 ? "off" : std::to_string(_config.tool_call_limit), {} });
 
     erase_live();
     tcflush(STDIN_FILENO, TCIFLUSH); // ignore anything typed before the menu opened

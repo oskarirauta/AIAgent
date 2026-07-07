@@ -1029,6 +1029,8 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     // Tracked across tool-loop iterations so the answer after a tool call is not
     // left rendered as dim reasoning.
     bool showing_thinking = false;
+    size_t tools_this_turn = 0;                        // per-turn tool-call budget counter
+    size_t next_tool_check = _config.tool_call_limit;  // ask again at each multiple
 
     while ( true ) {
 
@@ -1228,6 +1230,23 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             const auto& tc = resp.tool_calls[i];
             logger::info["tool"] << tc.name << " -> " << results[i].substr(0, 200) << std::endl;
             _conversation.add_tool_result(tc.id, tc.name, results[i]);
+        }
+
+        // Per-turn tool-call budget: a runaway-loop guard so `/tools auto` can be
+        // left unattended. After every `tool_call_limit` calls, ask whether to
+        // keep going; a stop ends the turn (the work so far is kept, and a new
+        // message continues). Non-interactive runs stop automatically.
+        tools_this_turn += resp.tool_calls.size();
+        if ( _config.tool_call_limit > 0 && tools_this_turn >= next_tool_check &&
+             !( abort_flag && abort_flag->load(std::memory_order_relaxed))) {
+            bool go = _registry.ask_continue(
+                "the model has run " + std::to_string(tools_this_turn) +
+                " tool calls this turn — continue for up to " +
+                std::to_string(_config.tool_call_limit) + " more, or stop?");
+            if ( !go )
+                return "(stopped after " + std::to_string(tools_this_turn) +
+                       " tool calls this turn — the work so far is kept; send a message to continue)";
+            next_tool_check += _config.tool_call_limit;
         }
 
         // loop back to send tool results to model
@@ -1632,6 +1651,14 @@ std::string Repl::handle_command(const std::string& line) {
                 _config.max_tokens = Config::parse_size_suffixed(val, _config.max_tokens);
                 if ( _config.max_tokens < 256 ) _config.max_tokens = 256;
                 return "max_tokens: " + std::to_string(_config.max_tokens);
+            }
+            if ( key == "tool_call_limit" || key == "tool_limit" ) {
+                if ( val.empty())
+                    return "tool_call_limit: " + std::to_string(_config.tool_call_limit) +
+                           ( _config.tool_call_limit == 0 ? " (unlimited)" : " per turn" );
+                _config.tool_call_limit = Config::parse_size_suffixed(val, _config.tool_call_limit);
+                return "tool_call_limit: " + std::to_string(_config.tool_call_limit) +
+                       ( _config.tool_call_limit == 0 ? " (unlimited)" : " per turn" );
             }
             if ( key == "autoresume" || key == "workflow_autoresume" ) {
                 std::string v = common::to_lower(val);

@@ -1798,6 +1798,31 @@ static void test_trust_grants() {
     check(reg.grants().empty(), "no grants after revoke all");
 }
 
+static void test_ask_continue() {
+    std::cout << "per-turn tool budget (ask_continue)" << std::endl;
+    using namespace agent::tools;
+    { Registry r; check(!r.ask_continue("N calls"), "no callback -> stop"); }
+    {
+        Registry r;
+        r.set_confirm_callback([](const ConfirmRequest& rq, std::string&) {
+            check(rq.tool == "continue the turn", "asks about continuing the turn");
+            check(!rq.can_similar, "no allow-similar option on the budget prompt");
+            return Decision::once;
+        });
+        check(r.ask_continue("N calls"), "allow -> continue");
+    }
+    {
+        Registry r;
+        r.set_confirm_callback([](const ConfirmRequest&, std::string&) { return Decision::deny; });
+        check(!r.ask_continue("N calls"), "deny -> stop");
+    }
+    {
+        Registry r; r.set_mode(ConfirmMode::insecure);
+        r.set_confirm_callback([](const ConfirmRequest&, std::string&) { return Decision::deny; });
+        check(r.ask_continue("N calls"), "insecure -> always continue");
+    }
+}
+
 static void test_deny_with_note() {
     std::cout << "deny with a note" << std::endl;
     using namespace agent::tools;
@@ -2060,6 +2085,7 @@ int main() {
     test_grep_robustness();
     test_token_usage();
     test_trust_grants();
+    test_ask_continue();
     test_deny_with_note();
     test_turn_scoped_grant();
     test_danger_list();

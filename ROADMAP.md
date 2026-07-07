@@ -105,6 +105,12 @@ each list is roughly the current priority order.
   prompt, which carries the pins). `/pins` lists them, `/unpin <n|all>` removes.
   Session-scoped. For "don't forget this decision / constraint" that must outlast
   summarisation.
+- **Per-turn tool-call budget**: `tool_call_limit` (default 50; config +
+  /settings "tool budget"; 0 = unlimited) caps how many tools a single turn runs
+  before asking to continue — a runaway-loop guard so `/tools auto` can be left
+  unattended. On the cap it raises a continue/stop confirm (via the existing
+  callback); a stop ends the turn keeping the work so far, and non-interactive
+  runs stop automatically. Insecure mode never interrupts.
 - **Skills**: reusable, named instruction sets — a markdown file per skill (with
   optional name/description frontmatter) in `<home>/skills/` (user) or
   `./.agent/skills/` (project, overrides same-named user skill). `/skills` lists,
@@ -225,7 +231,6 @@ Batch 4 — remaining:
   expand a collapsed paste block.
 - **Attention cues**: bell when a confirm blocks an unattended turn; one-line
   digest after long turns.
-- **Per-turn tool-call budget** (default ~40) with a continue/stop checkpoint.
 - **`/plan`** (read-only planning mode), **more providers** (enough, not all).
 
 ## Considered / dropped

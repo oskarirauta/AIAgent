@@ -594,6 +594,19 @@ bool Registry::has(const std::string& name) const {
     return _tools.find(name) != _tools.end();
 }
 
+bool Registry::ask_continue(const std::string& summary) {
+    if ( _mode == ConfirmMode::insecure )
+        return true; // insecure: never interrupt
+    if ( !_confirm_cb )
+        return false; // non-interactive: stop safely
+    ConfirmRequest req;
+    req.tool = "continue the turn";
+    req.summary = summary;
+    req.can_similar = false;
+    std::string note;
+    return _confirm_cb(req, note) != Decision::deny;
+}
+
 std::vector<Registry::Grant> Registry::grants() const {
     std::vector<Grant> g;
     for ( const auto& k : _allow_exact ) {

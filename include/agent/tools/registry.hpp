@@ -68,6 +68,11 @@ public:
     std::string execute(const std::string& name, const JSON& args);
     bool has(const std::string& name) const;
 
+    // Ask the user (via the confirm callback) a plain continue/stop question —
+    // used for the per-turn tool-call budget. Any non-deny choice means continue;
+    // no callback (non-interactive) means stop.
+    bool ask_continue(const std::string& summary);
+
     // Classify a shell command against the danger list. Returns a human-readable
     // reason when the command is risky, or an empty string otherwise. Exposed for
     // testing.
