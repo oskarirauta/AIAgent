@@ -90,6 +90,10 @@ each list is roughly the current priority order.
 - **Autocomplete**: Tab in the inline REPL completes a leading slash command or a
   file-path token — unique match completes (dirs get `/`, else a space), a shared
   longer prefix extends, and an ambiguous prefix lists the candidates.
+- **`/compact` progress bar**: the summarisation now streams, and the status line
+  shows a live bar + rough percentage (`compacting [██░░░░] ~34%`) alongside the
+  elapsed seconds — a rough estimate (summary ≈ 1/12 of the input, bounded) so you
+  can gauge when the session will resume, not just that it isn't frozen.
 - **Parallel tool calls**: when a model turn batches several read-only tools
   (read_file / grep / find_symbol / list_directory) they run concurrently on a
   bounded thread pool; results are recorded in the model's original order. Any

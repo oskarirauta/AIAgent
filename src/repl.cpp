@@ -602,15 +602,50 @@ std::string Repl::compact_history() {
 
     _provider->prepare_request(_client);
     JSON req = _provider->build_request(summ, JSON::Array{});
-    std::string body = req.dump_minified();
-    std::string resp_str = _client.post(_provider->endpoint(), _provider->auth_header(),
-                                        _provider->auth_value(), _provider->extra_headers(), body,
-                                        &agent::turn_abort);
-    if ( agent::turn_abort.load(std::memory_order_relaxed) || resp_str.empty())
-        return "compact cancelled";
-    auto resp = _provider->parse_response(JSON::parse(resp_str));
-    std::string summary = agent::normalize_text(resp.message);
-    if ( !resp.success || summary.empty())
+
+    // Rough progress estimate: a summary runs ~1/12 of the input length, bounded.
+    // Not exact, but enough for a climbing bar ("coffee or nap?").
+    size_t expected = std::min<size_t>(std::max<size_t>(( transcript.size() / 4 ) / 12, 200), 900);
+    auto bar = [](int pct) {
+        int filled = pct * 12 / 100;
+        std::string b = "[";
+        for ( int i = 0; i < 12; ++i ) b += ( i < filled ? "█" : "░" );
+        return b + "]";
+    };
+
+    std::string summary;
+    if ( _provider->supports_streaming()) {
+        req["stream"] = true;
+        std::string body = req.dump_minified();
+        std::string buffer;
+        bool done = false;
+        size_t got_chars = 0;
+        _provider->stream_reset();
+        _client.post_stream(_provider->endpoint(), _provider->auth_header(),
+            _provider->auth_value(), _provider->extra_headers(), body,
+            [&](const std::string& chunk) {
+                providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
+                got_chars += sc.content.size();
+                int pct = expected ? static_cast<int>(std::min<size_t>(99, ( got_chars / 4 ) * 100 / expected)) : 0;
+                if ( _progress_cb )
+                    _progress_cb("compacting " + bar(pct) + " ~" + std::to_string(pct) + "%");
+            }, &agent::turn_abort);
+        if ( agent::turn_abort.load(std::memory_order_relaxed))
+            return "compact cancelled";
+        summary = agent::normalize_text(_provider->stream_result().message);
+    } else {
+        std::string body = req.dump_minified();
+        std::string resp_str = _client.post(_provider->endpoint(), _provider->auth_header(),
+                                            _provider->auth_value(), _provider->extra_headers(), body,
+                                            &agent::turn_abort);
+        if ( agent::turn_abort.load(std::memory_order_relaxed) || resp_str.empty())
+            return "compact cancelled";
+        auto resp = _provider->parse_response(JSON::parse(resp_str));
+        if ( !resp.success )
+            throws << "summarisation failed: " << resp.message << std::endl;
+        summary = agent::normalize_text(resp.message);
+    }
+    if ( summary.empty())
         throws << "summarisation returned no content" << std::endl;
 
     // Replace history with [system, user(summary), assistant(ack)] — a valid
@@ -1430,6 +1465,7 @@ void Repl::run_tty() {
         _registry.set_activity_callback([&inline_repl](const std::string& a) { inline_repl.set_activity(a); });
     }
     inline_repl.set_command_callback([this](const std::string& cmd) { return handle_command(cmd); });
+    set_progress_callback([&inline_repl](const std::string& s) { inline_repl.set_activity(s); });
 
     inline_repl.run();
 

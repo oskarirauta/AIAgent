@@ -55,6 +55,13 @@ private:
     std::string export_transcript(const std::string& path);
     // Summarise the conversation via one LLM call and replace history with it.
     std::string compact_history();
+
+    // A sink for slow-command progress text (wired to the REPL's status line), so
+    // /compact can show a live progress bar while it summarises.
+    std::function<void(const std::string&)> _progress_cb;
+public:
+    void set_progress_callback(std::function<void(const std::string&)> cb) { _progress_cb = std::move(cb); }
+private:
     // Switch the active provider mid-session, carrying the current conversation
     // over (re-auth non-interactively). Returns text to display.
     std::string switch_provider(const std::string& name);
