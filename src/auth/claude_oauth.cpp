@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <fstream>
 #include <sys/stat.h>
+#include <termios.h>
+#include <unistd.h>
 #include <iostream>
 #include "json.hpp"
 #include "logger.hpp"
@@ -280,8 +282,24 @@ std::string prompt_for_authorization_code() {
     std::cout << "Paste the authorization code shown in the browser and press Enter: ";
     std::cout.flush();
 
+    // Force a sane line-input mode for the read. If a previous session died in
+    // raw mode, the tty still has ICANON/ECHO/ICRNL off — Enter then sends a
+    // bare \r (echoed as ^M) and getline never completes.
+    struct termios saved{};
+    bool have_tty = isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &saved) == 0;
+    if ( have_tty ) {
+        struct termios sane = saved;
+        sane.c_lflag |= ( ICANON | ECHO | ECHOE | ISIG );
+        sane.c_iflag |= ICRNL;
+        tcsetattr(STDIN_FILENO, TCSANOW, &sane);
+    }
+
     std::string code;
-    if ( !std::getline(std::cin, code))
+    bool ok = static_cast<bool>(std::getline(std::cin, code));
+
+    if ( have_tty )
+        tcsetattr(STDIN_FILENO, TCSANOW, &saved);
+    if ( !ok )
         return "";
 
     // The official CLI pastes codes in the form "authorizationCode#state".
