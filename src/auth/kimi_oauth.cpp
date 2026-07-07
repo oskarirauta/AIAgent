@@ -245,6 +245,7 @@ PollResult poll_device_token(
             result.error_description = j["error_description"].to_string();
         if ( error == "authorization_pending" || error == "slow_down" ) {
             result.status = PollStatus::pending;
+            result.slow_down = ( error == "slow_down" );
             return result;
         }
         if ( error == "expired_token" ) {

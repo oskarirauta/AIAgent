@@ -75,6 +75,7 @@ public:
     void set_on_finish(std::function<void(const WorkflowRun&)> cb);
 
     // Signal every run to abort and join their threads. Safe to call twice.
+    void reap_finished(); // join finished runs's threads so handles don't pile up
     void shutdown();
 
 private:

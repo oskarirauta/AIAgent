@@ -996,6 +996,7 @@ std::string Repl::switch_provider(const std::string& name) {
     // once. The conversation is carried over: keep the dialogue, but refresh the
     // system message to the new provider's identity + memories.
     _config = nc;
+    _workflow_autoresume.store(_config.workflow_autoresume, std::memory_order_relaxed);
     _provider = std::move(np);
     _conversation.set_system(base_system_prompt());
     sync_advisor_tool();  // advisor tool follows the provider (claude-only)
@@ -1698,6 +1699,7 @@ std::string Repl::handle_command(const std::string& line) {
                 if ( v == "on" || v == "true" || v == "1" || v == "yes" ) _config.workflow_autoresume = true;
                 else if ( v == "off" || v == "false" || v == "0" || v == "no" ) _config.workflow_autoresume = false;
                 else return "usage: /settings autoresume <on|off>";
+                _workflow_autoresume.store(_config.workflow_autoresume, std::memory_order_relaxed);
                 return std::string("workflow autoresume: ") + ( _config.workflow_autoresume ? "on" : "off" ) +
                        ( _config.workflow_autoresume ? "  (a finished workflow resumes the conversation; bounded to 2 in a row)" : "" );
             }
@@ -1987,6 +1989,7 @@ void Repl::run_tty() {
     // workflow_autoresume on, a synthetic prompt joins the normal pending queue
     // (never a direct turn start from this background thread) so the model picks
     // the results up by itself — bounded to 2 auto turns per real user message.
+    _workflow_autoresume.store(_config.workflow_autoresume, std::memory_order_relaxed);
     _workflows.set_on_finish([this, &inline_repl](const WorkflowRun& r) {
         size_t ok = 0;
         for ( const auto& st : r.steps )
@@ -1995,7 +1998,7 @@ void Repl::run_tty() {
                            " [" + r.status + "] " + std::to_string(ok) + "/" +
                            std::to_string(r.steps.size()) + " steps";
         bool resumed = false;
-        if ( _config.workflow_autoresume )
+        if ( _workflow_autoresume.load(std::memory_order_relaxed))
             resumed = inline_repl.enqueue_prompt(
                 "Workflow #" + std::to_string(r.id) + " (" + r.name + ") just finished with status \"" +
                 r.status + "\". Its step results have been delivered above — go through them and continue "

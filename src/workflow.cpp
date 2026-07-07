@@ -110,8 +110,24 @@ WorkflowManager::~WorkflowManager() {
     shutdown();
 }
 
+void WorkflowManager::reap_finished() {
+    // Join the threads of runs that have already finished so their handles don't
+    // accumulate for the life of the session. finished_at is set (under _mx) just
+    // before the thread returns, so join() blocks only momentarily if at all.
+    std::vector<std::thread> done;
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        for ( auto& e : _entries )
+            if ( e->run.finished_at != 0 && e->thread.joinable())
+                done.push_back(std::move(e->thread));
+    }
+    for ( auto& t : done )
+        if ( t.joinable()) t.join();
+}
+
 int WorkflowManager::launch(const std::string& name, const std::vector<std::string>& steps,
                             runner_fn runner, bool parallel) {
+    reap_finished();
     auto entry = std::make_unique<Entry>();
     int id = _next_id.fetch_add(1);
     entry->run.id = id;
@@ -262,6 +278,7 @@ int WorkflowManager::retry(int id, runner_fn runner) {
     if ( !anything_left )
         return -1; // every step already succeeded
 
+    reap_finished();
     auto entry = std::make_unique<Entry>();
     int nid = _next_id.fetch_add(1);
     entry->run.id = nid;

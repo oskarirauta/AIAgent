@@ -82,6 +82,9 @@ bool Kimi::authenticate(api::Client& client, bool force_login) {
             return true;
         }
 
+        if ( result.slow_down ) // RFC 8628: back off the polling interval by 5s
+            interval_seconds += 5;
+
         if ( result.status == auth::PollStatus::expired )
             throws << "kimi login expired" << std::endl;
         if ( result.status == auth::PollStatus::denied )

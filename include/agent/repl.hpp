@@ -124,6 +124,10 @@ private:
     Conversation _conversation;
     TokenStats _stats;
     WorkflowManager _workflows;
+    // Thread-safe mirror of _config.workflow_autoresume: the workflow on_finish
+    // callback runs on a background thread and must not read _config while the
+    // main thread reassigns it (switch_provider) or edits it (/settings).
+    std::atomic<bool> _workflow_autoresume{ false };
     mcp::Client _mcp;
 };
 

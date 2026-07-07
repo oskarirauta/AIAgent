@@ -28,6 +28,7 @@ struct PollResult {
     PollStatus status = PollStatus::error;
     KimiToken token;
     std::string error_description;
+    bool slow_down = false; // server asked us to poll less often (RFC 8628): +5s
 };
 
 DeviceAuthorization request_device_authorization(
