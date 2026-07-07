@@ -2403,7 +2403,7 @@ void InlineRepl::draw_settings_menu(bool redraw) {
         const SettingRow& row = _settings_rows[i];
         if ( row.group != group ) {           // section header
             group = row.group;
-            out += ( lines ? "\r\n" : "" ) + _theme.dim + "  " + group + Theme::reset + "\r\n";
+            out += ( lines ? "\r\n" : "" ) + _theme.accent + "  " + group + Theme::reset + "\r\n";
             lines += lines ? 2 : 1;
         }
         std::string label = row.label;
@@ -2420,7 +2420,7 @@ void InlineRepl::draw_settings_menu(bool redraw) {
             std::string shown = ( row.options.empty() && !row.is_number ) ? val : "‹ " + val + " ›";
             out += "\033[1;7m ❯ " + label + shown + " \033[0m";
         } else {
-            out += _theme.dim + "   " + label + val + Theme::reset;
+            out += "   " + label + _theme.dim + val + Theme::reset; // label default, value dim
         }
         out += "\r\n";
         lines++;
@@ -2576,7 +2576,7 @@ void InlineRepl::draw_list_menu(bool redraw) {
             if ( i == _list_sel )
                 out += "\033[1;7m ❯ " + clip_cells(_list.rows[i], cols) + " \033[0m\r\n";
             else
-                out += _theme.dim + "   " + clip_cells(_list.rows[i], cols) + Theme::reset + "\r\n";
+                out += "   " + clip_cells(_list.rows[i], cols) + "\r\n";
             lines++;
         }
         if ( total > vh ) {
