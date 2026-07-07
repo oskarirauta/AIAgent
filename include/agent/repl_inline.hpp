@@ -93,13 +93,17 @@ private:
 
     // Transcript output.
     void echo_user(const std::string& display);
+    // Echo several queued user messages as one group — each with its own "›"
+    // marker and no blank line between, so a flushed backlog reads as several
+    // user messages, not alternating speakers.
+    void echo_user_multi(const std::vector<std::string>& parts);
     void begin_reply();
     void emit_styled_line(const std::string& line); // one committed, styled line
     std::string style_spans(const std::string& line, Language lang) const;
 
     // Turn lifecycle (worker thread + main-thread event loop).
     void on_enter();
-    void start_turn(const std::string& line, const std::string& display);
+    void start_turn(const std::string& line, const std::string& display, bool already_echoed = false);
     void start_async_command(const std::string& cmd, const std::string& activity,
                              const std::string& echo_label = ""); // run a slow command off-thread
     bool maybe_auto_compact(); // auto-summarise history when it nears the context budget; true if started

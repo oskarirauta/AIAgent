@@ -316,6 +316,31 @@ static std::string sanitize_display(const std::string& s) {
     return out;
 }
 
+void InlineRepl::echo_user_multi(const std::vector<std::string>& parts) {
+    erase_live();
+    wr("\n"); // one blank line before the whole group, none between parts
+    int width = term_cols() - 4;
+    if ( width < 8 ) width = 8;
+    for ( const auto& part : parts ) {
+        std::string msg = trim_blank_edges(part);
+        bool first = true;
+        std::istringstream ls(msg);
+        std::string logical;
+        while ( std::getline(ls, logical)) {
+            for ( const auto& seg : word_wrap(logical, width)) {
+                if ( first ) {
+                    wr(_theme.user + "› " + Theme::reset + seg + "\n");
+                    first = false;
+                } else {
+                    wr("  " + seg + "\n");
+                }
+            }
+        }
+        if ( first ) // an empty part — still show a marker
+            wr(_theme.user + "›" + Theme::reset + "\n");
+    }
+}
+
 void InlineRepl::echo_user(const std::string& display) {
     erase_live();
     // One blank line before the message, edges trimmed — every message (user or
@@ -1491,12 +1516,13 @@ void InlineRepl::on_enter() {
     start_turn(line, display);
 }
 
-void InlineRepl::start_turn(const std::string& line, const std::string& display) {
+void InlineRepl::start_turn(const std::string& line, const std::string& display, bool already_echoed) {
     // NOTE: deliberately does NOT touch _input/_pastes. A turn can start from the
     // pending queue (or a workflow auto-resume) while the user is mid-sentence —
     // wiping the input here silently discarded that typing. The submit path
     // (on_enter) clears its own consumed input before calling this.
-    echo_user(display);
+    if ( !already_echoed )
+        echo_user(display);
     begin_reply();
 
     {
@@ -2011,6 +2037,7 @@ void InlineRepl::drain_pending() {
     while ( true ) {
         std::string next;
         bool is_command = false;
+        std::vector<std::string> parts; // consecutive user messages merged into one turn
         {
             std::lock_guard<std::mutex> lk(_mx);
             if ( _pending.empty())
@@ -2019,8 +2046,10 @@ void InlineRepl::drain_pending() {
             _pending.pop_front();
             is_command = !next.empty() && ( next[0] == '/' || next[0] == '!' );
             if ( !is_command ) {
-                while ( !_pending.empty() && ( _pending.front().empty() || _pending.front()[0] != '/' )) {
-                    next += "\n\n" + _pending.front();
+                parts.push_back(next);
+                while ( !_pending.empty() && !_pending.front().empty() &&
+                        _pending.front()[0] != '/' && _pending.front()[0] != '!' ) {
+                    parts.push_back(_pending.front());
                     _pending.pop_front();
                 }
             }
@@ -2030,7 +2059,15 @@ void InlineRepl::drain_pending() {
             if ( _turn_running || _in_settings )
                 return;
         } else {
-            start_turn(next, next);
+            // The model gets the messages paragraph-separated; the transcript
+            // shows each with its own "›" marker (no blank line between), so a
+            // flushed backlog doesn't read as alternating speakers.
+            std::string combined;
+            for ( size_t i = 0; i < parts.size(); ++i )
+                combined += ( i ? "\n\n" : "" ) + parts[i];
+            if ( parts.size() > 1 )
+                echo_user_multi(parts);
+            start_turn(combined, combined, /*already_echoed=*/parts.size() > 1);
             return;
         }
     }
