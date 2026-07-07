@@ -234,6 +234,22 @@ static void test_cached_token_accounting() {
         check(r.input_tokens == 1000 && r.cached_input_tokens == 800, "openai cached_tokens captured");
     }
     {
+        // Streamed text BEFORE a tool call must not drop the tool call — models
+        // routinely say "let me check…" and then call a tool in the same response.
+        agent::Config cfg; cfg.provider = "openai";
+        agent::providers::OpenAI p(cfg);
+        p.stream_reset();
+        std::string buf; bool done = false;
+        p.parse_stream("data: {\"choices\":[{\"delta\":{\"content\":\"let me check.\"}}]}\n\n", buf, done);
+        p.parse_stream("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"t1\","
+                       "\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/x\\\"}\"}}]}}]}\n\n", buf, done);
+        p.parse_stream("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n", buf, done);
+        auto r = p.stream_result();
+        check(r.message == "let me check.", "streamed preface text preserved");
+        check(r.tool_calls.size() == 1 && r.tool_calls[0].name == "read_file",
+              "tool call after streamed text is kept");
+    }
+    {
         agent::Config cfg; cfg.provider = "anthropic"; cfg.model = "claude-opus-4-8";
         agent::providers::Anthropic p(cfg);
         p.stream_reset();
