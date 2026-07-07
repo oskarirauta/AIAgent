@@ -423,14 +423,15 @@ void Repl::sync_workflow_tool() {
     bool want = _config.tools_enabled && provider_supports("workflows");
     if ( want && !_registry.has("run_workflow")) {
         _registry.add(std::make_unique<tools::WorkflowTool>(
-            [this](const std::string& name, const std::vector<std::string>& steps) {
+            [this](const std::string& name, const std::vector<std::string>& steps, bool parallel) {
                 Config cfg = _config; // snapshot: sub-agents must not read live config
                 int id = _workflows.launch(name, steps,
                     [cfg](const std::string& task, std::atomic<bool>* abort) {
                         return run_workflow_step(cfg, task, abort);
-                    });
+                    }, parallel);
                 return "started workflow #" + std::to_string(id) + " (" +
-                       std::to_string(steps.size()) + " step(s)) in the background; "
+                       std::to_string(steps.size()) + " step(s), " +
+                       ( parallel ? "parallel" : "serial" ) + ") in the background; "
                        "watch it with /workflows. Results will come back on your next turn.";
             }));
     } else if ( !want && _registry.has("run_workflow")) {
@@ -450,14 +451,39 @@ std::string Repl::workflows_command(const std::string& args) {
         return "·"; // pending
     };
 
+    // Subcommands: cancel <id> stops a running workflow, retry <id> relaunches a
+    // finished one (already-succeeded steps keep their results and are skipped).
+    {
+        std::istringstream iss(a);
+        std::string sub, rest;
+        iss >> sub >> rest;
+        std::string lsub = common::to_lower(sub);
+        if ( lsub == "cancel" || lsub == "retry" ) {
+            int id = 0;
+            try { id = std::stoi(rest); } catch ( ... ) { return "usage: /workflows " + lsub + " <id>"; }
+            if ( lsub == "cancel" )
+                return _workflows.cancel(id)
+                     ? "cancelling workflow #" + rest + " (its running step is aborted)"
+                     : "no running workflow #" + rest;
+            Config cfg = _config;
+            int nid = _workflows.retry(id, [cfg](const std::string& task, std::atomic<bool>* abort) {
+                return run_workflow_step(cfg, task, abort);
+            });
+            if ( nid < 0 )
+                return "cannot retry #" + rest + " (unknown, still running, or every step succeeded)";
+            return "retrying workflow #" + rest + " as #" + std::to_string(nid) +
+                   " — steps that already succeeded are kept";
+        }
+    }
+
     if ( !a.empty()) {
         // Detail view for one run.
         int want = 0;
-        try { want = std::stoi(a); } catch ( ... ) { return "usage: /workflows [id]"; }
+        try { want = std::stoi(a); } catch ( ... ) { return "usage: /workflows [id|cancel <id>|retry <id>]"; }
         for ( const auto& r : runs ) {
             if ( r.id != want ) continue;
             std::string s = "workflow #" + std::to_string(r.id) + "  " + r.name +
-                            "  [" + r.status + "]\n";
+                            "  [" + r.status + "]" + ( r.parallel ? "  (parallel)" : "" ) + "\n";
             for ( size_t i = 0; i < r.steps.size(); ++i ) {
                 const auto& st = r.steps[i];
                 s += "\n" + step_glyph(st.status) + " step " + std::to_string(i + 1) +
@@ -479,10 +505,10 @@ std::string Repl::workflows_command(const std::string& args) {
         for ( const auto& st : r.steps )
             if ( st.status == "done" || st.status == "error" ) ++done;
         s += "\n  #" + std::to_string(r.id) + "  " + r.name +
-             "  [" + r.status + "]  " + std::to_string(done) + "/" +
-             std::to_string(r.steps.size()) + " steps";
+             "  [" + r.status + "]" + ( r.parallel ? " (parallel)" : "" ) + "  " +
+             std::to_string(done) + "/" + std::to_string(r.steps.size()) + " steps";
     }
-    s += "\n\nuse /workflows <id> for step details";
+    s += "\n\nuse /workflows <id> for details, cancel <id> / retry <id> to manage";
     return s;
 }
 
@@ -1552,7 +1578,24 @@ void Repl::run_tty() {
     inline_repl.set_command_callback([this](const std::string& cmd) { return handle_command(cmd); });
     set_progress_callback([&inline_repl](const std::string& s) { inline_repl.set_activity(s); });
 
+    // Workflow completion notice: printed above the live block with a bell, so a
+    // long-running background run announces itself even while you're idle.
+    _workflows.set_on_finish([&inline_repl](const WorkflowRun& r) {
+        size_t ok = 0;
+        for ( const auto& st : r.steps )
+            if ( st.status == "done" ) ++ok;
+        inline_repl.notify("workflow #" + std::to_string(r.id) + " " + r.name +
+                           " [" + r.status + "] " + std::to_string(ok) + "/" +
+                           std::to_string(r.steps.size()) +
+                           " steps — results fold in on your next message (/workflows " +
+                           std::to_string(r.id) + " for details)");
+    });
+
     inline_repl.run();
+
+    // inline_repl is about to go out of scope; synchronously detach the callback
+    // so a run finishing right now cannot touch a dead object.
+    _workflows.set_on_finish(nullptr);
 
     // Persist UI/behaviour settings changed this session (theme, multiline,
     // thinking, context) so they are restored next launch.

@@ -769,8 +769,9 @@ static void test_workflow_tool() {
     std::cout << "workflow tool schema/execute" << std::endl;
     std::string got_name;
     std::vector<std::string> got_steps;
-    agent::tools::WorkflowTool tool([&](const std::string& n, const std::vector<std::string>& s) {
-        got_name = n; got_steps = s; return std::string("started workflow #7");
+    bool got_parallel = false;
+    agent::tools::WorkflowTool tool([&](const std::string& n, const std::vector<std::string>& s, bool p) {
+        got_name = n; got_steps = s; got_parallel = p; return std::string("started workflow #7");
     });
     check(tool.name() == "run_workflow", "workflow tool name");
     std::string r = tool.execute(JSON::Object{
@@ -778,9 +779,108 @@ static void test_workflow_tool() {
         { "steps", JSON::Array{ "look at a", "look at b" } }
     });
     check(got_name == "scan" && got_steps.size() == 2, "launcher gets name + steps");
+    check(!got_parallel, "parallel defaults to false");
     check(r == "started workflow #7", "returns launcher message");
+    tool.execute(JSON::Object{
+        { "steps", JSON::Array{ "a", "b" } }, { "parallel", true } });
+    check(got_parallel, "parallel flag forwarded");
     check(tool.execute(JSON::Object{ { "name", "x" } }).rfind("error:", 0) == 0,
           "missing steps is an error");
+}
+
+static void test_workflow_parallel_cancel_retry() {
+    std::cout << "workflow parallel / cancel / retry / on_finish" << std::endl;
+    using namespace std::chrono_literals;
+
+    // Parallel: three 120ms steps should overlap (well under 3x serial time).
+    {
+        agent::WorkflowManager mgr;
+        auto t0 = std::chrono::steady_clock::now();
+        mgr.launch("par", { "a", "b", "c" }, [](const std::string&, std::atomic<bool>*) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(120));
+            return std::string("ok");
+        }, true);
+        while ( mgr.any_running()) std::this_thread::sleep_for(5ms);
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+        check(ms < 300, "parallel steps overlap (took " + std::to_string(ms) + "ms)");
+        check(mgr.snapshot().back().status == "done", "parallel run completes");
+        check(mgr.snapshot().back().parallel, "run records parallel mode");
+    }
+
+    // Parallel keeps going after one step errors; run still marked error.
+    {
+        agent::WorkflowManager mgr;
+        mgr.launch("parerr", { "bad", "good" }, [](const std::string& t, std::atomic<bool>*) {
+            return t == "bad" ? std::string("error: nope") : std::string("fine");
+        }, true);
+        while ( mgr.any_running()) std::this_thread::sleep_for(5ms);
+        auto r = mgr.snapshot().back();
+        check(r.status == "error", "parallel run with a failed step is error");
+        bool good_done = false;
+        for ( const auto& s : r.steps ) if ( s.result == "fine" ) good_done = true;
+        check(good_done, "other parallel steps still ran");
+    }
+
+    // Cancel: a long step observes the per-run abort flag.
+    {
+        agent::WorkflowManager mgr;
+        int id = mgr.launch("slow", { "s1", "s2" }, [](const std::string&, std::atomic<bool>* ab) {
+            for ( int i = 0; i < 200; ++i ) {
+                if ( ab && ab->load()) return std::string("cancelled");
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            return std::string("ok");
+        });
+        std::this_thread::sleep_for(30ms);
+        check(mgr.cancel(id), "cancel accepts a running id");
+        while ( mgr.any_running()) std::this_thread::sleep_for(5ms);
+        check(mgr.snapshot().back().status == "cancelled", "cancelled run status");
+        check(!mgr.cancel(id), "cancel refuses a finished id");
+        check(!mgr.cancel(999), "cancel refuses an unknown id");
+    }
+
+    // Retry: succeeded steps are kept and skipped; failed ones run again.
+    {
+        agent::WorkflowManager mgr;
+        std::atomic<int> calls{ 0 };
+        int fail_once = 1;
+        int id = mgr.launch("retryme", { "a", "b" },
+            [&](const std::string& t, std::atomic<bool>*) {
+                calls++;
+                if ( t == "b" && fail_once ) return std::string("error: transient");
+                return std::string("ok:" + t);
+            });
+        while ( mgr.any_running()) std::this_thread::sleep_for(5ms);
+        check(mgr.snapshot().back().status == "error", "first run errors");
+        int before = calls.load();
+        fail_once = 0;
+        int nid = mgr.retry(id, [&](const std::string& t, std::atomic<bool>*) {
+            calls++;
+            return std::string("ok:" + t);
+        });
+        check(nid > id, "retry returns a new id");
+        while ( mgr.any_running()) std::this_thread::sleep_for(5ms);
+        auto runs = mgr.snapshot();
+        check(runs.back().status == "done", "retried run completes");
+        check(runs.back().steps[0].result == "ok:a", "succeeded step result kept");
+        check(calls.load() == before + 1, "only the failed step re-ran");
+        check(mgr.retry(nid, nullptr) == -1, "retry refuses a fully-succeeded run");
+    }
+
+    // on_finish fires with the final snapshot.
+    {
+        agent::WorkflowManager mgr;
+        std::atomic<bool> fired{ false };
+        std::string got;
+        mgr.set_on_finish([&](const agent::WorkflowRun& r) { got = r.status; fired = true; });
+        mgr.launch("notify", { "x" }, [](const std::string&, std::atomic<bool>*) {
+            return std::string("ok");
+        });
+        for ( int i = 0; i < 200 && !fired; ++i ) std::this_thread::sleep_for(5ms);
+        check(fired.load() && got == "done", "on_finish fired with final status");
+        mgr.set_on_finish(nullptr);
+    }
 }
 
 static void test_provider_options_config() {
@@ -1422,6 +1522,7 @@ int main() {
     test_project_instructions();
     test_workflow_manager();
     test_workflow_tool();
+    test_workflow_parallel_cancel_retry();
     test_provider_options_config();
     test_claude_provider();
     test_claude_pkce();

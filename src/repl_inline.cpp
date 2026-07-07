@@ -581,6 +581,29 @@ void InlineRepl::set_activity(const std::string& activity) {
     _activity = activity;
 }
 
+void InlineRepl::notify(const std::string& line) {
+    std::lock_guard<std::mutex> lk(_mx);
+    _notices.push(line);
+}
+
+void InlineRepl::drain_notices() {
+    std::vector<std::string> lines;
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        while ( !_notices.empty()) {
+            lines.push_back(_notices.front());
+            _notices.pop();
+        }
+    }
+    if ( lines.empty())
+        return;
+    erase_live();
+    for ( const auto& l : lines )
+        wr(_theme.accent + "● " + l + Theme::reset + "\r\n");
+    wr("\a"); // bell: the user may be looking elsewhere
+    draw_live();
+}
+
 void InlineRepl::erase_live() {
     // Step up from the cursor to the block top (_live_cursor_up lines) before
     // clearing, so the whole block is removed regardless of its height.
@@ -1179,6 +1202,11 @@ void InlineRepl::run() {
     // output appear promptly.
     while ( agent::running.load(std::memory_order_relaxed)) {
         poll_worker();
+
+        // Async notices (workflow completions etc.) print above the live block;
+        // held back while a dialog owns the screen.
+        if ( !_confirming && !_in_settings )
+            drain_notices();
 
         // Terminal was resized: redraw the active view at the new width.
         if ( agent::winch_pending.exchange(false, std::memory_order_relaxed)) {

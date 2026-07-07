@@ -14,9 +14,10 @@ namespace agent::tools {
 // by the app (Repl) via an injected handler.
 class WorkflowTool : public Tool {
 public:
-    // (name, steps) -> message shown to the model (e.g. "started workflow #3").
+    // (name, steps, parallel) -> message shown to the model (e.g. "started workflow #3").
     using launch_fn = std::function<std::string(const std::string& name,
-                                                const std::vector<std::string>& steps)>;
+                                                const std::vector<std::string>& steps,
+                                                bool parallel)>;
 
     explicit WorkflowTool(launch_fn launcher) : _launcher(std::move(launcher)) {}
 
@@ -27,10 +28,12 @@ public:
                "`name` and a list of `steps`, where each step is a self-contained task "
                "for an independent read-only sub-agent (it can read files, list "
                "directories and grep, but not write or run commands). Steps run in the "
-               "background and in order; the tool returns immediately with a run id. The "
-               "user watches progress with /workflows, and the results are handed back to "
-               "you on your next turn. Use this to fan out research or analysis across a "
-               "codebase; keep each step focused and self-describing.";
+               "background and in order — or set `parallel` to true when the steps are "
+               "independent of each other, to run them concurrently. The tool returns "
+               "immediately with a run id. The user watches progress with /workflows, and "
+               "the results are handed back to you on your next turn. Use this to fan out "
+               "research or analysis across a codebase; keep each step focused and "
+               "self-describing.";
     }
 
     JSON parameters() const override {
@@ -45,6 +48,10 @@ public:
                     { "type", "array" },
                     { "items", JSON::Object{ { "type", "string" } } },
                     { "description", "Ordered list of self-contained tasks, one per sub-agent." }
+                }},
+                { "parallel", JSON::Object{
+                    { "type", "boolean" },
+                    { "description", "Run the steps concurrently (only when they are independent). Default false: run in order." }
                 }}
             }},
             { "required", JSON::Array{ "steps" } }
@@ -69,7 +76,9 @@ public:
             return "error: provide a non-empty `steps` array of task strings";
         if ( !_launcher )
             return "error: workflows are not available";
-        return _launcher(name, steps);
+        bool parallel = args.contains("parallel") && args["parallel"] == JSON::TYPE::BOOL &&
+                        args["parallel"].to_bool();
+        return _launcher(name, steps, parallel);
     }
 
 private:

@@ -51,6 +51,11 @@ public:
     // status line can show it. Thread-safe.
     void set_activity(const std::string& activity);
 
+    // Queue a one-line notice (e.g. "workflow #2 done") to be printed above the
+    // live block by the main loop, with a terminal bell. Thread-safe; callable
+    // from background threads.
+    void notify(const std::string& line);
+
     // Handler for slash commands (other than /exit and /quit), run locally on the
     // main thread; returns text to show as a system message.
     void set_command_callback(command_cb_t cb) { _command_cb = std::move(cb); }
@@ -228,6 +233,8 @@ private:
     int _settings_menu_lines = 0;
     std::vector<SettingRow> _settings_rows;
     std::queue<std::string> _pending;      // prompts queued while a turn is running
+    std::queue<std::string> _notices;      // async notices (guarded by _mx)
+    void drain_notices();                  // print queued notices above the live block
     int _spin = 0;
     int _budget_notified = 0; // highest budget threshold already warned (0 / 80 / 100)
     std::chrono::steady_clock::time_point _turn_start;

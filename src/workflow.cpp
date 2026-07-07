@@ -111,11 +111,12 @@ WorkflowManager::~WorkflowManager() {
 }
 
 int WorkflowManager::launch(const std::string& name, const std::vector<std::string>& steps,
-                            runner_fn runner) {
+                            runner_fn runner, bool parallel) {
     auto entry = std::make_unique<Entry>();
     int id = _next_id.fetch_add(1);
     entry->run.id = id;
     entry->run.name = name.empty() ? ("workflow-" + std::to_string(id)) : name;
+    entry->run.parallel = parallel;
     entry->run.started_at = now_seconds();
     for ( const auto& s : steps )
         entry->run.steps.push_back(WorkflowStep{ s });
@@ -126,46 +127,161 @@ int WorkflowManager::launch(const std::string& name, const std::vector<std::stri
         _entries.push_back(std::move(entry));
     }
 
-    e->thread = std::thread([this, e, runner]() {
-        bool had_error = false;
-        size_t count;
+    e->thread = std::thread([this, e, runner]() { run_entry(e, runner); });
+    return id;
+}
+
+void WorkflowManager::run_entry(Entry* e, runner_fn runner) {
+    bool parallel;
+    size_t count;
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        parallel = e->run.parallel;
+        count = e->run.steps.size();
+    }
+    std::atomic<bool> had_error{ false };
+    auto aborted = [this, e]() {
+        return _abort.load(std::memory_order_relaxed) || e->abort.load(std::memory_order_relaxed);
+    };
+
+    // Runs one step (by index). Steps pre-marked done (a retry) are skipped.
+    auto run_step = [&](size_t i) {
+        std::string task;
         {
             std::lock_guard<std::mutex> lk(_mx);
-            count = e->run.steps.size();
+            if ( e->run.steps[i].status == "done" )
+                return;
+            e->run.steps[i].status = "running";
+            task = e->run.steps[i].task;
         }
+        std::string result;
+        bool step_error = false;
+        try {
+            result = runner(task, &e->abort);
+        } catch ( const std::exception& ex ) {
+            result = std::string("error: ") + ex.what();
+            step_error = true;
+        }
+        if ( result.rfind("error:", 0) == 0 )
+            step_error = true;
+        {
+            std::lock_guard<std::mutex> lk(_mx);
+            e->run.steps[i].result = result;
+            e->run.steps[i].status = step_error ? "error" : "done";
+        }
+        if ( step_error )
+            had_error.store(true, std::memory_order_relaxed);
+    };
+
+    if ( parallel ) {
+        // Independent steps: a small bounded pool. An error in one step does not
+        // stop the others (unlike serial, where later steps likely depend on it).
+        const size_t pool = std::min<size_t>(3, count);
+        std::atomic<size_t> next{ 0 };
+        std::vector<std::thread> workers;
+        for ( size_t w = 0; w < pool; ++w )
+            workers.emplace_back([&]() {
+                for ( size_t i = next.fetch_add(1); i < count; i = next.fetch_add(1)) {
+                    if ( aborted())
+                        return;
+                    run_step(i);
+                }
+            });
+        for ( auto& t : workers )
+            t.join();
+    } else {
         for ( size_t i = 0; i < count; ++i ) {
-            if ( _abort.load(std::memory_order_relaxed))
+            if ( aborted())
                 break;
-            std::string task;
-            {
-                std::lock_guard<std::mutex> lk(_mx);
-                e->run.steps[i].status = "running";
-                task = e->run.steps[i].task;
-            }
-            std::string result;
-            bool step_error = false;
-            try {
-                result = runner(task, &_abort);
-            } catch ( const std::exception& ex ) {
-                result = std::string("error: ") + ex.what();
-                step_error = true;
-            }
-            if ( result.rfind("error:", 0) == 0 )
-                step_error = true;
-            {
-                std::lock_guard<std::mutex> lk(_mx);
-                e->run.steps[i].result = result;
-                e->run.steps[i].status = step_error ? "error" : "done";
-            }
-            if ( step_error ) { had_error = true; break; }
+            run_step(i);
+            if ( had_error.load(std::memory_order_relaxed))
+                break; // serial: later steps likely build on this one
         }
+    }
+
+    WorkflowRun finished;
+    {
         std::lock_guard<std::mutex> lk(_mx);
         e->run.finished_at = now_seconds();
-        e->run.status = _abort.load(std::memory_order_relaxed) ? "cancelled"
-                      : ( had_error ? "error" : "done" );
-    });
+        e->run.status = aborted() ? "cancelled"
+                      : ( had_error.load(std::memory_order_relaxed) ? "error" : "done" );
+        finished = e->run;
+    }
+    // Completion notification. The lock is held during invocation so that
+    // set_on_finish(nullptr) synchronises with in-flight callbacks.
+    {
+        std::lock_guard<std::mutex> lk(_cb_mx);
+        if ( _on_finish )
+            _on_finish(finished);
+    }
+}
 
-    return id;
+bool WorkflowManager::cancel(int id) {
+    std::lock_guard<std::mutex> lk(_mx);
+    for ( auto& e : _entries ) {
+        if ( e->run.id != id )
+            continue;
+        if ( e->run.status != "running" )
+            return false;
+        e->abort.store(true, std::memory_order_relaxed);
+        return true;
+    }
+    return false;
+}
+
+int WorkflowManager::retry(int id, runner_fn runner) {
+    // Copy the source run under the lock, then relaunch outside it.
+    std::string name;
+    std::vector<WorkflowStep> steps;
+    bool parallel = false;
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        bool found = false;
+        for ( auto& e : _entries ) {
+            if ( e->run.id != id )
+                continue;
+            if ( e->run.status == "running" )
+                return -1;
+            name = e->run.name;
+            steps = e->run.steps;
+            parallel = e->run.parallel;
+            found = true;
+            break;
+        }
+        if ( !found )
+            return -1;
+    }
+    bool anything_left = false;
+    for ( auto& s : steps ) {
+        if ( s.status != "done" ) {
+            s.status = "pending"; // error/cancelled/pending: run again
+            s.result.clear();
+            anything_left = true;
+        }
+    }
+    if ( !anything_left )
+        return -1; // every step already succeeded
+
+    auto entry = std::make_unique<Entry>();
+    int nid = _next_id.fetch_add(1);
+    entry->run.id = nid;
+    entry->run.name = name;
+    entry->run.parallel = parallel;
+    entry->run.started_at = now_seconds();
+    entry->run.steps = std::move(steps); // done steps keep results; run_entry skips them
+
+    Entry* e = entry.get();
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        _entries.push_back(std::move(entry));
+    }
+    e->thread = std::thread([this, e, runner]() { run_entry(e, runner); });
+    return nid;
+}
+
+void WorkflowManager::set_on_finish(std::function<void(const WorkflowRun&)> cb) {
+    std::lock_guard<std::mutex> lk(_cb_mx);
+    _on_finish = std::move(cb);
 }
 
 std::vector<WorkflowRun> WorkflowManager::snapshot() const {
@@ -202,9 +318,12 @@ void WorkflowManager::shutdown() {
     std::vector<std::thread> threads;
     {
         std::lock_guard<std::mutex> lk(_mx);
-        for ( auto& e : _entries )
+        for ( auto& e : _entries ) {
+            // The runner only sees the per-run flag, so cancel each run too.
+            e->abort.store(true, std::memory_order_relaxed);
             if ( e->thread.joinable())
                 threads.push_back(std::move(e->thread));
+        }
     }
     for ( auto& t : threads )
         if ( t.joinable())
