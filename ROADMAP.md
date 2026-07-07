@@ -243,13 +243,13 @@ Still open:
 - **more providers** (enough, not every one) — the one open-ended item; the
   current set (OpenAI, Ollama, Anthropic, Moonshot, OpenRouter, Kimi, Claude)
   covers real use.
-- **Security hardening** (from an external audit): `/export` now stays inside
-  home/cwd and CI runs the test suite (done). Open, pending a policy call:
-  project-local `./.mcp.json` auto-spawns its `command` binaries at startup
-  (untrusted-repo risk), and `fetch_url` has no host filtering (SSRF to
-  metadata/localhost). Most other audit items were false positives or by-design
-  (allowlist-based `classify_safe`, whole-exchange `undo_last`, caught tool
-  exceptions).
+- **Security hardening** (from an external audit) — **done**: `/export` stays
+  inside home/cwd; CI runs the test suite; a project `./.mcp.json` is untrusted
+  and its servers need per-server confirmation before spawning; `fetch_url`
+  flags link-local / cloud-metadata targets for confirmation (SSRF guard, while
+  localhost/dev stays frictionless); the version comes from one header. Most
+  other audit items were false positives or by-design (allowlist `classify_safe`,
+  whole-exchange `undo_last`, caught tool exceptions, delegating `/settings`).
 
 ## Considered / dropped
 

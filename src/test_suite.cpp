@@ -851,6 +851,23 @@ static void test_outline_file() {
     std::filesystem::remove(p);
 }
 
+static void test_fetch_url_ssrf() {
+    std::cout << "fetch_url SSRF guard (danger_reason)" << std::endl;
+    agent::tools::FetchUrl f;
+    check(!f.danger_reason(JSON::Object{ { "url", "http://169.254.169.254/latest/meta-data/" } }).empty(),
+          "metadata IP flagged");
+    check(!f.danger_reason(JSON::Object{ { "url", "http://169.254.1.1/" } }).empty(),
+          "link-local range flagged");
+    check(f.danger_reason(JSON::Object{ { "url", "https://example.com/docs" } }).empty(),
+          "public host not flagged");
+    check(f.danger_reason(JSON::Object{ { "url", "http://localhost:3000/api" } }).empty(),
+          "localhost (dev server) not flagged");
+    check(f.danger_reason(JSON::Object{ { "url", "http://127.0.0.1:8080/" } }).empty(),
+          "loopback not flagged");
+    check(!f.danger_reason(JSON::Object{ { "url", "http://user@169.254.169.254/" } }).empty(),
+          "userinfo prefix still flags the real host");
+}
+
 static void test_commands_catalog() {
     std::cout << "command catalog / help" << std::endl;
     const auto& cat = agent::command_catalog();
@@ -2196,6 +2213,7 @@ int main() {
     test_ultra_keyword();
     test_block_diff();
     test_outline_file();
+    test_fetch_url_ssrf();
     test_commands_catalog();
     test_gitignore();
     test_gitignore_integration();

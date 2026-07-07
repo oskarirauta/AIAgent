@@ -1,8 +1,12 @@
 #include "agent/tools/fetch_url.hpp"
 
 #include <cctype>
+#include <cstdint>
 #include <string>
 #include <vector>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include "common.hpp"
 #include "agent/api/client.hpp"
 #include "agent/signal_handler.hpp"
@@ -17,6 +21,54 @@ constexpr size_t HARD_MAX    = 100000;
 std::string lower(std::string s) {
     for ( char& c : s ) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
+}
+
+// The host portion of an http(s) URL: strip scheme, userinfo, port, [] brackets.
+std::string url_host(const std::string& url) {
+    std::string lo = lower(url);
+    size_t start;
+    if ( lo.rfind("http://", 0) == 0 ) start = 7;
+    else if ( lo.rfind("https://", 0) == 0 ) start = 8;
+    else return "";
+    size_t end = url.find_first_of("/?#", start);
+    std::string auth = url.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    size_t at = auth.find('@');
+    if ( at != std::string::npos ) auth = auth.substr(at + 1);
+    if ( !auth.empty() && auth[0] == '[' ) {                 // IPv6 literal [::1]
+        size_t rb = auth.find(']');
+        return rb == std::string::npos ? auth.substr(1) : auth.substr(1, rb - 1);
+    }
+    size_t colon = auth.find(':');
+    return colon == std::string::npos ? auth : auth.substr(0, colon);
+}
+
+bool addr_link_local(const struct sockaddr* sa) {
+    if ( sa->sa_family == AF_INET ) {
+        uint32_t a = ntohl(reinterpret_cast<const struct sockaddr_in*>(sa)->sin_addr.s_addr);
+        return ( a & 0xFFFF0000u ) == 0xA9FE0000u; // 169.254.0.0/16 (incl. cloud metadata)
+    }
+    if ( sa->sa_family == AF_INET6 ) {
+        const uint8_t* b = reinterpret_cast<const struct sockaddr_in6*>(sa)->sin6_addr.s6_addr;
+        return b[0] == 0xfe && ( b[1] & 0xc0 ) == 0x80; // fe80::/10
+    }
+    return false;
+}
+
+// True if the host is, or resolves to, a link-local address — catches both a
+// literal 169.254.169.254 and an alias like metadata.google.internal.
+bool host_link_local(const std::string& host) {
+    if ( host.empty()) return false;
+    struct addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo* res = nullptr;
+    if ( getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0 || !res )
+        return false;
+    bool ll = false;
+    for ( struct addrinfo* p = res; p; p = p->ai_next )
+        if ( addr_link_local(p->ai_addr)) { ll = true; break; }
+    freeaddrinfo(res);
+    return ll;
 }
 
 // Remove <tag>...</tag> blocks (case-insensitive) — used for script/style whose
@@ -182,6 +234,15 @@ JSON FetchUrl::parameters() const {
         }},
         { "required", JSON::Array{ "url" }}
     };
+}
+
+std::string FetchUrl::danger_reason(const JSON& args) const {
+    std::string url = common::trim_ws(args.contains("url") ? args["url"].to_string() : "");
+    std::string host = url_host(url);
+    if ( host_link_local(host))
+        return "`" + host + "` resolves to a link-local / cloud-metadata address — "
+               "this is a common SSRF target; only allow if you meant to reach it";
+    return "";
 }
 
 std::string FetchUrl::execute(const JSON& args) {

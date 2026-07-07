@@ -22,6 +22,10 @@ public:
                "page found via web_search. Only http:// and https:// URLs are allowed.";
     }
     JSON parameters() const override;
+    // A URL resolving to a link-local / cloud-metadata address (169.254.0.0/16,
+    // fe80::/10) is flagged dangerous so it needs confirmation — an SSRF guard.
+    // localhost / private ranges are allowed (dev servers). Insecure mode skips it.
+    std::string danger_reason(const JSON& args) const override;
     std::string execute(const JSON& args) override;
 };
 
