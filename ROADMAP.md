@@ -255,8 +255,11 @@ Still open:
   5. ✅ `/model` opens a picker of common models for the provider (curated + the
      active model; typing still reaches anything else).
   6. ✅ `/effort` (and `/thinking`) as a picker menu.
-  Still open (polish): action keys in the list menu (queue drop, workflow
-  cancel/retry), a mini toggle for on/off commands, and a live model-list fetch.
+  ✅ Also done: list-menu action keys (`/queue` drop, `/workflows` cancel/retry),
+  mini pickers for the toggle/enum settings (`/tools` `/stream` `/strict` `/plan`
+  `/bell`), word-wrapped scrollable detail view, and theme-aware menu colours.
+  Still open (minor): a live model-list fetch (curated list ships now).
+- **`/bell` setting** — ✅ done (never|question|attention|always).
 - **UI polish**: `/paste <n>` to expand a collapsed paste block (settable paste
   thresholds already shipped as the `paste_preview` setting).
 - **more providers** (enough, not every one) — the one open-ended item; the
