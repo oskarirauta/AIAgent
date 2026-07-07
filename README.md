@@ -59,6 +59,13 @@ provider.claude.model: claude-opus-4-8
 # For plain API-key providers (openai / anthropic / moonshot / openrouter)
 # api_url: https://api.openai.com/v1
 # api_key: sk-your-key-here
+
+# Extend the command-safety lists (comma-separated). tools_safe commands run
+# without confirmation (read-only tools of your own, e.g. jq); tools_danger
+# programs always warn first. Danger wins if a name is on both lists, and
+# wrappers (env/timeout/xargs/…) cannot hide a listed program.
+# tools_safe: jq, rg
+# tools_danger: deploy, terraform
 ```
 
 The API key for a plain key provider can be given three ways (in this order of

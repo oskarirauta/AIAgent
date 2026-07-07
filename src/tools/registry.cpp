@@ -163,7 +163,26 @@ const std::vector<DangerRule>& danger_rules() {
     return rules;
 }
 
+// User-config extensions to the built-in lists (see set_extra_safe/_danger).
+// Function-local statics avoid initialisation-order issues.
+std::vector<std::string>& extra_safe_list() {
+    static std::vector<std::string> v;
+    return v;
+}
+std::vector<std::string>& extra_danger_list() {
+    static std::vector<std::string> v;
+    return v;
+}
+
 } // namespace
+
+void Registry::set_extra_safe(const std::vector<std::string>& cmds) {
+    extra_safe_list() = cmds;
+}
+
+void Registry::set_extra_danger(const std::vector<std::string>& cmds) {
+    extra_danger_list() = cmds;
+}
 
 std::string Registry::classify_danger(const std::string& command) {
     std::vector<std::string> tokens = tokenize(command);
@@ -227,6 +246,12 @@ std::string Registry::classify_danger(const std::string& command) {
             if ( tokens[i].rfind(p, 0) == 0 )
                 return "touches a sensitive system path (" + p + "…)";
     }
+
+    // User-config danger additions (tools_danger) — checked on the REAL program,
+    // i.e. after leading wrappers were stepped over above.
+    for ( const auto& c : extra_danger_list())
+        if ( program == basename_of(c))
+            return "flagged as dangerous in your config (tools_danger)";
 
     for ( const auto& rule : danger_rules()) {
         if ( rule.program != program )
@@ -301,6 +326,14 @@ static bool classify_safe_simple(const std::string& command) {
     if ( tokens.empty())
         return false;
     std::string prog = basename_of(tokens[0]);
+
+    // User-config additions (tools_safe / tools_danger). Danger wins over safe.
+    for ( const auto& c : extra_danger_list())
+        if ( prog == basename_of(c))
+            return false;
+    for ( const auto& c : extra_safe_list())
+        if ( prog == basename_of(c))
+            return true;
 
     // Read-only commands with no side effects.
     static const std::vector<std::string> safe = {

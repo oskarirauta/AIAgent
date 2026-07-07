@@ -21,6 +21,19 @@ static bool parse_bool(const std::string& value) {
     return v == "true" || v == "1" || v == "yes" || v == "on";
 }
 
+// A comma-separated list value ("a, b, c") — trimmed, empties dropped.
+static std::vector<std::string> parse_list(const std::string& value) {
+    std::vector<std::string> out;
+    std::istringstream is(value);
+    std::string item;
+    while ( std::getline(is, item, ',')) {
+        item = common::trim_ws(item);
+        if ( !item.empty())
+            out.push_back(item);
+    }
+    return out;
+}
+
 // Parse an unsigned integer setting, keeping the current value and warning on
 // malformed input instead of letting std::stoull throw and crash the program.
 static size_t parse_size(const std::string& value, size_t current, const std::string& key) {
@@ -220,6 +233,8 @@ void Config::load(const std::string& path) {
         else if ( key == "auto_compact" ) auto_compact = parse_bool(value);
         else if ( key == "auto_compact_pct" ) auto_compact_pct = parse_size(value, auto_compact_pct, key);
         else if ( key == "workflow_autoresume" ) workflow_autoresume = parse_bool(value);
+        else if ( key == "tools_safe" ) tools_safe = parse_list(value);
+        else if ( key == "tools_danger" ) tools_danger = parse_list(value);
         else if ( key == "advisor" ) advisor = parse_bool(value);
         else if ( key == "advisor_model" ) advisor_model = value;
         else if ( key == "budget_tokens" ) budget_tokens = parse_size(value, budget_tokens, key);

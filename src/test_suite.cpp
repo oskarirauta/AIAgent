@@ -1480,6 +1480,47 @@ static void test_config_booleans() {
     std::filesystem::remove(p);
 }
 
+static void test_extra_command_lists() {
+    std::cout << "config-extensible safe/danger command lists" << std::endl;
+    using agent::tools::Registry;
+
+    // Config parses the comma-separated lists.
+    std::string p = "/tmp/ai_lists_cfg";
+    { std::ofstream o(p); o << "tools_safe: mytool, jq\ntools_danger: deploy , terraform\n"; }
+    agent::Config c;
+    c.load(p);
+    check(c.tools_safe.size() == 2 && c.tools_safe[0] == "mytool", "tools_safe parsed");
+    check(c.tools_danger.size() == 2 && c.tools_danger[1] == "terraform", "tools_danger parsed");
+    std::filesystem::remove(p);
+
+    Registry::set_extra_safe(c.tools_safe);
+    Registry::set_extra_danger(c.tools_danger);
+
+    check(Registry::classify_danger("deploy production").rfind("flagged as dangerous", 0) == 0,
+          "extra danger command flagged");
+    check(!Registry::classify_danger("env FOO=1 terraform apply").empty(),
+          "wrapped extra danger command flagged");
+    check(Registry::classify_danger("mytool --version").empty(), "extra safe command not flagged as danger");
+    check(Registry::classify_danger("ls -la").empty(), "builtin behaviour unchanged");
+
+    // The safe side: an extra-safe command skips confirmation (classify_safe),
+    // also inside pipes/chains; unknown commands still don't.
+    check(Registry::classify_safe("mytool --check"), "extra safe command classified safe");
+    check(Registry::classify_safe("cat data.json | jq .name"), "extra safe command safe in a pipe");
+    check(!Registry::classify_safe("othertool --check"), "unlisted command still not safe");
+
+    // Danger wins if a name is on both lists.
+    Registry::set_extra_safe({ "deploy" });
+    check(!Registry::classify_danger("deploy now").empty(), "danger wins over safe");
+    check(!Registry::classify_safe("deploy now"), "danger-listed command never classified safe");
+
+    // Reset so later tests see the defaults.
+    Registry::set_extra_safe({});
+    Registry::set_extra_danger({});
+    check(Registry::classify_danger("deploy production").empty(), "reset restores defaults");
+    check(!Registry::classify_safe("mytool --check"), "reset removes extra safe entries");
+}
+
 static void test_safe_commands() {
     std::cout << "safe command list" << std::endl;
     using agent::tools::Registry;
@@ -1572,6 +1613,7 @@ int main() {
     test_danger_list();
     test_list_directory();
     test_config_booleans();
+    test_extra_command_lists();
     test_safe_commands();
 
     std::cout << "\n" << passed << " passed, " << failed << " failed" << std::endl;

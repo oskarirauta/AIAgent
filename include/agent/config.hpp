@@ -3,6 +3,7 @@
 #include <string>
 #include <optional>
 #include <map>
+#include <vector>
 #include "usage.hpp"
 #include "json.hpp"
 
@@ -39,6 +40,12 @@ public:
     bool auto_compact = false;  // summarise history automatically when it nears the context budget
     size_t auto_compact_pct = 80; // trigger threshold as a percentage of context_budget()
     bool workflow_autoresume = false; // a finished workflow starts a turn by itself (bounded; see repl)
+
+    // Config-extensible command safety lists (config file only, never persisted
+    // state and never project files): extra confirmation-free read-only commands,
+    // and extra programs that always warn. Danger wins when a name is on both.
+    std::vector<std::string> tools_safe;
+    std::vector<std::string> tools_danger;
     bool advisor = false;       // expose a tool letting the model consult a stronger advisor model (claude only)
     std::string advisor_model = "claude-opus-4-8"; // the model consulted by the advisor tool
 

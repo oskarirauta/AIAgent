@@ -59,6 +59,13 @@ public:
     // testing.
     static std::string classify_danger(const std::string& command);
 
+    // Config-extensible command lists, set once at startup from the USER's config
+    // file (never from project files, which the model itself can write): extra
+    // read-only commands that skip confirmation, and extra programs that always
+    // warn. A program on both lists is treated as dangerous.
+    static void set_extra_safe(const std::vector<std::string>& cmds);
+    static void set_extra_danger(const std::vector<std::string>& cmds);
+
     // Classify a file-write target path: writing into a system directory or
     // outside the working directory is risky. Returns a reason or empty string.
     static std::string classify_path_danger(const std::string& path);

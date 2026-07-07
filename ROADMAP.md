@@ -90,6 +90,15 @@ each list is roughly the current priority order.
 - **Autocomplete**: Tab in the inline REPL completes a leading slash command or a
   file-path token — unique match completes (dirs get `/`, else a space), a shared
   longer prefix extends, and an ambiguous prefix lists the candidates.
+- **Config-extensible danger/safe command lists**: `tools_safe:` / `tools_danger:`
+  config keys (comma-separated). Extra safe commands skip confirmation (pipes and
+  chains included); extra danger programs always warn — checked on the real
+  program (wrapper unwrapping applies), danger wins if a name is on both lists.
+  Config file only, never persisted state or project files.
+- **`/workflows` enhancements**: parallel steps, per-run cancel + retry (succeeded
+  steps kept), completion notice (bell + ●-line), and opt-in autoresume — a
+  finished workflow starts a turn by itself via the normal pending queue, bounded
+  to 2 consecutive auto-turns per real user message.
 - **Context pin (`/pin`)**: `/pin <text>` (or `/pin` alone to pin the last reply)
   keeps a note in the system prompt, so it stays in context every turn **and
   survives `/compact` and auto-compact** verbatim (compaction rebuilds the system
@@ -191,10 +200,6 @@ each list is roughly the current priority order.
 Roughly in priority order for real coding use. Kept only what is genuinely useful
 *and* buildable well; the rest is dropped below.
 
-- **Config-extensible danger/safe command lists**: let a project add its own
-  safe/danger rules instead of the hard-coded lists only.
-- **`/workflows` enhancements**: parallel steps, push notifications on completion,
-  and cancel/retry of a run.
 - **UI polish**: settable paste thresholds in `/settings`, interactive paste-block
   expand/collapse.
 - **skills** (power-user): reusable, named instruction sets beyond `AGENTS.md`.

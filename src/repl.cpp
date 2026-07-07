@@ -49,6 +49,10 @@ Repl::Repl(const Config& config)
     else
         logger::info["agent"] << "tools disabled" << std::endl;
 
+    // User-config extensions to the command safety lists (config file only).
+    tools::Registry::set_extra_safe(_config.tools_safe);
+    tools::Registry::set_extra_danger(_config.tools_danger);
+
     // Re-apply a persisted thinking/effort level (from the previous session) over
     // whatever the provider defaulted to.
     if ( _provider && !_config.thinking.empty())
