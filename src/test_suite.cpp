@@ -2103,6 +2103,16 @@ static void test_danger_list() {
     check(Registry::classify_danger("echo hello").empty(), "echo not flagged");
     check(Registry::classify_danger("cat file.txt").empty(), "cat not flagged");
 
+    // Wrapper-skip must see the REAL command behind an env assignment whose value
+    // contains a '/', and behind a numeric timeout, and must not mistake a program
+    // named from [smhd] letters (sh/ssh) for a duration to skip.
+    check(!Registry::classify_danger("env PATH=/opt/bin rm -rf /tmp/x").empty(),
+          "env with a slashed value doesn't hide rm -rf");
+    check(!Registry::classify_danger("env FOO=/a/b BAR=/c timeout 5 rm -rf /tmp/x").empty(),
+          "multiple slashed assignments + duration still reach rm");
+    check(!Registry::classify_danger("nice rm -rf /tmp/x").empty(), "nice wrapper doesn't hide rm");
+    check(Registry::classify_danger("timeout 5 ls -la").empty(), "timeout ls still not flagged");
+
     // Path danger (write_file). Tests run with cwd under /usr/src, so a plain
     // in-project path must NOT be flagged even though /usr is a system prefix.
     check(!Registry::classify_path_danger("/etc/passwd").empty(), "write to /etc flagged");

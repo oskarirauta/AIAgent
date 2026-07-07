@@ -9,6 +9,7 @@
 #include <filesystem>
 #include "throws.hpp"
 #include "logger.hpp"
+#include <cctype>
 #include "common.hpp"
 #include "agent/text_utils.hpp"
 #include "agent/tools/read_file.hpp"
@@ -213,15 +214,33 @@ std::string Registry::classify_danger(const std::string& command) {
     static const std::set<std::string> wrappers = {
         "env", "nice", "ionice", "nohup", "time", "timeout", "stdbuf", "xargs", "setsid"
     };
+    // An env assignment is `NAME=value` where NAME is an identifier — the value
+    // may contain anything (incl. '/'), so `env PATH=/opt/bin rm -rf ~` must not
+    // stop the skip at the assignment and mistake the value's basename for the
+    // program, letting the real `rm -rf` slip past the danger rules.
+    auto is_assign = [](const std::string& t) {
+        size_t eq = t.find('=');
+        if ( eq == 0 || eq == std::string::npos )
+            return false;
+        for ( size_t i = 0; i < eq; ++i ) {
+            char ch = t[i];
+            if ( !( std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' ))
+                return false;
+        }
+        return true;
+    };
     size_t first = 0;
     while ( first < tokens.size() && wrappers.count(basename_of(tokens[first]))) {
         ++first;
         while ( first < tokens.size()) {
             const std::string& t = tokens[first];
-            bool assign = t.find('=') != std::string::npos && t.find('/') == std::string::npos;
             bool flag = !t.empty() && t[0] == '-';
-            bool num = !t.empty() && t.find_first_not_of("0123456789.smhd") == std::string::npos;
-            if ( assign || flag || num ) ++first; else break;
+            // A numeric duration must contain a digit — otherwise program names
+            // made only of [smhd] (sh, ssh) are wrongly skipped as durations.
+            bool num = !t.empty() &&
+                       t.find_first_of("0123456789") != std::string::npos &&
+                       t.find_first_not_of("0123456789.smhd") == std::string::npos;
+            if ( is_assign(t) || flag || num ) ++first; else break;
         }
     }
     if ( first >= tokens.size())
