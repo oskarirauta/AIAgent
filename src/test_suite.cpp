@@ -1220,8 +1220,13 @@ static void test_run_command_robustness() {
     std::string ok = rc.execute(JSON::Object{{ "command", "true" }});
     check(ok.find("no output") != std::string::npos, "empty success reported clearly");
 
-    std::string big = rc.execute(JSON::Object{{ "command", "yes aaaaaaaaaa | head -n 20000" }});
-    check(big.find("truncated") != std::string::npos, "large output is truncated");
+    // Over-long output keeps the head AND the tail (build errors live at the end).
+    std::string big = rc.execute(JSON::Object{{ "command",
+        "i=0; while [ $i -lt 20000 ]; do echo \"line $i padding padding\"; i=$((i+1)); done" }});
+    check(big.find("KB omitted") != std::string::npos, "large output is trimmed with a marker");
+    check(big.find("line 0 padding") != std::string::npos, "head of the output kept");
+    check(big.find("line 19999 padding") != std::string::npos, "tail of the output kept");
+    check(big.size() < 120 * 1024, "trimmed output respects the cap");
 
     // Ctrl-C (turn_abort) interrupts a hung command instead of blocking forever.
     agent::turn_abort.store(false);

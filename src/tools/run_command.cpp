@@ -13,7 +13,29 @@ namespace {
 // A runaway command must neither hang the agent nor flood the model's context.
 // A user Ctrl-C (agent::turn_abort) also interrupts the command.
 constexpr int    COMMAND_TIMEOUT_MS = 120000;
-constexpr size_t MAX_OUTPUT_BYTES   = 100 * 1024;
+constexpr size_t MAX_OUTPUT_BYTES   = 100 * 1024;      // what the model receives
+constexpr size_t CAPTURE_GUARD_BYTES = 2 * 1024 * 1024; // hard cap at the process
+constexpr size_t HEAD_BYTES         = 16 * 1024;        // kept from the start
+constexpr size_t TAIL_BYTES         = 80 * 1024;        // kept from the end
+
+// Keep the head AND the tail of over-long output. Builds print thousands of
+// warnings before the one error that matters, and test runners put their
+// summary last — a keep-first-N cap loses exactly the part the model needs.
+std::string head_tail_trim(const std::string& s) {
+    if ( s.size() <= MAX_OUTPUT_BYTES )
+        return s;
+    std::string head = s.substr(0, HEAD_BYTES);
+    size_t nl = head.rfind('\n');
+    if ( nl != std::string::npos )
+        head.resize(nl + 1);
+    std::string tail = s.substr(s.size() - TAIL_BYTES);
+    nl = tail.find('\n');
+    if ( nl != std::string::npos )
+        tail.erase(0, nl + 1);
+    size_t omitted = s.size() - head.size() - tail.size();
+    return head + "\n[... " + std::to_string(omitted / 1024) +
+           " KB omitted — head and tail of the output kept ...]\n\n" + tail;
+}
 
 } // namespace
 
@@ -92,7 +114,7 @@ std::string RunCommand::execute(const JSON& args) {
         process_t proc("/bin/sh", { "-c", shell_cmd });
         proc.timeout(timeout_ms)
             .abort_with(&agent::turn_abort)
-            .max_output(MAX_OUTPUT_BYTES);
+            .max_output(CAPTURE_GUARD_BYTES); // trimmed head+tail below
 
         std::string out = proc[STREAM_OUT];   // first read drains under the bounds above
         std::string err = proc[STREAM_ERR];
@@ -106,6 +128,7 @@ std::string RunCommand::execute(const JSON& args) {
             if ( !result.empty()) result += "\n";
             result += "stderr: " + err;
         }
+        result = head_tail_trim(result);
 
         if ( aborted ) {
             if ( !result.empty()) result += "\n";
@@ -120,7 +143,8 @@ std::string RunCommand::execute(const JSON& args) {
 
         if ( truncated ) {
             if ( !result.empty()) result += "\n";
-            result += "(output truncated at " + std::to_string(MAX_OUTPUT_BYTES / 1024) + " KB)";
+            result += "(output exceeded the " + std::to_string(CAPTURE_GUARD_BYTES / ( 1024 * 1024 )) +
+                      " MB capture guard; the very middle may be missing beyond the trim above)";
         }
 
         // A bare empty string is ambiguous to the model — report the outcome.
