@@ -61,11 +61,25 @@ public:
     // user message's content, or empty if there was nothing to undo.
     std::string undo_last();
 
+    // Elide the body of a tool result made stale by a LATER result for the same
+    // target (same file path for read/write/edit/outline; same run_command
+    // string), keeping the pairing intact. A pure transform on a message list —
+    // applied per request after trimming. The newest result for each target is
+    // kept in full.
+    static std::vector<Message> supersede_stale_tools(std::vector<Message> msgs);
+
     void save(const std::string& path) const;
     void load(const std::string& path);
 
 private:
     std::vector<Message> _messages;
+
+    // Hysteresis trim boundary: the index of the first non-system message to
+    // include. within_token_budget pins it so the request PREFIX stays byte-
+    // identical across turns (prompt-cache friendly) until the budget is truly
+    // exceeded again. `mutable` because it is a cache, not logical state. Reset
+    // by clear(). 0 means "no cut pinned yet".
+    mutable size_t _trim_start = 0;
 };
 
 } // namespace agent

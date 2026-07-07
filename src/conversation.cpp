@@ -59,11 +59,14 @@ void Conversation::add_tool_result(const std::string& tool_call_id, const std::s
 
 void Conversation::clear() {
     _messages.clear();
+    _trim_start = 0; // the pinned cut refers to the old history; drop it
 }
 
 std::vector<Message> Conversation::within_token_budget(size_t max_tokens) const {
-    if ( max_tokens == 0 || _messages.empty())
+    if ( max_tokens == 0 || _messages.empty()) {
+        _trim_start = 0;
         return _messages;
+    }
 
     auto est = [](const Message& m) -> size_t {
         size_t chars = m.content.size();
@@ -74,26 +77,48 @@ std::vector<Message> Conversation::within_token_budget(size_t max_tokens) const 
 
     std::vector<Message> head;
     size_t budget = max_tokens;
-    size_t start = 0;
+    size_t first = 0;
     if ( _messages[0].role == Role::SYSTEM ) {
         head.push_back(_messages[0]);
         size_t s = est(_messages[0]);
         budget = ( s < budget ) ? budget - s : 0;
-        start = 1;
+        first = 1;
     }
 
-    // Accumulate from the newest backwards until the budget is exhausted (always
-    // keep at least the most recent message so a turn can still be sent).
-    std::vector<Message> tail;
-    size_t used = 0;
-    for ( size_t i = _messages.size(); i-- > start; ) {
-        size_t s = est(_messages[i]);
-        if ( used + s > budget && !tail.empty())
-            break;
-        used += s;
-        tail.push_back(_messages[i]);
+    auto region_size = [&](size_t from) {
+        size_t u = 0;
+        for ( size_t i = from; i < _messages.size(); ++i )
+            u += est(_messages[i]);
+        return u;
+    };
+
+    // Keep the pinned cut valid against append/undo/compact.
+    if ( _trim_start < first ) _trim_start = first;
+    if ( _trim_start > _messages.size()) _trim_start = _messages.size();
+
+    // Hysteresis: only move the cut when it is actually necessary.
+    //  - If the WHOLE history fits, un-pin (include everything).
+    //  - If the pinned region has grown past the budget, re-cut to ~70% of the
+    //    budget and re-pin — leaving headroom so the cut (and thus the request
+    //    prefix) stays stable for many turns, giving prompt-cache hits.
+    //  - Otherwise reuse the pinned cut unchanged.
+    if ( region_size(first) <= budget ) {
+        _trim_start = first;
+    } else if ( region_size(_trim_start) > budget ) {
+        size_t target = budget * 7 / 10;
+        size_t used = 0;
+        size_t newstart = _messages.size();
+        for ( size_t i = _messages.size(); i-- > first; ) {
+            size_t s = est(_messages[i]);
+            if ( used + s > target && newstart < _messages.size())
+                break; // keep at least the most recent message
+            used += s;
+            newstart = i;
+        }
+        _trim_start = newstart;
     }
-    std::reverse(tail.begin(), tail.end());
+
+    std::vector<Message> tail(_messages.begin() + _trim_start, _messages.end());
 
     // A tool result whose assistant tool_call was trimmed away would be orphaned.
     while ( !tail.empty() && tail.front().role == Role::TOOL )

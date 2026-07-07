@@ -1296,6 +1296,44 @@ static void test_context_budget() {
     check(tiny.size() >= 2 && tiny.front().role == agent::Role::SYSTEM, "tiny budget keeps system + latest");
 }
 
+static void test_trim_hysteresis() {
+    std::cout << "cache-stable trimming (hysteresis)" << std::endl;
+    agent::Conversation c;
+    c.set_system(std::string(40, 's'));
+    for ( int i = 0; i < 12; ++i )
+        c.add_user(std::string(400, 'u')); // ~108 tokens each
+
+    // First over-budget call cuts to ~70% and pins. The oldest kept message is
+    // the pin boundary.
+    const size_t budget = 500;
+    auto a = c.within_token_budget(budget);
+    std::string oldest_a = a.size() > 1 ? a[1].content : "";
+    check(a.size() < c.messages().size() + 0, "trimmed under budget");
+
+    // Adding one message that still fits under budget must NOT move the cut —
+    // the request prefix stays byte-identical (the win for prompt caching).
+    c.add_user(std::string(400, 'u'));
+    auto b = c.within_token_budget(budget);
+    std::string oldest_b = b.size() > 1 ? b[1].content : "";
+    check(oldest_a == oldest_b, "cut stays pinned as history grows within headroom");
+
+    // Push well past the budget: the cut must move forward (re-cut).
+    for ( int i = 0; i < 6; ++i )
+        c.add_user(std::string(400, 'u'));
+    auto d = c.within_token_budget(budget);
+    check(d.size() < b.size() + 8, "re-cut keeps the sent set bounded");
+    // Every returned set stays within budget-ish and keeps system + newest.
+    check(d.front().role == agent::Role::SYSTEM && d.back().content == std::string(400, 'u'),
+          "system + newest always kept");
+
+    // If the whole thing fits, the cut un-pins (everything included).
+    agent::Conversation small;
+    small.set_system("s");
+    small.add_user("one");
+    small.add_user("two");
+    check(small.within_token_budget(100000).size() == 3, "un-pins when the full history fits");
+}
+
 static void test_settings_persistence() {
     std::cout << "settings persistence" << std::endl;
     std::string home = "/tmp/ai_agent_persist_test";
@@ -1880,6 +1918,7 @@ int main() {
     test_conversation_save_load();
     test_conversation_undo();
     test_context_budget();
+    test_trim_hysteresis();
     test_settings_persistence();
     test_context_auto();
     test_conversation_corrupt();
