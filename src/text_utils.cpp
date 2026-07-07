@@ -1,11 +1,31 @@
 #include "agent/text_utils.hpp"
 
 #include <cstring>
+#include <cctype>
 #include <vector>
 #include <sstream>
 #include <algorithm>
 
 namespace agent {
+
+bool has_ultra_keyword(const std::string& s) {
+    std::string lo;
+    lo.reserve(s.size());
+    for ( unsigned char c : s ) lo += static_cast<char>(std::tolower(c));
+    for ( const char* kw : { "ultracode", "ultrathink" }) {
+        std::string k = kw;
+        size_t pos = 0;
+        while (( pos = lo.find(k, pos)) != std::string::npos ) {
+            bool lb = ( pos == 0 ) || !std::isalnum(static_cast<unsigned char>(lo[pos - 1]));
+            size_t end = pos + k.size();
+            bool rb = ( end >= lo.size()) || !std::isalnum(static_cast<unsigned char>(lo[end]));
+            if ( lb && rb )
+                return true;
+            pos = end;
+        }
+    }
+    return false;
+}
 
 std::string block_diff(const std::string& old_text, const std::string& new_text,
                        const std::string& from_label, const std::string& to_label) {

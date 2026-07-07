@@ -591,6 +591,38 @@ void InlineRepl::erase_live() {
     _live_lines = 0;
 }
 
+// Wrap any whole-word "ultracode"/"ultrathink" occurrence in a bold magenta so the
+// user notices the effort/budget-raising marker. Operates on already-rendered line
+// text; the colour codes carry zero display width, so cursor maths are unaffected.
+std::string InlineRepl::highlight_keywords(const std::string& body) const {
+    static const std::vector<std::string> kws = { "ultracode", "ultrathink" };
+    std::string lo;
+    lo.reserve(body.size());
+    for ( unsigned char c : body ) lo += static_cast<char>(std::tolower(c));
+
+    const std::string colour = "\033[1;35m"; // bold magenta — a deliberate budget cue
+    std::string out;
+    size_t i = 0;
+    while ( i < body.size()) {
+        bool hit = false;
+        for ( const auto& kw : kws ) {
+            if ( i + kw.size() <= body.size() && lo.compare(i, kw.size(), kw) == 0 ) {
+                bool lb = ( i == 0 ) || !std::isalnum(static_cast<unsigned char>(body[i - 1]));
+                size_t end = i + kw.size();
+                bool rb = ( end >= body.size()) || !std::isalnum(static_cast<unsigned char>(body[end]));
+                if ( lb && rb ) {
+                    out += colour + body.substr(i, kw.size()) + "\033[0m";
+                    i = end;
+                    hit = true;
+                    break;
+                }
+            }
+        }
+        if ( !hit ) { out += body[i]; ++i; }
+    }
+    return out;
+}
+
 std::vector<std::pair<size_t, size_t>> InlineRepl::wrap_input(int width) const {
     if ( width < 1 ) width = 1;
     std::vector<std::pair<size_t, size_t>> lines;
@@ -808,8 +840,11 @@ void InlineRepl::draw_live() {
         out += pl + "\r\n";                   // transient reasoning preview
     out += "\r\n";                            // blank spacer above the separator
     out += _theme.dim + sep + "\033[0m\r\n";  // separator: transcript | input
+    // The ultracode/ultrathink markers raise Anthropic's effort to max for a turn
+    // (and cost budget), so flag them in a distinct colour where they take effect.
+    bool mark_ultra = ( _config.provider == "claude" || _config.provider == "anthropic" );
     for ( const auto& vl : vlines )
-        out += vl.first + vl.second + "\r\n";
+        out += vl.first + ( mark_ultra ? highlight_keywords(vl.second) : vl.second ) + "\r\n";
     out += _theme.dim + sep + "\033[0m\r\n";  // separator: input | status
     out += status_prestyled ? status : (_theme.dim + status + "\033[0m"); // status
 

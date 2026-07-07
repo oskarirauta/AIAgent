@@ -820,6 +820,23 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
 
     _conversation.add_user(prompt);
 
+    // "ultracode" / "ultrathink": for this one turn, raise the Anthropic thinking
+    // effort to max. The keyword is intentionally kept in the prompt (the model
+    // reacts to it — e.g. by orchestrating a workflow), and the previous effort is
+    // restored afterwards on every exit path via the guard below.
+    bool anthropic_based = ( _config.provider == "claude" || _config.provider == "anthropic" );
+    bool ultra = anthropic_based && _provider && has_ultra_keyword(prompt);
+    std::string saved_effort = _config.thinking;
+    if ( ultra )
+        _provider->apply_provider_options(JSON::Object{ { "thinking", "max" } });
+    struct EffortRestore {
+        providers::Provider* p; bool on; std::string to;
+        ~EffortRestore() {
+            if ( on && p )
+                p->apply_provider_options(JSON::Object{ { "thinking", to.empty() ? "off" : to } });
+        }
+    } effort_restore{ _provider.get(), ultra, saved_effort };
+
     // Whether a dim "thinking" region is currently open in the streamed output.
     // Tracked across tool-loop iterations so the answer after a tool call is not
     // left rendered as dim reasoning.

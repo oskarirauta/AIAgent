@@ -518,6 +518,17 @@ static void test_tasks_tool() {
     check(tool.execute(JSON::Object{}).rfind("error:", 0) == 0, "missing tasks is an error");
 }
 
+static void test_ultra_keyword() {
+    std::cout << "ultracode/ultrathink detection" << std::endl;
+    check(agent::has_ultra_keyword("please ultrathink about this"), "ultrathink detected");
+    check(agent::has_ultra_keyword("do ULTRACODE now"), "case-insensitive");
+    check(agent::has_ultra_keyword("ultracode"), "bare keyword");
+    check(agent::has_ultra_keyword("end with ultrathink"), "at end of string");
+    check(!agent::has_ultra_keyword("just normal text"), "absent");
+    check(!agent::has_ultra_keyword("ultracoder is a person"), "not a substring match (ultracoder)");
+    check(!agent::has_ultra_keyword("superultrathinking"), "whole word only");
+}
+
 static void test_block_diff() {
     std::cout << "block_diff" << std::endl;
     std::string d = agent::block_diff("one\ntwo\nthree\n", "one\nTWO\nthree\n", "a", "b");
@@ -1296,6 +1307,7 @@ int main() {
     test_web_search_parse();
     test_find_symbol();
     test_tasks_tool();
+    test_ultra_keyword();
     test_block_diff();
     test_project_map();
     test_find_references();

@@ -14,4 +14,8 @@ std::string block_diff(const std::string& old_text, const std::string& new_text,
                        const std::string& from_label = "before",
                        const std::string& to_label = "after");
 
+// Whole-word, case-insensitive test for the "ultracode"/"ultrathink" markers,
+// which raise the Anthropic thinking effort to max for a single turn.
+bool has_ultra_keyword(const std::string& s);
+
 } // namespace agent
