@@ -207,6 +207,28 @@ export OPENROUTER_API_KEY=sk-or-...
 
 Models use `vendor/model` slugs. **`openrouter/free`** (the default) auto-routes to whatever free model is currently available — handy for trying it without credits, though free models are small and heavily rate-limited (a `429 Provider returned error` means an upstream free model is throttled — retry, switch model, or add credits for [higher free limits](https://openrouter.ai/docs/api-reference/limits) and cheap paid models). For real coding work, pick a specific model with `-m`.
 
+## Any OpenAI-compatible provider
+
+Most providers today expose an **OpenAI-compatible** endpoint, so they work with
+`provider: openai` and a custom `api_url` — no special support needed. Several
+have a free tier or free trial you can try immediately:
+
+| Provider | `api_url` | Notes |
+|----------|-----------|-------|
+| **Groq** | `https://api.groq.com/openai/v1` | free, very fast (Llama/Mixtral) |
+| **Mistral** | `https://api.mistral.ai/v1` | free tier |
+| **DeepSeek** | `https://api.deepseek.com` | cheap; reasoning models |
+| **Google Gemini** | `https://generativelanguage.googleapis.com/v1beta/openai` | free key from Google AI Studio |
+| **xAI Grok** | `https://api.x.ai/v1` | — |
+| **Together** | `https://api.together.xyz/v1` | free trial credits |
+
+```bash
+./agent -p openai -u https://api.groq.com/openai/v1 -k gsk_... -m llama-3.3-70b-versatile
+```
+
+`/model` fetches the provider's live model list where available (and Ollama's
+locally-installed models), so you can pick from a menu after connecting.
+
 ## Usage
 
 ```bash

@@ -258,13 +258,16 @@ Still open:
   ✅ Also done: list-menu action keys (`/queue` drop, `/workflows` cancel/retry),
   mini pickers for the toggle/enum settings (`/tools` `/stream` `/strict` `/plan`
   `/bell`), word-wrapped scrollable detail view, and theme-aware menu colours.
-  Still open (minor): a live model-list fetch (curated list ships now).
+  ✅ Live model-list fetch: `/model` pulls the provider's real models
+  (Ollama `/api/tags` for local models, OpenAI/Anthropic `/v1/models`), curated
+  fallback otherwise.
 - **`/bell` setting** — ✅ done (never|question|attention|always).
-- **UI polish**: `/paste <n>` to expand a collapsed paste block (settable paste
-  thresholds already shipped as the `paste_preview` setting).
-- **more providers** (enough, not every one) — the one open-ended item; the
-  current set (OpenAI, Ollama, Anthropic, Moonshot, OpenRouter, Kimi, Claude)
-  covers real use.
+- **`/paste [n]`** — ✅ done: review the large pastes sent this session
+  (scrollable, word-wrapped).
+- **more providers** — ✅ effectively covered: any OpenAI-compatible endpoint
+  works via `provider: openai` + `api_url` (Groq/Mistral/DeepSeek/Gemini-compat/
+  xAI/Together, several free) — documented in the README. Native set: OpenAI,
+  Ollama, Anthropic, Moonshot, OpenRouter, Kimi, Claude.
 - **Security hardening** (from an external audit) — **done**: `/export` stays
   inside home/cwd; CI runs the test suite; a project `./.mcp.json` is untrusted
   and its servers need per-server confirmation before spawning; `fetch_url`
