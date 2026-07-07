@@ -35,7 +35,12 @@ protected:
     std::string _thinking_effort;     // low|medium|high|xhigh|max ("" = enabled, default budget)
 
     // Streaming accumulation (reset each turn by stream_reset()).
-    struct StreamBlock { std::string type; std::string id; std::string name; std::string json; };
+    struct StreamBlock {
+        std::string type; std::string id; std::string name; std::string json;
+        std::string thinking;   // thinking text (thinking_delta)
+        std::string signature;  // thinking signature (signature_delta) — required for replay
+        std::string redacted;   // redacted_thinking data (complete at content_block_start)
+    };
     std::string _s_content;
     std::string _s_reasoning;
     std::map<int, StreamBlock> _s_blocks; // by content-block index

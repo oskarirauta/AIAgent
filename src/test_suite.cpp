@@ -186,6 +186,74 @@ static void test_anthropic_request() {
     check(req["messages"][0]["role"].to_string() == "user", "user role");
 }
 
+static void test_thinking_block_replay() {
+    std::cout << "anthropic thinking blocks (capture + replay)" << std::endl;
+    agent::Config cfg; cfg.provider = "anthropic"; cfg.model = "claude-opus-4-8";
+    agent::providers::Anthropic p(cfg);
+    p.apply_provider_options(JSON::Object{ { "thinking", "medium" } });
+
+    // Stream: a thinking block (text + signature), then a tool_use block.
+    p.stream_reset();
+    std::string buf; bool done = false;
+    auto feed = [&](const std::string& data) { p.parse_stream("data: " + data + "\n\n", buf, done); };
+    feed("{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}");
+    feed("{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"let me reason\"}}");
+    feed("{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"SIG123\"}}");
+    feed("{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"read_file\"}}");
+    feed("{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"x\\\"}\"}}");
+    auto r = p.stream_result();
+    check(r.thinking == "let me reason", "thinking text accumulated");
+    check(r.thinking_blocks == JSON::TYPE::ARRAY && r.thinking_blocks.size() == 1, "one thinking block captured");
+    check(r.thinking_blocks[0]["signature"].to_string() == "SIG123", "signature captured");
+    check(r.tool_calls.size() == 1 && r.tool_calls[0].name == "read_file", "tool call still parsed");
+
+    // Replay: an assistant message with tool calls + thinking blocks must start
+    // with the thinking block, verbatim.
+    agent::Conversation conv;
+    conv.set_system("s");
+    conv.add_user("hi");
+    conv.add_assistant("", { { "tu_1", "read_file", "{\"path\":\"x\"}" } }, r.thinking_blocks);
+    conv.add_tool_result("tu_1", "read_file", "content");
+    JSON req = p.build_request(conv, JSON::Array{});
+    JSON msgs = req["messages"];
+    bool replayed = false;
+    for ( size_t i = 0; i < msgs.size(); ++i ) {
+        JSON m = msgs[i];
+        if ( m["role"].to_string() != "assistant" || m["content"] != JSON::TYPE::ARRAY ) continue;
+        JSON c0 = m["content"][0];
+        if ( c0.contains("type") && c0["type"].to_string() == "thinking" ) {
+            replayed = c0["signature"].to_string() == "SIG123" &&
+                       c0["thinking"].to_string() == "let me reason";
+        }
+    }
+    check(replayed, "thinking block replayed first in assistant content");
+
+    // With thinking off, the same history must NOT include thinking blocks.
+    agent::providers::Anthropic p2(cfg);
+    JSON req2 = p2.build_request(conv, JSON::Array{});
+    check(req2.dump_minified().find("SIG123") == std::string::npos, "no replay when thinking is off");
+
+    // redacted_thinking: complete at content_block_start, replayed as-is.
+    p.stream_reset();
+    buf.clear();
+    feed("{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"OPAQUE\"}}");
+    auto r2 = p.stream_result();
+    check(r2.thinking_blocks.size() == 1 && r2.thinking_blocks[0]["data"].to_string() == "OPAQUE",
+          "redacted_thinking captured");
+
+    // Conversation save/load round-trips the blocks.
+    std::string path = "/tmp/ai_thinkconv.json";
+    conv.save(path);
+    agent::Conversation conv2;
+    conv2.load(path);
+    bool kept = false;
+    for ( const auto& m : conv2.messages())
+        if ( m.role == agent::Role::ASSISTANT && m.thinking_blocks.size() == 1 )
+            kept = m.thinking_blocks[0]["signature"].to_string() == "SIG123";
+    check(kept, "thinking blocks survive save/load");
+    std::filesystem::remove(path);
+}
+
 static void test_prompt_caching() {
     std::cout << "prompt caching (anthropic cache_control)" << std::endl;
     JSON tools = JSON::Array{ JSON::Object{
@@ -1334,6 +1402,7 @@ int main() {
     test_openrouter_provider();
     test_ollama_request();
     test_anthropic_request();
+    test_thinking_block_replay();
     test_prompt_caching();
     test_anthropic_role_merge();
     test_kimi_thinking_effort();

@@ -921,7 +921,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         // Don't record a degenerate empty assistant turn (no content, no tool
         // calls) — sending it back next request makes some providers return 400.
         if ( !normalized.empty() || !assistant_calls.empty())
-            _conversation.add_assistant(normalized, assistant_calls);
+            _conversation.add_assistant(normalized, assistant_calls, resp.thinking_blocks);
 
         if ( resp.tool_calls.empty()) {
             // In the streaming path the reasoning and answer already went to the

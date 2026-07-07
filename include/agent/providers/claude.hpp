@@ -36,7 +36,13 @@ public:
     // returned over this channel. Verified against forced computation with the
     // claude-code / interleaved-thinking betas added — none unlock the text. So
     // do not expect a live thinking transcript for Claude the way Kimi provides
-    // one. The signature must still be preserved across tool calls (see build_request).
+    // one. The signature must still be preserved across tool calls (Anthropic::
+    // message_to_json replays the stored thinking blocks verbatim).
+    //
+    // Re-verified 2026-07-07 with the full CLI beta set (claude-code-20250219,
+    // interleaved-thinking-2025-05-14, fine-grained-tool-streaming-2025-05-14)
+    // and a claude-cli User-Agent: the thinking block arrives, but with only a
+    // signature_delta — 0 thinking_delta events. Server-side redaction stands.
     std::vector<std::pair<std::string, std::string>> extra_headers() const override {
         return {
             { "anthropic-version", "2023-06-01" },

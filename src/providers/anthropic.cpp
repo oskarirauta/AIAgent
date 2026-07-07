@@ -66,6 +66,12 @@ JSON Anthropic::message_to_json(const Message& msg) {
     // so the model can correlate tool results with the original tool_use IDs.
     if ( msg.role == agent::Role::ASSISTANT && !msg.tool_calls.empty()) {
         JSON blocks = JSON::Array{};
+        // With extended thinking + tool use the API requires the turn's thinking
+        // blocks (with signatures) to be replayed first, verbatim. Only when
+        // thinking is enabled — sending them with thinking off is an error.
+        if ( _thinking_enabled && msg.thinking_blocks == JSON::TYPE::ARRAY )
+            for ( size_t i = 0; i < msg.thinking_blocks.size(); ++i )
+                blocks.append(msg.thinking_blocks[i]);
         if ( !msg.content.empty()) {
             blocks.append(JSON::Object{
                 { "type", "text" },
@@ -247,6 +253,9 @@ Response Anthropic::parse_response(const JSON& response) {
                 r.message += block["text"].to_string();
             } else if ( type == "thinking" && block.contains("thinking")) {
                 r.thinking += block["thinking"].to_string();
+                r.thinking_blocks.append(block);   // verbatim, with its signature
+            } else if ( type == "redacted_thinking" ) {
+                r.thinking_blocks.append(block);   // opaque; replayed as-is
             } else if ( type == "tool_use" ) {
                 ToolCall tc;
                 if ( block.contains("id"))
@@ -324,6 +333,9 @@ StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffe
                 blk.type = b.contains("type") ? b["type"].to_string() : "";
                 if ( b.contains("id")) blk.id = b["id"].to_string();
                 if ( b.contains("name")) blk.name = b["name"].to_string();
+                // redacted_thinking arrives complete in the start event.
+                if ( blk.type == "redacted_thinking" && b.contains("data"))
+                    blk.redacted = b["data"].to_string();
             } else if ( type == "content_block_delta" && j.contains("index") && j.contains("delta")) {
                 int idx = static_cast<int>(json_long(j["index"]));
                 JSON d = j["delta"];
@@ -335,7 +347,12 @@ StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffe
                 } else if ( dt == "thinking_delta" && d.contains("thinking")) {
                     std::string t = d["thinking"].to_string();
                     _s_reasoning += t;
+                    _s_blocks[idx].thinking += t;
                     out.reasoning += t;
+                } else if ( dt == "signature_delta" && d.contains("signature")) {
+                    // The signature certifies the thinking block; it must be sent
+                    // back verbatim with the block on the next request.
+                    _s_blocks[idx].signature += d["signature"].to_string();
                 } else if ( dt == "input_json_delta" && d.contains("partial_json")) {
                     _s_blocks[idx].json += d["partial_json"].to_string();
                 }
@@ -356,6 +373,20 @@ Response Anthropic::stream_result() {
     r.thinking = _s_reasoning;
     r.input_tokens = _s_input_tokens;
     r.output_tokens = _s_output_tokens;
+    // Reassemble thinking blocks in index order for verbatim replay.
+    for ( const auto& [idx, blk] : _s_blocks ) {
+        if ( blk.type == "thinking" && !blk.signature.empty())
+            r.thinking_blocks.append(JSON::Object{
+                { "type", "thinking" },
+                { "thinking", blk.thinking },
+                { "signature", blk.signature }
+            });
+        else if ( blk.type == "redacted_thinking" && !blk.redacted.empty())
+            r.thinking_blocks.append(JSON::Object{
+                { "type", "redacted_thinking" },
+                { "data", blk.redacted }
+            });
+    }
     for ( const auto& [idx, blk] : _s_blocks ) {
         if ( blk.type != "tool_use" || blk.name.empty())
             continue;

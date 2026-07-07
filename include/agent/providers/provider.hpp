@@ -24,6 +24,10 @@ struct Response {
     bool success = true;
     long input_tokens = 0;   // prompt/context tokens reported by the provider (0 if unknown)
     long output_tokens = 0;  // generated tokens reported by the provider (0 if unknown)
+
+    // Raw Anthropic thinking/redacted_thinking blocks (with signatures), verbatim.
+    // Replayed with the assistant turn when extended thinking + tool use.
+    JSON thinking_blocks = JSON::Array{};
 };
 
 // Visible deltas produced by one streamed chunk. Content and reasoning are

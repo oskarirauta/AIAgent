@@ -44,9 +44,12 @@ void Conversation::add_assistant(const std::string& content) {
     _messages.emplace_back(Role::ASSISTANT, content);
 }
 
-void Conversation::add_assistant(const std::string& content, const std::vector<ToolCall>& tool_calls) {
+void Conversation::add_assistant(const std::string& content, const std::vector<ToolCall>& tool_calls,
+                                 const JSON& thinking_blocks) {
     Message msg(Role::ASSISTANT, content);
     msg.tool_calls = tool_calls;
+    if ( thinking_blocks == JSON::TYPE::ARRAY && thinking_blocks.size() > 0 )
+        msg.thinking_blocks = thinking_blocks;
     _messages.push_back(std::move(msg));
 }
 
@@ -139,6 +142,8 @@ void Conversation::save(const std::string& path) const {
             }
             obj["tool_calls"] = calls;
         }
+        if ( msg.thinking_blocks == JSON::TYPE::ARRAY && msg.thinking_blocks.size() > 0 )
+            obj["thinking_blocks"] = msg.thinking_blocks;
         arr.append(obj);
     }
 
@@ -200,6 +205,8 @@ void Conversation::load(const std::string& path) {
                     msg.tool_calls.push_back(std::move(call));
                 }
             }
+            if ( obj.contains("thinking_blocks") && obj["thinking_blocks"] == JSON::TYPE::ARRAY )
+                msg.thinking_blocks = obj["thinking_blocks"];
             loaded.push_back(msg);
         }
 
