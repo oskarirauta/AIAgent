@@ -61,8 +61,10 @@ private:
     void record_file_change(const std::string& tool, const JSON& args); // pre-run hook
     std::string changes_command(const std::string& args);
     std::string export_transcript(const std::string& path);
-    // Summarise the conversation via one LLM call and replace history with it.
-    std::string compact_history();
+    // Summarise the OLD part of the conversation via one LLM call, keeping the
+    // last `keep_tail` user exchanges verbatim (0 = summarise everything). The
+    // session's tasks/changes are carried into the summary verbatim.
+    std::string compact_history(size_t keep_tail = 2);
 
     // A sink for slow-command progress text (wired to the REPL's status line), so
     // /compact can show a live progress bar while it summarises.

@@ -668,7 +668,7 @@ std::string Repl::unpin_command(const std::string& args) {
     return "removed pin #" + a + " (" + std::to_string(_pins.size()) + " left)";
 }
 
-std::string Repl::compact_history() {
+std::string Repl::compact_history(size_t keep_tail) {
     const auto& msgs = _conversation.messages();
     size_t count = 0;
     for ( const auto& m : msgs )
@@ -676,10 +676,30 @@ std::string Repl::compact_history() {
     if ( count < 4 )
         return "nothing to compact (conversation is already short)";
 
-    // Render the transcript for the summariser.
+    // Rolling compaction: keep the last `keep_tail` user exchanges verbatim and
+    // only summarise what comes before. Find the tail boundary at a user message.
+    size_t n = msgs.size();
+    size_t first_nonsys = ( n > 0 && msgs[0].role == Role::SYSTEM ) ? 1 : 0;
+    size_t tail_start = n;
+    if ( keep_tail > 0 ) {
+        size_t seen = 0;
+        for ( size_t i = n; i-- > first_nonsys; ) {
+            if ( msgs[i].role == Role::USER && ++seen == keep_tail ) { tail_start = i; break; }
+        }
+        if ( seen < keep_tail )
+            tail_start = first_nonsys; // fewer than K exchanges — nothing old to summarise
+    }
+    size_t old_count = ( tail_start > first_nonsys ) ? ( tail_start - first_nonsys ) : 0;
+    if ( old_count < 2 )
+        return "nothing to compact (the recent tail is the whole conversation)";
+
+    // Copy the verbatim tail before we rebuild the history below.
+    std::vector<Message> tail(msgs.begin() + tail_start, msgs.end());
+
+    // Render only the OLD part for the summariser.
     std::string transcript;
-    for ( const auto& m : msgs ) {
-        if ( m.role == Role::SYSTEM ) continue;
+    for ( size_t i = first_nonsys; i < tail_start; ++i ) {
+        const auto& m = msgs[i];
         const char* who = m.role == Role::USER ? "User"
                         : m.role == Role::ASSISTANT ? "Assistant" : "Tool";
         if ( !m.content.empty())
@@ -744,15 +764,39 @@ std::string Repl::compact_history() {
     if ( summary.empty())
         throws << "summarisation returned no content" << std::endl;
 
-    // Replace history with [system, user(summary), assistant(ack)] — a valid
-    // alternating start for every provider on the next turn.
+    // Carry the machine-held session state verbatim (do not trust the LLM summary
+    // to have mentioned it) — the same anchoring trick /pin uses for user notes.
+    std::string state;
+    if ( !_tasks.empty()) {
+        state += "\n\nTask list at this point:\n";
+        for ( const auto& t : _tasks )
+            state += "- [" + t.status + "] " + t.title + "\n";
+    }
+    if ( !_changes.empty()) {
+        state += "\n\nFiles changed this session (already applied):\n";
+        for ( const auto& [path, fc] : _changes )
+            state += "- " + path + ( fc.existed ? "" : " (created)" ) + "\n";
+    }
+
+    // Rebuild: [system, user(summary+state), assistant(ack), …verbatim tail…].
+    // The tail begins at a user message, so alternation stays valid.
     _conversation.clear();
     _conversation.set_system(base_system_prompt());
-    _conversation.add_user("Summary of our conversation so far — use this as context:\n\n" + summary);
+    _conversation.add_user("Summary of the earlier part of our conversation — use this as "
+                           "context; the most recent messages follow verbatim:\n\n" + summary + state);
     _conversation.add_assistant("Understood — I'll continue with that context in mind.");
+    for ( const auto& m : tail ) {
+        if ( m.role == Role::USER )
+            _conversation.add_user(m.content);
+        else if ( m.role == Role::ASSISTANT )
+            _conversation.add_assistant(m.content, m.tool_calls, m.thinking_blocks);
+        else if ( m.role == Role::TOOL )
+            _conversation.add_tool_result(m.tool_call_id.value_or(""), m.name.value_or(""), m.content);
+    }
     save_conversation();
 
-    return "compacted " + std::to_string(count) + " messages into a summary";
+    return "compacted " + std::to_string(old_count) + " older messages into a summary" +
+           ( tail.empty() ? "" : " (kept the last " + std::to_string(tail.size()) + " verbatim)" );
 }
 
 std::string Repl::switch_provider(const std::string& name) {
@@ -1141,7 +1185,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /changes [diff|revert <path|all>]   files the agent changed this session\n"
                "  /export [file]           write the conversation to a Markdown file\n"
                "  /clear (/reset)          clear the conversation history\n"
-               "  /compact                 summarise the history to free up context\n"
+               "  /compact [keep <n>|all]  summarise older history, keeping the last n exchanges verbatim\n"
                "  /settings auto_compact <on|off>   auto-compact when the context nears its budget\n"
                "  /exit, /quit             leave";
     }
@@ -1639,8 +1683,18 @@ std::string Repl::handle_command(const std::string& line) {
     }
 
     if ( cmd == "/compact" ) {
+        size_t keep = 2; // rolling default: keep the last 2 exchanges verbatim
+        std::string a = common::to_lower(common::trim_ws(args));
+        if ( a == "all" || a == "full" )
+            keep = 0;
+        else if ( a.rfind("keep", 0) == 0 ) {
+            try { keep = static_cast<size_t>(std::stoul(common::trim_ws(a.substr(4)))); }
+            catch ( ... ) { return "usage: /compact [keep <n> | all]"; }
+        } else if ( !a.empty()) {
+            return "usage: /compact [keep <n> | all]";
+        }
         try {
-            return compact_history();
+            return compact_history(keep);
         } catch ( const std::exception& e ) {
             return std::string("compact failed: ") + e.what();
         }

@@ -1959,7 +1959,7 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         render_context();
         return;
     }
-    if ( trimmed == "/compact" ) {
+    if ( trimmed == "/compact" || trimmed.rfind("/compact ", 0) == 0 ) {
         // Slow LLM call — run it off-thread with a spinner instead of blocking.
         start_async_command(trimmed, "compacting");
         return;
