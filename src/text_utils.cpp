@@ -4,9 +4,102 @@
 #include <cctype>
 #include <vector>
 #include <sstream>
+#include <fstream>
+#include <filesystem>
 #include <algorithm>
 
 namespace agent {
+
+namespace {
+
+constexpr size_t MENTION_FILE_BYTES  = 64 * 1024;   // per-file cap
+constexpr size_t MENTION_TOTAL_BYTES = 192 * 1024;  // per-message cap across mentions
+
+// Read up to `cap` bytes of a file; returns false if it cannot be opened.
+bool read_capped(const std::string& path, size_t cap, std::string& out, bool& truncated) {
+    std::ifstream ifd(path, std::ios::in | std::ios::binary);
+    if ( !ifd.is_open())
+        return false;
+    out.resize(cap + 1);
+    ifd.read(&out[0], static_cast<std::streamsize>(cap + 1));
+    size_t got = static_cast<size_t>(ifd.gcount());
+    truncated = got > cap;
+    out.resize(std::min(got, cap));
+    if ( truncated ) {
+        // Cut at the last full line so the block ends cleanly.
+        size_t nl = out.rfind('\n');
+        if ( nl != std::string::npos && nl > 0 )
+            out.resize(nl + 1);
+    }
+    return true;
+}
+
+} // namespace
+
+std::string expand_file_mentions(const std::string& text, std::vector<FileMention>* mentions) {
+    std::string out;
+    out.reserve(text.size());
+    size_t total = 0;
+    size_t i = 0;
+    while ( i < text.size()) {
+        char c = text[i];
+        bool at_token_start = ( c == '@' ) &&
+            ( i == 0 || std::isspace(static_cast<unsigned char>(text[i - 1])));
+        if ( !at_token_start ) {
+            out += c;
+            ++i;
+            continue;
+        }
+        // Token runs to the next whitespace.
+        size_t end = i + 1;
+        while ( end < text.size() && !std::isspace(static_cast<unsigned char>(text[end])))
+            ++end;
+        std::string path = text.substr(i + 1, end - ( i + 1 ));
+
+        // Tolerate trailing punctuation: strip until the path exists (or give up).
+        std::error_code ec;
+        auto is_file = [&ec](const std::string& p) {
+            return !p.empty() && std::filesystem::is_regular_file(p, ec);
+        };
+        size_t stripped = 0;
+        while ( !is_file(path) && !path.empty() &&
+                std::string(",.;:!?)]}\"'").find(path.back()) != std::string::npos ) {
+            path.pop_back();
+            ++stripped;
+        }
+
+        std::string content;
+        bool truncated = false;
+        if ( !is_file(path) || total >= MENTION_TOTAL_BYTES ||
+             !read_capped(path, std::min(MENTION_FILE_BYTES, MENTION_TOTAL_BYTES - total),
+                          content, truncated)) {
+            // Not a real mention (or out of budget): leave the token untouched.
+            out.append(text, i, end - i);
+            i = end;
+            continue;
+        }
+        total += content.size();
+
+        size_t lines = static_cast<size_t>(std::count(content.begin(), content.end(), '\n'));
+        if ( !content.empty() && content.back() != '\n' )
+            ++lines;
+        if ( mentions )
+            mentions->push_back({ path, lines, truncated });
+
+        out += "--- file: " + path + " (" + std::to_string(lines) + " lines" +
+               ( truncated ? ", truncated" : "" ) + ") ---\n";
+        out += content;
+        if ( !content.empty() && content.back() != '\n' )
+            out += '\n';
+        if ( truncated )
+            out += "…(truncated — use read_file with an offset for the rest)\n";
+        out += "--- end of " + path + " ---";
+        // Re-attach any punctuation that was stripped from the token.
+        out.append(text, end - stripped, stripped);
+        i = end;
+    }
+    return out;
+}
 
 bool has_ultra_keyword(const std::string& s) {
     std::string lo;

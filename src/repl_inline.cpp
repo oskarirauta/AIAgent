@@ -1053,10 +1053,16 @@ void InlineRepl::handle_tab() {
     std::vector<std::string> display;   // what to show in an ambiguity list
 
     bool is_command = ( start == 0 && !token.empty() && token[0] == '/' );
+    // "@path" file mentions: complete the path part, keep the '@' prefix.
+    std::string at_prefix;
+    if ( !token.empty() && token[0] == '@' ) {
+        at_prefix = "@";
+        token.erase(0, 1);
+    }
     if ( is_command ) {
         for ( const auto& c : slash_commands())
             if ( c.rfind(token, 0) == 0 ) { matches.push_back(c); display.push_back(c); }
-    } else if ( !token.empty()) {
+    } else if ( !token.empty() || !at_prefix.empty()) {
         // Path completion: split into a directory part and a name prefix.
         std::string dir, prefix;
         size_t slash = token.rfind('/');
@@ -1087,7 +1093,7 @@ void InlineRepl::handle_tab() {
 
     auto replace_token = [&](const std::string& text, bool add_space) {
         _input.erase(start, _cursor - start);
-        std::string ins = text + ( add_space ? " " : "" );
+        std::string ins = at_prefix + text + ( add_space ? " " : "" );
         _input.insert(start, ins);
         _cursor = start + ins.size();
         _input_window_start = 0;
@@ -1208,14 +1214,17 @@ void InlineRepl::history_next() {
     _cursor = _input.size();
 }
 
-std::string InlineRepl::expand_input() const {
-    std::string out = _input;
+std::string InlineRepl::substitute_pastes(std::string out) const {
     for ( const auto& p : _pastes ) {
         size_t pos;
         while ( (pos = out.find(p.placeholder)) != std::string::npos )
             out.replace(pos, p.placeholder.size(), p.content);
     }
     return out;
+}
+
+std::string InlineRepl::expand_input() const {
+    return substitute_pastes(_input);
 }
 
 void InlineRepl::read_bracketed_paste() {
@@ -1383,8 +1392,17 @@ void InlineRepl::run() {
 
 void InlineRepl::on_enter() {
     std::string display = _input;
-    std::string line = expand_input();
+
+    // @path file mentions expand for MESSAGES only (never inside slash commands),
+    // and before paste substitution so @tokens inside pasted content stay text.
+    bool is_cmd = !common::trim_ws(_input).empty() && common::trim_ws(_input)[0] == '/';
+    std::vector<agent::FileMention> fmentions;
+    std::string pre = is_cmd ? _input : agent::expand_file_mentions(_input, &fmentions);
+    std::string line = substitute_pastes(pre);
     std::string trimmed = common::trim_ws(line);
+    for ( const auto& m : fmentions )
+        notify_quiet("@" + m.path + " attached (" + std::to_string(m.lines) + " lines" +
+                     ( m.truncated ? ", truncated" : "" ) + ")");
 
     if ( trimmed.empty()) {
         _input.clear();

@@ -588,6 +588,42 @@ static void test_tasks_tool() {
     check(tool.execute(JSON::Object{}).rfind("error:", 0) == 0, "missing tasks is an error");
 }
 
+static void test_file_mentions() {
+    std::cout << "@path file mentions" << std::endl;
+    std::string f = "/tmp/ai_mention.txt";
+    { std::ofstream o(f); o << "alpha\nbeta\ngamma\n"; }
+
+    std::vector<agent::FileMention> m;
+    std::string r = agent::expand_file_mentions("look at @" + f + " and fix it", &m);
+    check(r.find("--- file: " + f + " (3 lines) ---") != std::string::npos, "mention expands with header");
+    check(r.find("alpha\nbeta\ngamma") != std::string::npos, "content included");
+    check(r.find("--- end of " + f + " ---") != std::string::npos, "end marker");
+    check(m.size() == 1 && m[0].lines == 3 && !m[0].truncated, "mention info returned");
+
+    check(agent::expand_file_mentions("mail me a@b.c today", nullptr) == "mail me a@b.c today",
+          "email untouched (@ mid-token)");
+    check(agent::expand_file_mentions("use @property here", nullptr) == "use @property here",
+          "decorator untouched (path does not exist)");
+    check(agent::expand_file_mentions("@/no/such/file.txt", nullptr) == "@/no/such/file.txt",
+          "missing path untouched");
+
+    std::string r2 = agent::expand_file_mentions("(see @" + f + ")", nullptr);
+    check(r2.find("--- file: " + f) != std::string::npos && r2.rfind(")") == r2.size() - 1,
+          "trailing punctuation stripped and re-attached");
+
+    // Truncation: a file above the per-file cap.
+    std::string big = "/tmp/ai_mention_big.txt";
+    { std::ofstream o(big); for ( int i = 0; i < 5000; ++i ) o << "line " << i << " padding padding padding\n"; }
+    std::vector<agent::FileMention> m2;
+    std::string r3 = agent::expand_file_mentions("@" + big, &m2);
+    check(m2.size() == 1 && m2[0].truncated, "oversize mention marked truncated");
+    check(r3.find("truncated — use read_file") != std::string::npos, "truncation note present");
+    check(r3.size() < 80 * 1024, "expansion respects the cap");
+
+    std::filesystem::remove(f);
+    std::filesystem::remove(big);
+}
+
 static void test_ultra_keyword() {
     std::cout << "ultracode/ultrathink detection" << std::endl;
     check(agent::has_ultra_keyword("please ultrathink about this"), "ultrathink detected");
@@ -1587,6 +1623,7 @@ int main() {
     test_web_search_parse();
     test_find_symbol();
     test_tasks_tool();
+    test_file_mentions();
     test_ultra_keyword();
     test_block_diff();
     test_project_map();

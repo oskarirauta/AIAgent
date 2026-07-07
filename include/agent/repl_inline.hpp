@@ -151,6 +151,7 @@ private:
     void history_next();
     void read_bracketed_paste();
     std::string expand_input() const; // input with paste placeholders substituted
+    std::string substitute_pastes(std::string s) const; // placeholder -> content
 
     // UTF-8 helpers operating on byte indices within _input.
     size_t prev_char(size_t pos) const;
