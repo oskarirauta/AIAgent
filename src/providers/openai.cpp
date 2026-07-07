@@ -105,8 +105,15 @@ Response OpenAI::parse_response(const JSON& response) {
                         call.id = tc["id"].to_string();
                     if ( fn.contains("name"))
                         call.name = fn["name"].to_string();
-                    if ( fn.contains("arguments"))
-                        call.arguments = JSON::parse(fn["arguments"].to_string());
+                    // Guard the arguments parse like the streaming path does: a
+                    // malformed/empty arguments string must not throw out of here.
+                    if ( fn.contains("arguments")) {
+                        std::string raw = fn["arguments"].to_string();
+                        if ( !raw.empty()) {
+                            try { call.arguments = JSON::parse(raw); }
+                            catch ( ... ) { call.arguments = JSON::Object{}; }
+                        }
+                    }
                     r.tool_calls.push_back(call);
                 }
             }

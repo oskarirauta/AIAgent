@@ -15,6 +15,7 @@ namespace {
 constexpr size_t MAX_MATCHES     = 200;
 constexpr size_t MAX_LINE_CHARS  = 500;
 constexpr size_t MAX_TOTAL_BYTES = 100000;
+constexpr size_t MAX_REGEX_CHARS = 8192;   // cap regex subject to bound backtracking
 
 bool looks_binary(const std::string& data) {
     size_t n = std::min(data.size(), static_cast<size_t>(8000));
@@ -116,7 +117,12 @@ std::string Grep::execute(const JSON& args) {
             hit = ignore_case ? ( common::to_lower(line).find(needle) != std::string::npos)
                               : ( line.find(pattern) != std::string::npos);
         } else {
-            hit = std::regex_search(line, re);
+            // Bound the subject length: a pathological pattern on a very long line
+            // can backtrack catastrophically with no timeout. Matching the first
+            // MAX_REGEX_CHARS is enough for a line-oriented search.
+            hit = line.size() > MAX_REGEX_CHARS
+                ? std::regex_search(line.substr(0, MAX_REGEX_CHARS), re)
+                : std::regex_search(line, re);
         }
         if ( !hit )
             continue;

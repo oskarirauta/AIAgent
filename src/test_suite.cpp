@@ -26,6 +26,7 @@
 #include "agent/providers/claude.hpp"
 #include "agent/auth/claude_oauth.hpp"
 #include "agent/tools/registry.hpp"
+#include "agent/tools/list_directory.hpp"
 #include "agent/tools/find_symbol.hpp"
 #include "agent/tools/find_references.hpp"
 #include "agent/tools/project_map.hpp"
@@ -1240,6 +1241,43 @@ static void test_danger_list() {
     check(Registry::classify_danger("rm dir/file").empty(), "rm of one file in a subdir not flagged");
     check(!Registry::classify_danger("chmod 777 x").empty(), "chmod 777 flagged");
     check(Registry::classify_danger("chmod 644 file777.txt").empty(), "chmod 644 with 777 in a name not flagged");
+
+    // Wrapper commands must not smuggle a dangerous command past the classifier.
+    check(!Registry::classify_danger("env FOO=bar rm -rf /tmp/x").empty(), "env-wrapped rm -rf flagged");
+    check(!Registry::classify_danger("timeout 5 rm -rf /tmp/x").empty(), "timeout-wrapped rm -rf flagged");
+    check(!Registry::classify_danger("sudo rm -rf /tmp/x").empty(), "sudo-wrapped rm -rf flagged");
+    check(!Registry::classify_danger("nohup nice env X=1 rm -rf /tmp/x").empty(), "chained wrappers unwrapped");
+    check(Registry::classify_danger("env FOO=bar ls").empty(), "env-wrapped ls still not flagged");
+}
+
+static void test_list_directory() {
+    std::cout << "list_directory (sorted, dirs first, error_code)" << std::endl;
+    std::string d = "/tmp/ai_ld_test";
+    std::filesystem::remove_all(d);
+    std::filesystem::create_directories(d + "/zsub");
+    { std::ofstream o(d + "/afile.txt"); o << "x"; }
+    { std::ofstream o(d + "/bfile.txt"); o << "y"; }
+    agent::tools::ListDirectory ld;
+    std::string r = ld.execute(JSON::Object{ { "path", d } });
+    size_t pdir = r.find("[dir]  zsub");
+    size_t pa = r.find("[file] afile.txt");
+    check(pdir != std::string::npos && pa != std::string::npos && pdir < pa, "directories sorted before files");
+    check(r.find("[file] afile.txt") < r.find("[file] bfile.txt"), "files sorted alphabetically");
+    std::string rf = ld.execute(JSON::Object{ { "path", d + "/afile.txt" } });
+    check(rf.rfind("error:", 0) == 0, "a regular-file path returns an error, not a throw");
+    std::filesystem::remove_all(d);
+}
+
+static void test_config_booleans() {
+    std::cout << "config boolean parsing (accepts 'on')" << std::endl;
+    std::string p = "/tmp/ai_cfg_bool";
+    { std::ofstream o(p); o << "advisor: on\nauto_compact: on\nstrict: on\n"; }
+    agent::Config c;
+    c.load(p);
+    check(c.advisor, "advisor: on -> true");
+    check(c.auto_compact, "auto_compact: on -> true");
+    check(c.strict, "strict: on -> true");
+    std::filesystem::remove(p);
 }
 
 static void test_safe_commands() {
@@ -1329,6 +1367,8 @@ int main() {
     test_grep_robustness();
     test_token_usage();
     test_danger_list();
+    test_list_directory();
+    test_config_booleans();
     test_safe_commands();
 
     std::cout << "\n" << passed << " passed, " << failed << " failed" << std::endl;

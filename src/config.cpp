@@ -14,6 +14,13 @@ static std::string trim(const std::string& s) {
     return common::trim_ws(s);
 }
 
+// One place for boolean-ish config values so every flag accepts the same set
+// (true/1/yes/on) — previously some keys silently rejected "on".
+static bool parse_bool(const std::string& value) {
+    std::string v = common::to_lower(common::trim_ws(value));
+    return v == "true" || v == "1" || v == "yes" || v == "on";
+}
+
 // Parse an unsigned integer setting, keeping the current value and warning on
 // malformed input instead of letting std::stoull throw and crash the program.
 static size_t parse_size(const std::string& value, size_t current, const std::string& key) {
@@ -199,26 +206,26 @@ void Config::load(const std::string& path) {
         else if ( key == "oauth_client_id" ) oauth_client_id = value;
         else if ( key == "log_level" ) log_level = value;
         else if ( key == "theme" ) theme = value;
-        else if ( key == "multiline" ) multiline = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
-        else if ( key == "thinking_stream" ) thinking_stream = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
-        else if ( key == "thinking_collapse" ) thinking_collapse = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
+        else if ( key == "multiline" ) multiline = parse_bool(value);
+        else if ( key == "thinking_stream" ) thinking_stream = parse_bool(value);
+        else if ( key == "thinking_collapse" ) thinking_collapse = parse_bool(value);
         else if ( key == "system_prompt" ) system_prompt = value;
         else if ( key == "home_dir" ) home_dir = expand_tilde(value);
-        else if ( key == "tools_enabled" ) tools_enabled = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
-        else if ( key == "strict" ) strict = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
+        else if ( key == "tools_enabled" ) tools_enabled = parse_bool(value);
+        else if ( key == "strict" ) strict = parse_bool(value);
         else if ( key == "context_limit" ) {
             if ( common::to_lower(value) == "auto" ) { context_auto = true; }
             else { context_auto = false; context_limit = parse_size(value, context_limit, key); }
         }
-        else if ( key == "auto_compact" ) auto_compact = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
+        else if ( key == "auto_compact" ) auto_compact = parse_bool(value);
         else if ( key == "auto_compact_pct" ) auto_compact_pct = parse_size(value, auto_compact_pct, key);
-        else if ( key == "advisor" ) advisor = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes");
+        else if ( key == "advisor" ) advisor = parse_bool(value);
         else if ( key == "advisor_model" ) advisor_model = value;
         else if ( key == "budget_tokens" ) budget_tokens = parse_size(value, budget_tokens, key);
-        else if ( key == "web_search" ) web_search = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
+        else if ( key == "web_search" ) web_search = parse_bool(value);
         else if ( key == "web_search_url" ) web_search_url = value;
-        else if ( key == "prompt_cache" ) prompt_cache = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
-        else if ( key == "parallel_tools" ) parallel_tools = (common::to_lower(value) == "true" || value == "1" || common::to_lower(value) == "yes" || common::to_lower(value) == "on");
+        else if ( key == "prompt_cache" ) prompt_cache = parse_bool(value);
+        else if ( key == "parallel_tools" ) parallel_tools = parse_bool(value);
         else if ( key == "mcp_config" ) mcp_config = expand_tilde(value);
         else if ( key == "budget_usd" ) {
             try { budget_usd = std::stod(common::trim_ws(value)); }

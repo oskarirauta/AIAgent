@@ -4,6 +4,7 @@
 #include <fstream>
 #include <vector>
 #include <algorithm>
+#include <set>
 #include <filesystem>
 #include "throws.hpp"
 #include "logger.hpp"
@@ -169,6 +170,32 @@ std::string Registry::classify_danger(const std::string& command) {
     if ( tokens.empty())
         return "";
 
+    // Skip leading wrapper programs so `env FOO=bar rm -rf ~`, `timeout 5 rm -rf`,
+    // `xargs rm`, `sudo rm` … are classified by the REAL command, not the wrapper
+    // (which alone looks harmless). Best-effort: step over the wrapper and its own
+    // leading args (VAR=val assignments, -flags, numeric durations).
+    // Note: sudo/doas are deliberately NOT here — they are dangerous in their own
+    // right (privilege escalation) and stay flagged by the rules below.
+    static const std::set<std::string> wrappers = {
+        "env", "nice", "ionice", "nohup", "time", "timeout", "stdbuf", "xargs", "setsid"
+    };
+    size_t first = 0;
+    while ( first < tokens.size() && wrappers.count(basename_of(tokens[first]))) {
+        ++first;
+        while ( first < tokens.size()) {
+            const std::string& t = tokens[first];
+            bool assign = t.find('=') != std::string::npos && t.find('/') == std::string::npos;
+            bool flag = !t.empty() && t[0] == '-';
+            bool num = !t.empty() && t.find_first_not_of("0123456789.smhd") == std::string::npos;
+            if ( assign || flag || num ) ++first; else break;
+        }
+    }
+    if ( first >= tokens.size())
+        first = 0;
+    // Re-base so the danger-rule scan below sees the real program and its args.
+    if ( first > 0 )
+        tokens.erase(tokens.begin(), tokens.begin() + first);
+
     std::string program = basename_of(tokens[0]);
 
     // Pipe-into-shell: fetching remote content and executing it.
@@ -278,7 +305,7 @@ static bool classify_safe_simple(const std::string& command) {
     // Read-only commands with no side effects.
     static const std::vector<std::string> safe = {
         "date", "cal", "pwd", "whoami", "hostname", "id", "uname", "which",
-        "ls", "cat", "head", "tail", "df", "free", "echo", "printenv", "env",
+        "ls", "cat", "head", "tail", "df", "free", "echo", "printenv",
         "wc", "file", "stat", "true", "false", "tty", "groups", "uptime",
         "arch", "nproc", "basename", "dirname", "realpath", "readlink", "locale",
         "pkg-config", "type", "whereis",
