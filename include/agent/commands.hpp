@@ -2,11 +2,9 @@
 
 #include <string>
 #include <vector>
+#include "agent/version.hpp" // agent::VERSION (kept available via this header too)
 
 namespace agent {
-
-// Single source of truth for the app version (used by --help and /about).
-inline constexpr const char* VERSION = "0.1.0";
 
 // One slash command, the single source of truth for /help, /help <cmd> and the
 // generated COMMANDS.md.

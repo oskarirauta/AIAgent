@@ -1,4 +1,5 @@
 #include "agent/mcp/client.hpp"
+#include "agent/version.hpp"
 
 #include <cctype>
 #include <cerrno>
@@ -336,7 +337,7 @@ void Client::handshake(Server& s) {
     JSON init_params = JSON::Object{
         { "protocolVersion", PROTOCOL_VERSION },
         { "capabilities", JSON::Object{} },
-        { "clientInfo", JSON::Object{ { "name", "ai-agent" }, { "version", "0.1.0" } } }
+        { "clientInfo", JSON::Object{ { "name", "ai-agent" }, { "version", agent::VERSION } } }
     };
     JSON result = request(s, "initialize", init_params, HANDSHAKE_TIMEOUT_MS);
     if ( result.contains("capabilities") && result["capabilities"] == JSON::TYPE::OBJECT ) {
