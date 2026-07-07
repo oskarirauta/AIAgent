@@ -142,11 +142,29 @@ JSON Anthropic::build_request(const Conversation& conv, const JSON& tools_schema
     auto push = [&messages](const JSON& entry) {
         if ( messages.size() > 0 ) {
             JSON& last = messages[messages.size() - 1];
-            if ( last["role"].to_string() == entry["role"].to_string()
-                 && last["content"] == JSON::TYPE::STRING
-                 && entry["content"] == JSON::TYPE::STRING ) {
-                last["content"] = last["content"].to_string() + "\n\n" + entry["content"].to_string();
-                return;
+            if ( last["role"].to_string() == entry["role"].to_string()) {
+                // Same role twice — Anthropic requires strict alternation, so merge.
+                // Plain text (e.g. /btw then the next prompt): concatenate the text.
+                if ( last["content"] == JSON::TYPE::STRING && entry["content"] == JSON::TYPE::STRING ) {
+                    last["content"] = last["content"].to_string() + "\n\n" + entry["content"].to_string();
+                    return;
+                }
+                // Tool results arrive as one user message per call; when a turn made
+                // several tool calls, batch all their tool_result blocks into a single
+                // user message (the API rejects consecutive user turns). Coerce a stray
+                // string side into a text block so a mixed pair still merges.
+                if ( last["content"] == JSON::TYPE::ARRAY || entry["content"] == JSON::TYPE::ARRAY ) {
+                    auto as_blocks = [](const JSON& c) -> JSON {
+                        if ( c == JSON::TYPE::ARRAY ) return c;
+                        return JSON::Array{ JSON::Object{ { "type", "text" }, { "text", c.to_string() } } };
+                    };
+                    JSON merged = as_blocks(last["content"]);
+                    JSON add = as_blocks(entry["content"]);
+                    for ( size_t i = 0; i < add.size(); ++i )
+                        merged.append(add[i]);
+                    last["content"] = merged;
+                    return;
+                }
             }
         }
         messages.append(entry);

@@ -19,16 +19,35 @@ namespace {
 // SSRF guard: reject a connection whose resolved peer is link-local
 // (169.254.0.0/16 or fe80::/10) — cloud-metadata and link-local services. Used
 // as CURLOPT_OPENSOCKETFUNCTION so it applies on every hop, including redirects.
+static bool ipv4_is_link_local(uint32_t ip_host_order) {
+    return ( ip_host_order & 0xFFFF0000u ) == 0xA9FE0000u; // 169.254.0.0/16
+}
+
 bool addr_is_link_local(const struct curl_sockaddr* a) {
     if ( a->family == AF_INET ) {
         const struct sockaddr_in* s = reinterpret_cast<const struct sockaddr_in*>(&a->addr);
-        uint32_t ip = ntohl(s->sin_addr.s_addr);
-        return ( ip & 0xFFFF0000u ) == 0xA9FE0000u;
+        return ipv4_is_link_local(ntohl(s->sin_addr.s_addr));
     }
     if ( a->family == AF_INET6 ) {
         const struct sockaddr_in6* s = reinterpret_cast<const struct sockaddr_in6*>(&a->addr);
         const uint8_t* b = s->sin6_addr.s6_addr;
-        return b[0] == 0xfe && ( b[1] & 0xc0 ) == 0x80;
+        // Native link-local fe80::/10.
+        if ( b[0] == 0xfe && ( b[1] & 0xc0 ) == 0x80 )
+            return true;
+        // Forms that embed an IPv4 address the stack routes as v4, so the guard
+        // must re-check the embedded 169.254.x.x: IPv4-mapped (::ffff:a.b.c.d),
+        // IPv4-compatible (::a.b.c.d) and the NAT64 well-known prefix (64:ff9b::/96).
+        bool zero_0_9 = true;
+        for ( int i = 0; i < 10; ++i ) if ( b[i] ) { zero_0_9 = false; break; }
+        bool mapped = zero_0_9 && b[10] == 0xff && b[11] == 0xff;
+        bool compat = zero_0_9 && b[10] == 0x00 && b[11] == 0x00;
+        bool nat64  = b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b;
+        if ( mapped || compat || nat64 ) {
+            uint32_t v4 = ( static_cast<uint32_t>(b[12]) << 24 ) | ( static_cast<uint32_t>(b[13]) << 16 ) |
+                          ( static_cast<uint32_t>(b[14]) << 8 )  |   static_cast<uint32_t>(b[15]);
+            return ipv4_is_link_local(v4);
+        }
+        return false;
     }
     return false;
 }
@@ -354,9 +373,15 @@ std::string Client::get(const std::string& url,
         curl_slist_free_all(headers);
 
     // A capped download aborts the write with CURLE_WRITE_ERROR — that is success
-    // with the bytes we wanted, not a failure.
-    if ( res == CURLE_WRITE_ERROR && max_bytes && !response.empty())
+    // with the bytes we wanted, not a failure. Still honour the HTTP status, so a
+    // large non-2xx error page isn't handed back as if it were the wanted body.
+    if ( res == CURLE_WRITE_ERROR && max_bytes && !response.empty()) {
+        long capped_code = 0;
+        curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &capped_code);
+        if ( capped_code < 200 || capped_code >= 300 )
+            throws << "http error " << capped_code << std::endl;
         return response;
+    }
 
     if ( res == CURLE_ABORTED_BY_CALLBACK )
         return "";

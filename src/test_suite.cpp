@@ -215,6 +215,26 @@ static void test_anthropic_request() {
     check(req.contains("system"), "has system field");
     check(req.contains("messages"), "has messages");
     check(req["messages"][0]["role"].to_string() == "user", "user role");
+
+    // Several tool results from one turn (parallel tools) must batch into a SINGLE
+    // user message — Anthropic rejects consecutive user roles.
+    agent::Conversation c2;
+    c2.set_system("sys");
+    c2.add_user("do it");
+    c2.add_assistant("", { { "id1", "read_file", "{}" }, { "id2", "grep", "{}" } });
+    c2.add_tool_result("id1", "read_file", "aaa");
+    c2.add_tool_result("id2", "grep", "bbb");
+    JSON req2 = p.build_request(c2, JSON::Array{});
+    JSON msgs = req2["messages"];
+    // Expect: user, assistant, user — no two consecutive user roles.
+    bool alternates = true;
+    for ( size_t i = 1; i < msgs.size(); ++i )
+        if ( msgs[i]["role"].to_string() == msgs[i - 1]["role"].to_string()) alternates = false;
+    check(alternates, "no consecutive same-role messages after parallel tool results");
+    JSON lastc = msgs[msgs.size() - 1]["content"];
+    check(lastc == JSON::TYPE::ARRAY && lastc.size() == 2 &&
+          lastc[0]["type"].to_string() == "tool_result" && lastc[1]["type"].to_string() == "tool_result",
+          "two tool_result blocks batched into one user message");
 }
 
 static void test_cached_token_accounting() {
@@ -1395,8 +1415,14 @@ static void test_stream_parsers() {
     agent::providers::Ollama ollama(cfg);
     ollama.stream_reset();
     buf.clear(); done = false;
-    auto olc = ollama.parse_stream("data: {\"message\":{\"content\":\"world\"}}\n\ndata: {\"done\":true}\n\n", buf, done);
-    check(olc.content == "world" && done, "ollama stream parser");
+    // Ollama's native /api/chat streams newline-delimited JSON (not SSE).
+    auto olc = ollama.parse_stream("{\"message\":{\"content\":\"world\"}}\n{\"done\":true}\n", buf, done);
+    check(olc.content == "world" && done, "ollama stream parser (NDJSON)");
+    // A JSON object split across two chunks must still parse once completed.
+    ollama.stream_reset(); buf.clear(); done = false;
+    ollama.parse_stream("{\"message\":{\"content\":\"par", buf, done);
+    auto olc2 = ollama.parse_stream("tial\"}}\n{\"done\":true}\n", buf, done);
+    check(olc2.content == "partial" && done, "ollama NDJSON reassembles a split object");
 
     agent::providers::Anthropic anthropic(cfg);
     anthropic.stream_reset();

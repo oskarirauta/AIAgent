@@ -82,6 +82,11 @@ static std::string shell_quote(const std::string& s) {
 }
 
 std::string RunCommand::execute(const JSON& args) {
+    // Guard the key/type before stringifying: a missing `command` would otherwise
+    // stringify a null JSON to the literal "null" and run `/bin/sh -c null`.
+    if ( args != JSON::TYPE::OBJECT || !args.contains("command") ||
+         args["command"] != JSON::TYPE::STRING )
+        return "error: provide a `command` string";
     std::string cmd = common::trim_ws(args["command"].to_string());
     if ( cmd.empty())
         return "error: empty command";

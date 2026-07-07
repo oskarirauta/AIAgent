@@ -1079,13 +1079,17 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     std::string saved_effort = _config.thinking;
     if ( ultra )
         _provider->apply_provider_options(JSON::Object{ { "thinking", "max" } });
+    // Restore against the LIVE _provider member (a pointer to the unique_ptr, whose
+    // address is stable), not a snapshot of the current object — mid-turn failover
+    // reassigns _provider and frees the old provider, so a cached raw pointer here
+    // would dangle (use-after-free) at end of turn.
     struct EffortRestore {
-        providers::Provider* p; bool on; std::string to;
+        std::unique_ptr<providers::Provider>* pp; bool on; std::string to;
         ~EffortRestore() {
-            if ( on && p )
-                p->apply_provider_options(JSON::Object{ { "thinking", to.empty() ? "off" : to } });
+            if ( on && *pp )
+                (*pp)->apply_provider_options(JSON::Object{ { "thinking", to.empty() ? "off" : to } });
         }
-    } effort_restore{ _provider.get(), ultra, saved_effort };
+    } effort_restore{ &_provider, ultra, saved_effort };
 
     // Whether a dim "thinking" region is currently open in the streamed output.
     // Tracked across tool-loop iterations so the answer after a tool call is not

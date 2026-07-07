@@ -96,21 +96,20 @@ void Ollama::stream_reset() {
 }
 
 StreamChunk Ollama::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
-    // Strip CR so CRLF line endings still split on "\n\n" (some gateways send \r\n).
+    // Ollama's native /api/chat streams newline-delimited JSON — one complete object
+    // per '\n', with no SSE `data:` framing or blank-line separators. Process each
+    // complete line; keep any trailing partial line buffered for the next chunk.
     for ( char ch : chunk )
         if ( ch != '\r' ) buffer += ch;
     StreamChunk out;
     size_t pos;
-    while ((pos = buffer.find("\n\n")) != std::string::npos) {
-        std::string frame = buffer.substr(0, pos);
-        buffer.erase(0, pos + 2);
-
-        size_t data_pos = frame.find("data:");
-        if ( data_pos == std::string::npos )
-            continue;
-        std::string data = frame.substr(data_pos + 5);
+    while ((pos = buffer.find('\n')) != std::string::npos) {
+        std::string data = buffer.substr(0, pos);
+        buffer.erase(0, pos + 1);
         size_t nsp = data.find_first_not_of(" \t");
-        data = ( nsp == std::string::npos ) ? "" : data.substr(nsp);
+        if ( nsp == std::string::npos )
+            continue; // blank line
+        data = data.substr(nsp);
         try {
             JSON j = JSON::parse(data);
             if ( j.contains("message")) {
