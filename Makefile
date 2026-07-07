@@ -4,6 +4,9 @@ CXX?=g++
 STRIP?=strip
 # Production defaults: optimised, no debug symbols. For a debug build, override on
 # the command line, e.g. `make CXXFLAGS='--std=c++17 -Wall -fPIC -I./include -g'`.
+# -Wall only: -Wextra was evaluated but floods 1500+ warnings from the vendored
+# submodule headers (json.hpp ignored-qualifiers in every TU, usage/ field
+# initializers); the app's own code is clean under -Wall.
 CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include -O2
 # Emit header dependency files (.d) so changing a header recompiles every source
 # that includes it — mixing objects built against different struct layouts causes

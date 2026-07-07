@@ -63,7 +63,6 @@ public:
     bool ready_noninteractive(api::Client& client) override;
 
     // Claude authenticates with an OAuth token (_token), never _config.api_key.
-    bool is_authenticated() const { return _token.has_value(); }
 
     // Apply provider-specific options from config (e.g. provider.claude.model).
     void apply_provider_options(const JSON& options) override;

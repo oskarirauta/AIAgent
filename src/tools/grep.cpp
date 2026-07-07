@@ -81,9 +81,19 @@ std::string Grep::execute(const JSON& args) {
     if ( !ifd.is_open())
         return std::string("error: cannot open file: ") + path;
 
-    std::stringstream buf;
-    buf << ifd.rdbuf();
-    std::string content = buf.str();
+    // Read directly into one buffer, capped, so a huge file can't be slurped into
+    // memory without bound (and to avoid the stringstream double-copy).
+    constexpr size_t MAX_FILE_BYTES = 32u * 1024 * 1024;
+    std::string content;
+    ifd.seekg(0, std::ios::end);
+    std::streamoff fsz = ifd.tellg();
+    ifd.seekg(0, std::ios::beg);
+    bool file_truncated = false;
+    size_t to_read = ( fsz > 0 ) ? static_cast<size_t>(fsz) : 0;
+    if ( to_read > MAX_FILE_BYTES ) { to_read = MAX_FILE_BYTES; file_truncated = true; }
+    content.resize(to_read);
+    if ( to_read )
+        ifd.read(&content[0], static_cast<std::streamsize>(to_read));
 
     if ( looks_binary(content))
         return "error: " + path + " appears to be a binary file; not searched.";
@@ -109,8 +119,13 @@ std::string Grep::execute(const JSON& args) {
     size_t matches = 0;
     bool capped = false;
 
-    std::istringstream lines(content);
-    while ( std::getline(lines, line)) {
+    // Iterate lines in-place over `content` (no istringstream copy of the whole file).
+    for ( size_t lpos = 0; lpos <= content.size(); ) {
+        size_t nl = content.find('\n', lpos);
+        size_t linelen = ( nl == std::string::npos ? content.size() : nl ) - lpos;
+        line.assign(content, lpos, linelen);
+        if ( !line.empty() && line.back() == '\r' ) line.pop_back();
+        lpos = ( nl == std::string::npos ) ? content.size() + 1 : nl + 1; // advance before any continue
         ++lineno;
         bool hit;
         if ( literal ) {
@@ -141,12 +156,13 @@ std::string Grep::execute(const JSON& args) {
         ++matches;
     }
 
+    std::string big = file_truncated ? " (searched the first 32 MB of a larger file)" : "";
     if ( matches == 0 )
         return "no matches for " + (literal ? ("\"" + pattern + "\"") : ("/" + pattern + "/")) +
-               " in " + path;
+               " in " + path + big;
 
     std::string header = std::to_string(matches) + (matches == 1 ? " match" : " matches") +
-                         (capped ? " (stopped at limit)" : "") + ":\n";
+                         (capped ? " (stopped at limit)" : "") + big + ":\n";
     return header + ss.str();
 }
 

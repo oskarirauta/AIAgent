@@ -165,7 +165,10 @@ std::string FindReferences::execute(const JSON& args) {
             if ( ec ) break;
             const auto& entry = *it;
             std::error_code dec;
-            std::string rel = std::filesystem::relative(entry.path(), root, dec).generic_string();
+            // lexically_relative is a pure path operation — no filesystem I/O per
+            // entry (unlike std::filesystem::relative, which weakly-canonicalises).
+            // entry.path() is always under `root` (recursive iterator from root).
+            std::string rel = entry.path().lexically_relative(root).generic_string();
             if ( entry.is_directory(dec)) {
                 if ( ignored_dir(entry.path().filename().string()) || gi.ignored(rel, true))
                     it.disable_recursion_pending();

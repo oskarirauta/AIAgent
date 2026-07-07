@@ -35,7 +35,6 @@ public:
     bool authenticate(api::Client& client, bool force_login = false);
     bool ready_noninteractive(api::Client& client) override;
 
-    bool is_authenticated() const { return !_config.api_key.empty(); }
 
     // Kimi-specific capabilities that the UI or REPL can query.
     std::unordered_set<std::string> capabilities() const override {

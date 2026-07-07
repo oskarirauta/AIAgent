@@ -83,6 +83,7 @@ Response Ollama::parse_response(const JSON& response) {
 }
 
 JSON Ollama::make_tool_result(const std::string& tool_call_id, const std::string& result) {
+    (void) tool_call_id; // Ollama's native tool result has no id field (unlike OpenAI)
     return JSON::Object{
         { "role", "tool" },
         { "content", result }

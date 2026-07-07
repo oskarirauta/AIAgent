@@ -18,14 +18,39 @@ std::string redact_secrets(const std::string& text, int& count) {
         return text;
     std::string out = text;
 
-    // Ordered fixed-format secret patterns. Each match becomes its replacement.
-    // sk-ant- must precede sk- (the hyphenated form would otherwise slip past).
+    // Replace every match in ONE pass and count them (regex_replace + a separate
+    // count would scan twice). Leaves the input untouched — no copy — when there is
+    // no match, which is the common case for tool output.
+    auto replace_count = [&count](std::string s, const std::regex& re, const std::string& rep) {
+        auto it = std::sregex_iterator(s.begin(), s.end(), re);
+        auto end = std::sregex_iterator();
+        if ( it == end )
+            return s;
+        std::string res;
+        size_t last = 0;
+        for ( ; it != end; ++it ) {
+            res.append(s, last, static_cast<size_t>(it->position()) - last);
+            res += rep;
+            last = static_cast<size_t>(it->position()) + static_cast<size_t>(it->length());
+            ++count;
+        }
+        res.append(s, last, std::string::npos);
+        return res;
+    };
+
+    // PEM private-key block. Guarded by a cheap substring check that BOTH markers are
+    // present, so an adversarial "BEGIN … PRIVATE KEY" with no END can't drive the
+    // lazy `[\s\S]*?` into quadratic backtracking.
+    if ( out.find("PRIVATE KEY") != std::string::npos && out.find("-----END") != std::string::npos ) {
+        static const std::regex pem(R"(-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----)");
+        out = replace_count(std::move(out), pem, "[REDACTED PRIVATE KEY]");
+    }
+
+    // Ordered fixed-format token patterns (all anchored — no catastrophic
+    // backtracking). sk-ant- must precede sk- (the hyphenated form would slip past).
     static const std::vector<std::pair<std::regex, std::string>> rules = {
-        { std::regex(R"(-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----)"),
-          "[REDACTED PRIVATE KEY]" },
         { std::regex(R"(sk-ant-[A-Za-z0-9_-]{20,})"), "[REDACTED]" },
-        // Allow the internal separators of modern OpenAI keys (sk-proj-, sk-svcacct-,
-        // sk-admin-, sk-None-…) as well as the legacy all-alphanumeric body.
+        // Modern OpenAI keys (sk-proj-, sk-svcacct-, sk-admin-, sk-None-…) plus legacy.
         { std::regex(R"(sk-[A-Za-z0-9_-]{20,})"), "[REDACTED]" },
         { std::regex(R"(gh[posru]_[A-Za-z0-9]{20,})"), "[REDACTED]" },
         { std::regex(R"(github_pat_[A-Za-z0-9_]{20,})"), "[REDACTED]" },
@@ -36,14 +61,8 @@ std::string redact_secrets(const std::string& text, int& count) {
         { std::regex(R"(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})"), "[REDACTED JWT]" },
         { std::regex(R"([Bb]earer\s+[A-Za-z0-9._~+/-]{16,}=*)"), "Bearer [REDACTED]" },
     };
-    for ( const auto& [re, rep] : rules ) {
-        int n = static_cast<int>(std::distance(std::sregex_iterator(out.begin(), out.end(), re),
-                                               std::sregex_iterator()));
-        if ( n > 0 ) {
-            count += n;
-            out = std::regex_replace(out, re, rep);
-        }
-    }
+    for ( const auto& [re, rep] : rules )
+        out = replace_count(std::move(out), re, rep);
 
     // Labelled assignments: `SECRET=<value>`, `api_key: "<value>"`, etc. Redact the
     // value, keeping the label. Skips obvious placeholders so template/.env.example

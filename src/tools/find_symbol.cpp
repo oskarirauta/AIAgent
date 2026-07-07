@@ -141,6 +141,10 @@ std::string FindSymbol::execute(const JSON& args) {
         long lineno = 0;
         while ( std::getline(lines, line)) {
             ++lineno;
+            // Cheap pre-filter: both patterns require the symbol name, so a line
+            // without it as a substring can't match — skip the two regex_search.
+            if ( line.find(sym) == std::string::npos )
+                continue;
             bool hit = std::regex_search(line, kw_re);
             if ( !hit && line.find(';') == std::string::npos && std::regex_search(line, call_re)) {
                 // A NAME( opening with no semicolon — likely a definition, not a call.
