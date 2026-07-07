@@ -9,7 +9,7 @@ Philosophy: **Support enough — not everything.**
 ## Features
 
 - Chat with LLMs from the command line
-- Providers: OpenAI, Ollama, Anthropic, Moonshot, and native **Kimi** and **Claude** (subscription) providers
+- Providers: OpenAI, Ollama, Anthropic, Moonshot, **OpenRouter**, and native **Kimi** and **Claude** (subscription) providers
 - **Kimi** and **Claude** authenticate against the same subscriptions the official CLIs use — no API-key billing and no separate app to install
 - Built-in tools the model can call: `read_file`, `write_file`, `run_command`, `list_directory`, `grep`
 - **Inline REPL** that prints to the terminal's normal buffer, so native scrollback and mouse copy work across the whole conversation
@@ -56,12 +56,17 @@ provider.kimi.model: kimi-for-coding
 provider.kimi.thinking: on          # off | on | low | medium | high | xhigh | max
 provider.claude.model: claude-opus-4-8
 
-# For plain API-key providers (openai / anthropic / moonshot)
+# For plain API-key providers (openai / anthropic / moonshot / openrouter)
 # api_url: https://api.openai.com/v1
 # api_key: sk-your-key-here
 ```
 
-If `model` is not set (via config or `-m`), each provider falls back to a sensible default (e.g. `claude-opus-4-8`, `kimi-for-coding`, `gpt-4o-mini`, `llama3`).
+The API key for a plain key provider can be given three ways (in this order of
+precedence): `-k <key>`, `api_key:` in the config, or the environment variable
+`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `MOONSHOT_API_KEY` / `OPENROUTER_API_KEY`
+(or a generic `AI_AGENT_API_KEY`).
+
+If `model` is not set (via config or `-m`), each provider falls back to a sensible default (e.g. `claude-opus-4-8`, `kimi-for-coding`, `gpt-4o-mini`, `llama3`, `openrouter/free`).
 
 ### Data directory
 
@@ -106,6 +111,18 @@ On first run it prints an authorization URL. Open it, log in, and paste the code
 
 Neither provider opens a browser for you — the URL is printed so you can open it yourself (handy over SSH / on headless machines). Use `--login` to force a fresh login (e.g. to switch accounts).
 
+## OpenRouter provider
+
+[OpenRouter](https://openrouter.ai) is an OpenAI-compatible gateway to many models. Get a key from `openrouter.ai/settings/keys`, then:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+./agent -p openrouter                       # uses openrouter/free by default
+./agent -p openrouter -m anthropic/claude-3.5-sonnet "…"   # a specific model
+```
+
+Models use `vendor/model` slugs. **`openrouter/free`** (the default) auto-routes to whatever free model is currently available — handy for trying it without credits, though free models are small and heavily rate-limited (a `429 Provider returned error` means an upstream free model is throttled — retry, switch model, or add credits for [higher free limits](https://openrouter.ai/docs/api-reference/limits) and cheap paid models). For real coding work, pick a specific model with `-m`.
+
 ## Usage
 
 ```bash
@@ -115,6 +132,7 @@ Neither provider opens a browser for you — the URL is printed so you can open 
 # Pick a provider / model
 ./agent -p kimi
 ./agent -p claude -m claude-opus-4-8
+./agent -p openrouter                 # free via openrouter/free (export OPENROUTER_API_KEY)
 
 # Single prompt, then exit
 ./agent "explain this code"

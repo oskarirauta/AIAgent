@@ -90,7 +90,7 @@ std::string Config::default_model_for(const std::string& provider) {
     if ( provider == "anthropic" ) return "claude-opus-4-8";
     if ( provider == "kimi" ) return "kimi-for-coding";     // managed:kimi-code / "K2.7 Code"
     if ( provider == "moonshot" ) return "kimi-k2-0905-preview";
-    if ( provider == "openrouter" ) return "openai/gpt-4o-mini"; // vendor/model; :free variants exist
+    if ( provider == "openrouter" ) return "openrouter/free"; // auto-routes to an available free model; -m for a specific one
     if ( provider == "ollama" ) return "llama3";
     return "gpt-4o-mini"; // openai and any other OpenAI-compatible provider
 }

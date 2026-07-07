@@ -30,6 +30,16 @@ static std::string format_api_error(const std::string& body) {
     return body;
 }
 
+// A short hint for the common transient HTTP statuses.
+static std::string http_hint(long code) {
+    if ( code == 429 )
+        return " (rate limited — wait a moment and retry, or try a different/paid model; "
+               "free models are heavily throttled)";
+    if ( code == 503 || code == 529 )
+        return " (provider overloaded — retry shortly)";
+    return "";
+}
+
 static size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
     std::string* out = static_cast<std::string*>(userdata);
     out->append(ptr, size * nmemb);
@@ -131,7 +141,7 @@ std::string Client::post(const std::string& url, const std::string& auth_header,
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
 
     if ( http_code < 200 || http_code >= 300 )
-        throws << "http error " << http_code << ": " << format_api_error(response) << std::endl;
+        throws << "http error " << http_code << ": " << format_api_error(response) << http_hint(http_code) << std::endl;
 
     return response;
 }
@@ -210,7 +220,7 @@ void Client::post_stream(const std::string& url, const std::string& auth_header,
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
 
     if ( http_code < 200 || http_code >= 300 )
-        throws << "http error " << http_code << ": " << format_api_error(error_body) << std::endl;
+        throws << "http error " << http_code << ": " << format_api_error(error_body) << http_hint(http_code) << std::endl;
 }
 
 std::string Client::get(const std::string& url,
@@ -315,7 +325,7 @@ std::string Client::post_form(const std::string& url,
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
 
     if ( http_code < 200 || http_code >= 300 )
-        throws << "http error " << http_code << ": " << format_api_error(response) << std::endl;
+        throws << "http error " << http_code << ": " << format_api_error(response) << http_hint(http_code) << std::endl;
 
     return response;
 }
