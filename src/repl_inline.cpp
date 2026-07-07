@@ -1911,24 +1911,39 @@ void InlineRepl::queue_command(const std::string& line) {
     std::string cmd, sub, arg;
     iss >> cmd >> sub >> arg;
 
+    // Bare /queue opens a scrollable menu of the pending messages with a drop
+    // action; each drop refreshes the list in place.
+    if ( sub.empty()) {
+        std::vector<std::string> rows, keys;
+        {
+            std::lock_guard<std::mutex> lk(_mx);
+            for ( size_t i = 0; i < _pending.size(); ++i ) {
+                std::string p = _pending[i];
+                for ( char& ch : p )
+                    if ( ch == '\n' || ch == '\t' ) ch = ' ';
+                if ( p.size() > 100 ) p = p.substr(0, 100) + "…";
+                rows.push_back(std::to_string(i + 1) + ". " + p);
+                keys.push_back(std::to_string(i + 1));
+            }
+        }
+        if ( rows.empty()) {
+            render_command(line, "queue is empty");
+            return;
+        }
+        ListMenu m;
+        m.title = "queue · runs after the current turn";
+        m.rows = std::move(rows);
+        m.keys = std::move(keys);
+        m.actions.push_back({ 'd', "/queue drop ", "drop" });
+        m.reopen_cmd = "/queue";
+        open_list_menu(std::move(m));
+        return;
+    }
+
     std::string result;
     {
         std::lock_guard<std::mutex> lk(_mx);
-        if ( sub.empty()) {
-            if ( _pending.empty())
-                result = "queue is empty";
-            else {
-                result = "queued (runs after the current turn):\n";
-                for ( size_t i = 0; i < _pending.size(); ++i ) {
-                    std::string p = _pending[i];
-                    for ( char& ch : p )
-                        if ( ch == '\n' || ch == '\t' ) ch = ' ';
-                    if ( p.size() > 120 ) p = p.substr(0, 120) + "…";
-                    result += "\n  " + std::to_string(i + 1) + ". " + p;
-                }
-                result += "\n\n/queue drop <n|all> removes";
-            }
-        } else if ( common::to_lower(sub) == "drop" ) {
+        if ( common::to_lower(sub) == "drop" ) {
             if ( common::to_lower(arg) == "all" ) {
                 size_t n = _pending.size();
                 _pending.clear();
@@ -2137,6 +2152,9 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
                 // the header/footer/blank chrome is dropped so the cursor can't
                 // land on it. Enter drills into the selected run's steps.
                 m.drill_cmd = "/workflows ";
+                m.actions.push_back({ 'c', "/workflows cancel ", "cancel" });
+                m.actions.push_back({ 'r', "/workflows retry ", "retry" });
+                m.reopen_cmd = "/workflows";
                 for ( const auto& row : all ) {
                     size_t h = row.find('#');
                     if ( h == std::string::npos ) continue;
@@ -2559,8 +2577,8 @@ void InlineRepl::draw_list_menu(bool redraw) {
         std::string hint = "↑↓ move · esc close";
         if ( !_list.select_cmd.empty()) hint += " · ⏎ select";
         if ( !_list.drill_cmd.empty()) hint += " · ⏎ open";
-        if ( _list.action_key )
-            hint += std::string(" · ") + _list.action_key + " " + _list.action_label;
+        for ( const auto& a : _list.actions )
+            hint += std::string(" · ") + a.key + " " + a.label;
         out += _theme.command + "  " + _list.title + Theme::reset + "   " +
                _theme.dim + hint + Theme::reset + "\r\n";
         lines++;
@@ -2652,11 +2670,24 @@ void InlineRepl::handle_list_key(int c) {
         return;
     }
 
-    if ( _list.action_key && c == _list.action_key &&
-         _list_sel < static_cast<int>(_list.keys.size()) && !_list.keys[_list_sel].empty()) {
-        if ( _command_cb )
-            _command_cb(_list.action_cmd + _list.keys[_list_sel]);
-        close_list_menu(); // reopen to see the updated list
+    for ( const auto& a : _list.actions ) {
+        if ( c != a.key )
+            continue;
+        // /queue is managed inside the renderer (its data is the pending deque);
+        // everything else goes through the command callback / run_command_line.
+        auto exec = [&](const std::string& cmd) {
+            if ( cmd.rfind("/queue", 0) == 0 ) queue_command(cmd);
+            else if ( _command_cb ) _command_cb(cmd);
+        };
+        if ( _list_sel < static_cast<int>(_list.keys.size()) && !_list.keys[_list_sel].empty())
+            exec(a.cmd + _list.keys[_list_sel]);
+        // Refresh the list in place (e.g. after a drop/cancel) by re-opening it.
+        std::string reopen = _list.reopen_cmd;
+        close_list_menu();
+        if ( !reopen.empty()) {
+            if ( reopen.rfind("/queue", 0) == 0 ) queue_command(reopen);
+            else run_command_line(reopen);
+        }
         return;
     }
 }

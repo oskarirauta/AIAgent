@@ -107,9 +107,9 @@ private:
         std::string drill_cmd;           // Enter runs this + keys[sel] and shows the result
         std::string select_cmd;          // (picker) Enter runs this + keys[sel] and CLOSES
         std::string current;             // pre-select the row whose key equals this
-        std::string action_cmd;          // action_key runs this + keys[sel]
-        char action_key = 0;             // e.g. 'd' for drop; 0 = none
-        std::string action_label;        // footer hint for the action
+        struct Action { char key; std::string cmd; std::string label; };
+        std::vector<Action> actions;     // each: `key` runs `cmd + keys[sel]`
+        std::string reopen_cmd;          // re-run to refresh the list after an action
     };
     void open_list_menu(ListMenu menu);
     void draw_list_menu(bool redraw);
