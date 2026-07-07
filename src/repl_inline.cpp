@@ -523,24 +523,75 @@ std::string InlineRepl::status_line() const {
         std::string activity;
         bool streamed;
         size_t queued;
+        std::string next_queued;
         {
             std::lock_guard<std::mutex> lk(_mx);
             activity = _activity;
             streamed = _turn_streamed;
             queued = _pending.size();
+            if ( queued > 0 )
+                next_queued = _pending.front();
         }
         std::string what = !activity.empty() ? activity : ( streamed ? "responding" : "thinking");
 
         auto secs = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - _turn_start).count();
+        std::string secs_s = std::to_string(secs) + "s";
+
+        // UTF-8-safe clip to N display columns, with an ellipsis when cut. Done on
+        // the RAW text before any colour codes so no ANSI sequence is ever split.
+        auto clip = [](const std::string& in, int limit) -> std::string {
+            if ( limit < 1 ) return "";
+            std::string out;
+            int w = 0;
+            size_t i = 0;
+            while ( i < in.size()) {
+                size_t j = i + 1;
+                while ( j < in.size() && (static_cast<unsigned char>(in[j]) & 0xC0) == 0x80 ) ++j;
+                if ( w + 1 > limit - 1 && j < in.size()) // room left for the ellipsis
+                    return out + "…";
+                out.append(in, i, j - i);
+                ++w;
+                i = j;
+                if ( w >= limit )
+                    return out;
+            }
+            return out;
+        };
+
+        // Queued messages: show the count and a peek at the next prompt so you
+        // can see WHAT is waiting, not just how many.
+        std::string qclip, qplain;
+        if ( queued > 0 ) {
+            for ( char& c : next_queued )
+                if ( c == '\n' || c == '\t' ) c = ' ';
+            qclip = clip(next_queued, 24);
+            qplain = " · " + std::to_string(queued) + " queued: “" + qclip + "”";
+        }
+
+        // Everything must fit ONE terminal row: draw_live prints this verbatim and
+        // erase_live assumes the status occupies exactly one line — an overflowing
+        // status leaves stale frames behind on every spinner tick.
+        int cols = term_cols() - 1; // one column of margin: avoid the autowrap edge
+        int overhead = 2 /* spinner+sp */ + 1 + static_cast<int>(secs_s.size())
+                     + 22 /* " (Ctrl-C to interrupt)" */ + display_width(qplain);
+        std::string hint = " (Ctrl-C to interrupt)";
+        if ( cols - overhead < 12 ) { // narrow terminal: drop the hint first
+            overhead -= 22;
+            hint.clear();
+        }
+        what = clip(what, std::max(8, cols - overhead));
 
         // Pre-styled: a bright spinner + label stands out against the dim idle
         // status line. (draw_live prints this verbatim while a turn is running.)
         std::string s = _theme.accent + std::string(frame) + Theme::reset + " "
-                      + _theme.accent + what + " " + std::to_string(secs) + "s" + Theme::reset
-                      + " " + _theme.dim + "(Ctrl-C to interrupt)" + Theme::reset;
+                      + _theme.accent + what + " " + secs_s + Theme::reset;
+        if ( !hint.empty())
+            s += _theme.dim + hint + Theme::reset;
         if ( queued > 0 )
-            s += " " + _theme.dim + "·" + Theme::reset + " " + _theme.warn + std::to_string(queued) + " queued" + Theme::reset;
+            s += _theme.dim + " · " + Theme::reset + _theme.warn +
+                 std::to_string(queued) + " queued" + Theme::reset + _theme.dim +
+                 ": “" + qclip + "”" + Theme::reset;
         return s;
     }
 
