@@ -276,6 +276,26 @@ Still open:
   other audit items were false positives or by-design (allowlist `classify_safe`,
   whole-exchange `undo_last`, caught tool exceptions, delegating `/settings`).
 
+### Release-completion feature list (from the ultracode feature-shortlist)
+
+Working toward a long-lived "actually finished" release; going through each:
+
+- ✅ **ask_user tool + bell level** — the model can pause and ask you a decision
+  (menu or free text); new `ask_user` bell level rings only for that.
+- ✅ **Interruptible run_command** — Ctrl-C stops the command but keeps its
+  partial output in context instead of undoing the exchange.
+- ✅ **`/raw`** — inspect the exact last request/response (JSON).
+- ✅ **`/limits`** — the provider's rate-limit / quota headers from the last call.
+- ☐ **Background commands** (`run_in_background` + `/jobs`) — run a dev server /
+  `tail -f` without blocking the turn. **Next up.**
+- ☐ **Secret redaction** — mask credentials (API keys, tokens) in tool output
+  before it's sent to the provider.
+- ☐ **Stale-read guard** for edits — refuse a silent clobber if a file changed
+  on disk since the model last read it.
+- ☐ **Cross-provider failover** — on repeated 429/5xx, fall back to another
+  configured provider.
+- ☐ **`--output-format json`** — a scriptable headless mode.
+
 ## Considered / dropped
 
 Deliberately out — either covered by something we already have, or low return for
