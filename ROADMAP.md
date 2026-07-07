@@ -90,6 +90,10 @@ each list is roughly the current priority order.
 - **Autocomplete**: Tab in the inline REPL completes a leading slash command or a
   file-path token — unique match completes (dirs get `/`, else a space), a shared
   longer prefix extends, and an ambiguous prefix lists the candidates.
+- **Word-boundary wrapping in multi-line input**: the multi-line prompt now wraps
+  at spaces (like the transcript) instead of hard-breaking mid-word at the column
+  limit; a single over-long word (URL/token) still hard-breaks. Byte ranges stay
+  contiguous so cursor movement/editing are unaffected.
 - **`/compact` progress bar**: the summarisation now streams, and the status line
   shows a live bar + rough percentage (`compacting [██░░░░] ~34%`) alongside the
   elapsed seconds — a rough estimate (summary ≈ 1/12 of the input, bounded) so you
@@ -188,7 +192,7 @@ Roughly in priority order for real coding use. Kept only what is genuinely usefu
 - **`/workflows` enhancements**: parallel steps, push notifications on completion,
   and cancel/retry of a run.
 - **UI polish**: settable paste thresholds in `/settings`, interactive paste-block
-  expand/collapse, and word-boundary wrapping in multi-line input.
+  expand/collapse.
 - **skills** (power-user): reusable, named instruction sets beyond `AGENTS.md`.
 - **`/rc`** / **`/plan`** (mode helpers), **more providers** (enough, not every one).
 

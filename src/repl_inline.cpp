@@ -596,24 +596,46 @@ std::vector<std::pair<size_t, size_t>> InlineRepl::wrap_input(int width) const {
     std::vector<std::pair<size_t, size_t>> lines;
     size_t line_start = 0;
     int col = 0;
+    size_t last_space = std::string::npos; // byte pos just after the last space on this visual line
     size_t i = 0;
+
+    auto codepoints_between = [this](size_t a, size_t b) {
+        int n = 0;
+        for ( size_t k = a; k < b; ++k )
+            if ( (static_cast<unsigned char>(_input[k]) & 0xC0) != 0x80 ) ++n;
+        return n;
+    };
+
     while ( i < _input.size()) {
         if ( _input[i] == '\n' ) {
             lines.push_back({ line_start, i });
             ++i;
             line_start = i;
             col = 0;
+            last_space = std::string::npos;
             continue;
         }
         size_t j = i + 1;
         while ( j < _input.size() && (static_cast<unsigned char>(_input[j]) & 0xC0) == 0x80 )
             ++j;
-        if ( col == width ) {                 // wrap before this codepoint
-            lines.push_back({ line_start, i });
-            line_start = i;
-            col = 0;
+        if ( col == width ) {                 // must wrap before this codepoint
+            if ( last_space != std::string::npos && last_space > line_start && last_space <= i ) {
+                // Break after the last space so words stay whole; carry the rest
+                // of the current word to the next visual line.
+                lines.push_back({ line_start, last_space });
+                col = codepoints_between(last_space, i);
+                line_start = last_space;
+            } else {
+                // A single over-long word (or no space yet): hard-break here.
+                lines.push_back({ line_start, i });
+                col = 0;
+                line_start = i;
+            }
+            last_space = std::string::npos;
         }
         ++col;
+        if ( _input[i] == ' ' )
+            last_space = j;   // a break may start just after this space
         i = j;
     }
     lines.push_back({ line_start, _input.size() });
