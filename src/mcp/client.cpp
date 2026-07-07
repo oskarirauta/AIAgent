@@ -235,10 +235,18 @@ bool Client::read_line(Server& s, std::string& line, int timeout_ms) {
         if ( remaining <= 0 ) return false;
         struct pollfd pfd { s.out_fd, POLLIN, 0 };
         int pr = poll(&pfd, 1, remaining);
-        if ( pr <= 0 ) return false;
+        if ( pr < 0 ) {
+            if ( errno == EINTR ) continue; // a signal (SIGWINCH/…) — recompute & retry
+            return false;
+        }
+        if ( pr == 0 ) return false;        // deadline expired
         char buf[8192];
         ssize_t n = ::read(s.out_fd, buf, sizeof(buf));
-        if ( n <= 0 ) return false;
+        if ( n < 0 ) {
+            if ( errno == EINTR ) continue;
+            return false;
+        }
+        if ( n == 0 ) return false;         // EOF
         s.rbuf.append(buf, static_cast<size_t>(n));
     }
 }
@@ -347,9 +355,20 @@ JSON Client::request(Server& s, const std::string& method, const JSON& params, i
     // stdio
     if ( !write_all(s, req.dump_minified() + "\n"))
         throw std::runtime_error("write to server failed");
+    // One absolute deadline for the whole request, so a stream of non-matching
+    // messages (progress/heartbeat notifications) can't keep resetting read_line's
+    // clock and stretch the call past timeout_ms.
+    struct timespec req_start {};
+    clock_gettime(CLOCK_MONOTONIC, &req_start);
     for ( ;; ) {
+        struct timespec now {};
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long elapsed = ( now.tv_sec - req_start.tv_sec ) * 1000 + ( now.tv_nsec - req_start.tv_nsec ) / 1000000;
+        int remaining = timeout_ms - static_cast<int>(elapsed);
+        if ( remaining <= 0 )
+            throw std::runtime_error("timed out waiting for response");
         std::string line;
-        if ( !read_line(s, line, timeout_ms))
+        if ( !read_line(s, line, remaining))
             throw std::runtime_error("timed out waiting for response");
         if ( line.empty()) continue;
         JSON msg;

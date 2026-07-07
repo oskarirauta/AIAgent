@@ -24,7 +24,9 @@ std::string redact_secrets(const std::string& text, int& count) {
         { std::regex(R"(-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----)"),
           "[REDACTED PRIVATE KEY]" },
         { std::regex(R"(sk-ant-[A-Za-z0-9_-]{20,})"), "[REDACTED]" },
-        { std::regex(R"(sk-[A-Za-z0-9]{20,})"), "[REDACTED]" },
+        // Allow the internal separators of modern OpenAI keys (sk-proj-, sk-svcacct-,
+        // sk-admin-, sk-None-…) as well as the legacy all-alphanumeric body.
+        { std::regex(R"(sk-[A-Za-z0-9_-]{20,})"), "[REDACTED]" },
         { std::regex(R"(gh[posru]_[A-Za-z0-9]{20,})"), "[REDACTED]" },
         { std::regex(R"(github_pat_[A-Za-z0-9_]{20,})"), "[REDACTED]" },
         { std::regex(R"(xox[baprs]-[A-Za-z0-9-]{10,})"), "[REDACTED]" },

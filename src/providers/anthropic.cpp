@@ -6,11 +6,15 @@
 
 namespace agent::providers {
 
-long Anthropic::thinking_budget_for(const std::string& effort, const std::string& model) {
+// The model's total output-token ceiling (thinking budget + visible answer).
+static long anthropic_output_cap(const std::string& model) {
     std::string m;
     for ( char c : model ) m += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return ( m.find("sonnet") != std::string::npos ) ? 64000 : 32000;
+}
 
-    long cap = ( m.find("sonnet") != std::string::npos ) ? 64000 : 32000; // output ceiling
+long Anthropic::thinking_budget_for(const std::string& effort, const std::string& model) {
+    long cap = anthropic_output_cap(model); // output ceiling
     long margin = 8192;        // leave room for the visible answer
     long maxb = cap - margin;
 
@@ -191,7 +195,9 @@ JSON Anthropic::build_request(const Conversation& conv, const JSON& tools_schema
         }
     }
 
+    long cap = anthropic_output_cap(_config.model);
     long max_out = _config.max_tokens > 0 ? static_cast<long>(_config.max_tokens) : 8192;
+    if ( max_out > cap ) max_out = cap; // max_tokens alone cannot exceed the ceiling
     JSON req = JSON::Object{
         { "model", _config.model },
         { "max_tokens", static_cast<long long>(max_out) },
@@ -199,15 +205,19 @@ JSON Anthropic::build_request(const Conversation& conv, const JSON& tools_schema
     };
 
     // Extended thinking: budget_tokens must be < max_tokens, so raise max_tokens
-    // above the budget. Temperature is left unset (Anthropic requires it to be 1
-    // with thinking; unset defaults to 1).
+    // above the budget — but the TOTAL (budget + answer) must not exceed the model
+    // ceiling `cap`, or Anthropic rejects the request with a 400. Temperature is
+    // left unset (Anthropic requires it to be 1 with thinking; unset defaults to 1).
     if ( _thinking_enabled ) {
+        if ( max_out > cap - 1024 ) max_out = cap - 1024; // leave room for a min budget
         long budget = thinking_budget_for(_thinking_effort, _config.model);
+        long total = budget + max_out;
+        if ( total > cap ) { total = cap; budget = cap - max_out; }
         req["thinking"] = JSON::Object{
             { "type", "enabled" },
             { "budget_tokens", static_cast<long long>(budget) }
         };
-        req["max_tokens"] = static_cast<long long>(budget + max_out);
+        req["max_tokens"] = static_cast<long long>(total);
     }
 
     if ( !system.empty())

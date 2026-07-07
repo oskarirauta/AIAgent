@@ -216,12 +216,10 @@ PollResult poll_device_token(
         {"grant_type", "urn:ietf:params:oauth:grant-type:device_code"}
     });
 
-    std::string response;
-    try {
-        response = client.post_form(url, create_device_headers(home_dir), body);
-    } catch ( const std::exception& ) {
-        response = "";
-    }
+    // RFC 8628 returns the polling states (authorization_pending, slow_down,
+    // access_denied, expired_token) as HTTP 400 + a JSON body, so use the raw
+    // variant that keeps the body instead of throwing the error away.
+    std::string response = client.post_form_raw(url, create_device_headers(home_dir), body);
 
     PollResult result;
     JSON j;

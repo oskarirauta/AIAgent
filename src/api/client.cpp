@@ -400,6 +400,32 @@ std::string Client::post_form(const std::string& url, const std::string& body, s
     return post_form(url, {}, body, abort_flag);
 }
 
+std::string Client::post_form_raw(const std::string& url,
+                                  const std::vector<std::pair<std::string, std::string>>& extra_headers,
+                                  const std::string& body) {
+    CURL* c = static_cast<CURL*>(curl);
+    std::string response;
+    curl_easy_reset(c);
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/x-www-form-urlencoded");
+    headers = curl_slist_append(headers, "Accept: application/json");
+    for ( const auto& h : extra_headers )
+        headers = curl_slist_append(headers, ( h.first + ": " + h.second ).c_str());
+    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
+    CURLcode res = curl_easy_perform(c);
+    curl_slist_free_all(headers);
+    if ( res != CURLE_OK )
+        return ""; // network/transport failure — caller treats an empty body as pending
+    return response; // whatever the server sent, 2xx or not (e.g. a 400 + error JSON)
+}
+
 std::string Client::post_form(const std::string& url,
                               const std::vector<std::pair<std::string, std::string>>& extra_headers,
                               const std::string& body, std::atomic<bool>* abort_flag) {

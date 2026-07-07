@@ -37,6 +37,11 @@ public:
     std::string post_form(const std::string& url,
                           const std::vector<std::pair<std::string, std::string>>& extra_headers,
                           const std::string& body, std::atomic<bool>* abort_flag = nullptr);
+    // Returns the raw body regardless of HTTP status (no throw on non-2xx). For
+    // OAuth device-token polling, where RFC 8628 returns error states as 400 + JSON.
+    std::string post_form_raw(const std::string& url,
+                              const std::vector<std::pair<std::string, std::string>>& extra_headers,
+                              const std::string& body);
     void post_stream(const std::string& url, const std::string& auth_header, const std::string& auth_value, const std::string& body, std::function<void(const std::string&)> callback, std::atomic<bool>* abort_flag = nullptr);
     void post_stream(const std::string& url, const std::string& auth_header, const std::string& auth_value,
                      const std::vector<std::pair<std::string, std::string>>& extra_headers,

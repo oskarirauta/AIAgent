@@ -235,6 +235,18 @@ static void test_anthropic_request() {
     check(lastc == JSON::TYPE::ARRAY && lastc.size() == 2 &&
           lastc[0]["type"].to_string() == "tool_result" && lastc[1]["type"].to_string() == "tool_result",
           "two tool_result blocks batched into one user message");
+
+    // Thinking budget + a large configured max_tokens must not exceed the model
+    // output ceiling (sonnet = 64000), or Anthropic 400s the request.
+    agent::Config bc; bc.provider = "anthropic"; bc.model = "claude-sonnet-4-6"; bc.max_tokens = 16000;
+    agent::providers::Anthropic bp(bc);
+    bp.apply_provider_options(JSON::Object{{ "thinking", "max" }});
+    agent::Conversation bconv; bconv.set_system("s"); bconv.add_user("hi");
+    JSON breq = bp.build_request(bconv, JSON::Array{});
+    long mt = static_cast<long>(static_cast<long long>(breq["max_tokens"]));
+    long bt = static_cast<long>(static_cast<long long>(breq["thinking"]["budget_tokens"]));
+    check(mt <= 64000, "max_tokens clamped to the model ceiling with thinking on");
+    check(bt < mt && bt >= 1024, "thinking budget stays below max_tokens");
 }
 
 static void test_cached_token_accounting() {
@@ -2271,6 +2283,8 @@ static void test_redact_secrets() {
           "Anthropic sk-ant- key masked");
     check(redacted("ghp_0123456789abcdefghijABCDEFGHIJ0123").find("ghp_0123") == std::string::npos,
           "GitHub token masked");
+    check(redacted("key sk-proj-abcdefghij0123456789ABCDlonger").find("sk-proj-abc") == std::string::npos,
+          "modern OpenAI sk-proj- key masked");
     check(redacted("AKIAIOSFODNN7EXAMPLE0").find("AKIAIOSF") == std::string::npos, "AWS key masked");
     check(redacted("Authorization: Bearer abcdefghijklmnop0123456789")
               .find("abcdefghijklmnop") == std::string::npos, "Bearer token masked");
