@@ -2,6 +2,7 @@
 
 #include "throws.hpp"
 #include "logger.hpp"
+#include <cctype>
 
 namespace agent::providers {
 
@@ -66,7 +67,34 @@ JSON OpenAI::build_request(const Conversation& conv, const JSON& tools_schema) {
         req["tools"] = tools_schema;
     }
 
+    add_reasoning(req);
     return req;
+}
+
+void OpenAI::apply_provider_options(const JSON& options) {
+    if ( options != JSON::TYPE::OBJECT )
+        return;
+    if ( options.contains("model") && options["model"] == JSON::TYPE::STRING )
+        _config.model = options["model"].to_string();
+    if ( options.contains("thinking") && options["thinking"] == JSON::TYPE::STRING ) {
+        std::string v;
+        for ( char c : options["thinking"].to_string()) v += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if ( v == "off" || v == "false" || v == "disabled" || v == "0" ) {
+            _reasoning_enabled = false; _reasoning_effort.clear();
+        } else if ( v == "on" || v == "true" || v == "enabled" || v == "1" || v.empty()) {
+            _reasoning_enabled = true; _reasoning_effort = "medium";
+        } else {
+            if ( v == "xhigh" || v == "max" ) v = "high"; // chat-completions caps at high
+            _reasoning_enabled = true; _reasoning_effort = v;
+        }
+    }
+}
+
+void OpenAI::add_reasoning(JSON& req) const {
+    // Chat-completions `reasoning_effort`. Only sent when the user enabled
+    // thinking, so ordinary models (which reject the field) are unaffected.
+    if ( _reasoning_enabled && !_reasoning_effort.empty())
+        req["reasoning_effort"] = _reasoning_effort;
 }
 
 Response OpenAI::parse_response(const JSON& response) {

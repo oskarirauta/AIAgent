@@ -18,6 +18,14 @@ public:
     std::string name() const override { return "openrouter"; }
     std::string endpoint() const override { return build_endpoint("/chat/completions"); }
 
+    // OpenRouter's unified reasoning param translates for every backend model,
+    // unlike OpenAI's flat reasoning_effort.
+    void add_reasoning(JSON& req) const override {
+        if ( _reasoning_enabled )
+            req["reasoning"] = JSON::Object{
+                { "effort", _reasoning_effort.empty() ? "medium" : _reasoning_effort } };
+    }
+
     // Optional OpenRouter attribution headers (not required, harmless if kept).
     std::vector<std::pair<std::string, std::string>> extra_headers() const override {
         return {

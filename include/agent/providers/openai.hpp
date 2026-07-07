@@ -20,6 +20,14 @@ public:
     JSON build_request(const Conversation& conv, const JSON& tools_schema) override;
     Response parse_response(const JSON& response) override;
     JSON make_tool_result(const std::string& tool_call_id, const std::string& result) override;
+    void apply_provider_options(const JSON& options) override;
+
+protected:
+    // /thinking maps to the chat-completions `reasoning_effort` (o-series / gpt-5).
+    // _reasoning_enabled off = no field. OpenRouter overrides how it is sent.
+    bool _reasoning_enabled = false;
+    std::string _reasoning_effort; // low | medium | high (empty = provider default)
+    virtual void add_reasoning(JSON& req) const; // OpenRouter sends a different shape
 
 private:
     JSON message_to_json(const Message& msg);

@@ -140,6 +140,29 @@ static void test_reasoning_content() {
     check(rk.thinking == "let me think...", "kimi captures reasoning_content");
 }
 
+static void test_reasoning_effort() {
+    std::cout << "reasoning_effort (openai / openrouter)" << std::endl;
+    agent::Conversation c; c.set_system("s"); c.add_user("hi");
+
+    agent::Config cfg; cfg.provider = "openai";
+    agent::providers::OpenAI p(cfg);
+    check(!p.build_request(c, JSON::Array{}).contains("reasoning_effort"), "no field when thinking off");
+    p.apply_provider_options(JSON::Object{ { "thinking", "high" } });
+    check(p.build_request(c, JSON::Array{})["reasoning_effort"].to_string() == "high", "reasoning_effort high");
+    p.apply_provider_options(JSON::Object{ { "thinking", "max" } });
+    check(p.build_request(c, JSON::Array{})["reasoning_effort"].to_string() == "high", "max maps down to high");
+    p.apply_provider_options(JSON::Object{ { "thinking", "off" } });
+    check(!p.build_request(c, JSON::Array{}).contains("reasoning_effort"), "off removes the field");
+
+    agent::Config rc; rc.provider = "openrouter";
+    agent::providers::OpenRouter r(rc);
+    r.apply_provider_options(JSON::Object{ { "thinking", "low" } });
+    JSON req = r.build_request(c, JSON::Array{});
+    check(!req.contains("reasoning_effort"), "openrouter does not send the flat field");
+    check(req.contains("reasoning") && req["reasoning"]["effort"].to_string() == "low",
+          "openrouter sends reasoning.effort");
+}
+
 static void test_openrouter_provider() {
     std::cout << "openrouter provider" << std::endl;
     agent::Config cfg; cfg.provider = "openrouter";
@@ -1799,6 +1822,7 @@ int main() {
     test_memory_listing();
     test_openai_request();
     test_reasoning_content();
+    test_reasoning_effort();
     test_openrouter_provider();
     test_ollama_request();
     test_anthropic_request();
