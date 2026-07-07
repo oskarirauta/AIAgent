@@ -1392,6 +1392,30 @@ static void test_edit_file() {
     check(atom.find("edit #2") != std::string::npos && atom.find("left unchanged") != std::string::npos, "multi-edit reports which edit failed");
     check(read() == "keep me\n", "a failed multi-edit leaves the file unchanged (atomic)");
 
+    // Near-miss diagnosis: a whitespace mismatch points at the real region.
+    write("int main() {\n    do_thing(a, b);\n    return 0;\n}\n");
+    std::string miss = ef.execute(JSON::Object{
+        { "path", path },
+        { "old_string", "int main() {\n  do_thing(a, b);\n  return 0;\n}" }, // 2-space indent vs 4
+        { "new_string", "X" } });
+    check(miss.find("closest on-disk region is lines 1-4") != std::string::npos,
+          "near-miss reports the region's line span");
+    check(miss.find("    do_thing(a, b);") != std::string::npos, "near-miss shows the on-disk text");
+    check(miss.find("no need to re-read") != std::string::npos, "near-miss tells the model not to re-read");
+    std::string nomiss = ef.execute(JSON::Object{
+        { "path", path },
+        { "old_string", "completely unrelated text that matches nothing at all" },
+        { "new_string", "X" } });
+    check(nomiss.find("closest on-disk region") == std::string::npos,
+          "no near-miss hint when nothing is close");
+
+    // Post-edit verification snippet: success returns the touched region.
+    write("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n");
+    std::string ok = ef.execute(JSON::Object{
+        { "path", path }, { "old_string", "l5" }, { "new_string", "l5x" } });
+    check(ok.find("[verify: lines 2-8]") != std::string::npos, "verify snippet with line span");
+    check(ok.find("5: l5x") != std::string::npos, "verify snippet shows the new text with line numbers");
+
     std::filesystem::remove(path);
 }
 

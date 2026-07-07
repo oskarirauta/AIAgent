@@ -5,6 +5,7 @@
 #include <vector>
 #include <algorithm>
 #include <set>
+#include <mutex>
 #include <filesystem>
 #include "throws.hpp"
 #include "logger.hpp"
@@ -507,7 +508,13 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
             _pre_run_cb(name, args);
         if ( _activity_cb )
             _activity_cb(is_shell ? ("running: " + command) : ("running " + name));
-        logger::info["tool"] << "executing " << name << std::endl;
+        {
+            // execute() runs concurrently for read-only tool batches, and the
+            // logger is not thread-safe — interleaved writes corrupt its state.
+            static std::mutex log_mx;
+            std::lock_guard<std::mutex> lk(log_mx);
+            logger::info["tool"] << "executing " << name << std::endl;
+        }
         std::string result = tool->execute(args);
         if ( _activity_cb )
             _activity_cb("");
