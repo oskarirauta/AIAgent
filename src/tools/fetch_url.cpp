@@ -268,7 +268,11 @@ std::string FetchUrl::execute(const JSON& args) {
                             "(KHTML, like Gecko) Chrome/124.0 Safari/537.36" },
             { "Accept", "text/html, text/plain, */*" }
         };
-        body = client.get(url, headers, &agent::turn_abort);
+        // SSRF: block link-local on every hop (redirects included) UNLESS the
+        // originally-requested host is itself link-local — that case already went
+        // through the danger_reason confirmation, so the user opted into it.
+        bool guard = !host_link_local(url_host(url));
+        body = client.get(url, headers, &agent::turn_abort, guard, /*max_bytes=*/2u * 1024 * 1024);
     } catch ( const std::exception& e ) {
         return std::string("error: fetch failed: ") + e.what();
     }

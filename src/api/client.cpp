@@ -1,14 +1,64 @@
 #include "agent/api/client.hpp"
 
 #include <curl/curl.h>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <stdexcept>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include "throws.hpp"
 #include "logger.hpp"
 #include "json.hpp"
 
 namespace agent::api {
+
+namespace {
+
+// SSRF guard: reject a connection whose resolved peer is link-local
+// (169.254.0.0/16 or fe80::/10) — cloud-metadata and link-local services. Used
+// as CURLOPT_OPENSOCKETFUNCTION so it applies on every hop, including redirects.
+bool addr_is_link_local(const struct curl_sockaddr* a) {
+    if ( a->family == AF_INET ) {
+        const struct sockaddr_in* s = reinterpret_cast<const struct sockaddr_in*>(&a->addr);
+        uint32_t ip = ntohl(s->sin_addr.s_addr);
+        return ( ip & 0xFFFF0000u ) == 0xA9FE0000u;
+    }
+    if ( a->family == AF_INET6 ) {
+        const struct sockaddr_in6* s = reinterpret_cast<const struct sockaddr_in6*>(&a->addr);
+        const uint8_t* b = s->sin6_addr.s6_addr;
+        return b[0] == 0xfe && ( b[1] & 0xc0 ) == 0x80;
+    }
+    return false;
+}
+
+curl_socket_t guarded_opensocket(void* clientp, curlsocktype purpose, struct curl_sockaddr* address) {
+    (void) clientp;
+    if ( purpose == CURLSOCKTYPE_IPCXN && addr_is_link_local(address)) {
+        logger::warning["http"] << "blocked connection to a link-local address (SSRF guard)" << std::endl;
+        return CURL_SOCKET_BAD;
+    }
+    return ::socket(address->family, address->socktype, address->protocol);
+}
+
+// Bounded body sink: append until `cap` bytes, then abort the transfer.
+struct CappedSink {
+    std::string* out;
+    size_t cap;
+};
+size_t capped_write(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    CappedSink* s = static_cast<CappedSink*>(userdata);
+    size_t n = size * nmemb;
+    if ( s->cap && s->out->size() + n > s->cap ) {
+        size_t room = s->cap > s->out->size() ? s->cap - s->out->size() : 0;
+        s->out->append(ptr, room);
+        return 0; // signal "stop" — we have enough; get() treats this as capped
+    }
+    s->out->append(ptr, n);
+    return n;
+}
+
+} // namespace
 
 // Extract a human-readable message from a provider error body. OpenAI and
 // Anthropic both use {"error":{"message":...}} (Anthropic also {"type":"error"}),
@@ -225,9 +275,12 @@ void Client::post_stream(const std::string& url, const std::string& auth_header,
 
 std::string Client::get(const std::string& url,
                         const std::vector<std::pair<std::string, std::string>>& extra_headers,
-                        std::atomic<bool>* abort_flag) {
+                        std::atomic<bool>* abort_flag,
+                        bool ssrf_guard,
+                        size_t max_bytes) {
     CURL* c = static_cast<CURL*>(curl);
     std::string response;
+    CappedSink sink { &response, max_bytes };
     curl_easy_reset(c);
 
     struct curl_slist* headers = nullptr;
@@ -240,10 +293,21 @@ std::string Client::get(const std::string& url,
     curl_easy_setopt(c, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(c, CURLOPT_MAXREDIRS, 5L);
+    // Never follow a redirect to a non-HTTP scheme (file:, gopher:, dict:, …).
+    curl_easy_setopt(c, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
     if ( headers )
         curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(c, CURLOPT_WRITEDATA, &response);
+    if ( max_bytes ) {
+        // Cap via the write callback (stops the transfer at `cap` and keeps the
+        // partial body); not CURLOPT_MAXFILESIZE, which errors out with no body.
+        curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, capped_write);
+        curl_easy_setopt(c, CURLOPT_WRITEDATA, &sink);
+    } else {
+        curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_callback);
+        curl_easy_setopt(c, CURLOPT_WRITEDATA, &response);
+    }
+    if ( ssrf_guard )
+        curl_easy_setopt(c, CURLOPT_OPENSOCKETFUNCTION, guarded_opensocket);
     curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
     curl_easy_setopt(c, CURLOPT_TIMEOUT, 30L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
@@ -260,6 +324,11 @@ std::string Client::get(const std::string& url,
     CURLcode res = curl_easy_perform(c);
     if ( headers )
         curl_slist_free_all(headers);
+
+    // A capped download aborts the write with CURLE_WRITE_ERROR — that is success
+    // with the bytes we wanted, not a failure.
+    if ( res == CURLE_WRITE_ERROR && max_bytes && !response.empty())
+        return response;
 
     if ( res == CURLE_ABORTED_BY_CALLBACK )
         return "";

@@ -21,9 +21,16 @@ public:
                      const std::string& body, std::atomic<bool>* abort_flag = nullptr);
     // Plain HTTP GET (follows redirects). Used by tools like web_search; not for
     // the provider APIs. Returns the response body; throws on a non-2xx status.
+    //  - ssrf_guard: refuse to connect to a link-local address on ANY hop
+    //    (169.254.0.0/16, fe80::/10), so a redirect can't be used to reach cloud
+    //    metadata / link-local services (SSRF). loopback/private are allowed.
+    //  - max_bytes: stop downloading once the body exceeds this (0 = unlimited),
+    //    so a huge response can't be buffered without bound.
     std::string get(const std::string& url,
                     const std::vector<std::pair<std::string, std::string>>& extra_headers = {},
-                    std::atomic<bool>* abort_flag = nullptr);
+                    std::atomic<bool>* abort_flag = nullptr,
+                    bool ssrf_guard = false,
+                    size_t max_bytes = 0);
 
     std::string post_form(const std::string& url, const std::string& body, std::atomic<bool>* abort_flag = nullptr);
     std::string post_form(const std::string& url,
