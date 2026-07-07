@@ -1296,6 +1296,54 @@ static void test_context_budget() {
     check(tiny.size() >= 2 && tiny.front().role == agent::Role::SYSTEM, "tiny budget keeps system + latest");
 }
 
+static void test_tool_supersession() {
+    std::cout << "tool-result supersession" << std::endl;
+    using agent::Message; using agent::Role; using agent::ToolCall;
+    std::string big(400, 'X'); // over the 120-char elision threshold
+
+    auto assistant = [](const std::string& id, const std::string& tool, const std::string& args) {
+        Message m(Role::ASSISTANT, "");
+        m.tool_calls.push_back(ToolCall{ id, tool, args });
+        return m;
+    };
+    auto result = [&](const std::string& id, const std::string& body) {
+        return Message(Role::TOOL, body, id, "tool");
+    };
+
+    std::vector<Message> msgs = {
+        Message(Role::SYSTEM, "s"),
+        assistant("a", "read_file", "{\"path\":\"/x\"}"),
+        result("a", "OLD-X " + big),
+        assistant("b", "edit_file", "{\"path\":\"/x\"}"),
+        result("b", "EDIT-X " + big),
+        assistant("c", "read_file", "{\"path\":\"/y\"}"),
+        result("c", "ONLY-Y " + big),
+        assistant("d", "run_command", "{\"command\":\"make\"}"),
+        result("d", "BUILD1 " + big),
+        assistant("e", "run_command", "{\"command\":\"make\"}"),
+        result("e", "BUILD2 " + big),
+    };
+
+    auto out = agent::Conversation::supersede_stale_tools(msgs);
+    check(out.size() == msgs.size(), "message count unchanged (pairing preserved)");
+    auto body = [&](const std::string& id) {
+        for ( const auto& m : out )
+            if ( m.role == Role::TOOL && m.tool_call_id.value_or("") == id ) return m.content;
+        return std::string("<missing>");
+    };
+    check(body("a").find("superseded") != std::string::npos, "older read of /x elided");
+    check(body("a").find("OLD-X") == std::string::npos, "elided body dropped");
+    check(body("b").find("EDIT-X") != std::string::npos, "newest for /x kept in full");
+    check(body("c").find("ONLY-Y") != std::string::npos, "sole result for /y kept");
+    check(body("d").find("superseded") != std::string::npos, "older run of `make` elided");
+    check(body("e").find("BUILD2") != std::string::npos, "newest run of `make` kept");
+
+    bool a_valid = false;
+    for ( const auto& m : out )
+        if ( m.role == Role::TOOL && m.tool_call_id.value_or("") == "a" ) a_valid = true;
+    check(a_valid, "elided result keeps its tool_call_id");
+}
+
 static void test_trim_hysteresis() {
     std::cout << "cache-stable trimming (hysteresis)" << std::endl;
     agent::Conversation c;
@@ -1918,6 +1966,7 @@ int main() {
     test_conversation_save_load();
     test_conversation_undo();
     test_context_budget();
+    test_tool_supersession();
     test_trim_hysteresis();
     test_settings_persistence();
     test_context_auto();

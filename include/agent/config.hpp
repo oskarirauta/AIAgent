@@ -41,6 +41,7 @@ public:
     bool auto_compact = false;  // summarise history automatically when it nears the context budget
     size_t auto_compact_pct = 80; // trigger threshold as a percentage of context_budget()
     bool workflow_autoresume = false; // a finished workflow starts a turn by itself (bounded; see repl)
+    bool supersede_tools = true; // elide stale tool results (older read/run of the same target)
 
     // Config-extensible command safety lists (config file only, never persisted
     // state and never project files): extra confirmation-free read-only commands,

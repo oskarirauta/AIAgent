@@ -3,10 +3,42 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <unordered_map>
 #include "logger.hpp"
 #include "throws.hpp"
+#include "common.hpp"
 
 namespace agent {
+
+namespace {
+
+// The "target" a tool call acts on, for supersession. Empty = never superseded.
+// File tools key on their path; run_command keys on its command string, so a
+// later read/write/edit of the same file (or re-run of the same command) makes
+// an earlier result stale.
+std::string supersede_key(const std::string& tool, const std::string& args_json) {
+    JSON args;
+    try { args = args_json.empty() ? JSON::Object{} : JSON::parse(args_json); }
+    catch ( ... ) { return ""; }
+    if ( args != JSON::TYPE::OBJECT )
+        return "";
+    if (( tool == "read_file" || tool == "write_file" || tool == "edit_file" ||
+          tool == "outline_file" ) && args.contains("path"))
+        return "file:" + common::trim_ws(args["path"].to_string());
+    if ( tool == "run_command" && args.contains("command"))
+        return "cmd:" + common::trim_ws(args["command"].to_string());
+    return "";
+}
+
+std::string supersede_describe(const std::string& key) {
+    if ( key.rfind("file:", 0) == 0 )
+        return "later access to " + key.substr(5);
+    if ( key.rfind("cmd:", 0) == 0 )
+        return "a later run of `" + key.substr(4) + "`";
+    return "a later action";
+}
+
+} // namespace
 
 static std::string role_to_string(Role role) {
     switch ( role ) {
@@ -60,6 +92,46 @@ void Conversation::add_tool_result(const std::string& tool_call_id, const std::s
 void Conversation::clear() {
     _messages.clear();
     _trim_start = 0; // the pinned cut refers to the old history; drop it
+}
+
+std::vector<Message> Conversation::supersede_stale_tools(std::vector<Message> msgs) {
+    // Map each tool_call_id to the target its call acts on (from the assistant
+    // message that issued it).
+    std::unordered_map<std::string, std::string> key_of;
+    for ( const auto& m : msgs )
+        if ( m.role == Role::ASSISTANT )
+            for ( const auto& tc : m.tool_calls ) {
+                std::string k = supersede_key(tc.name, tc.arguments);
+                if ( !k.empty())
+                    key_of[tc.id] = k;
+            }
+
+    // The last (newest) tool result index per target — that one is kept in full.
+    std::unordered_map<std::string, size_t> last_idx;
+    for ( size_t i = 0; i < msgs.size(); ++i )
+        if ( msgs[i].role == Role::TOOL && msgs[i].tool_call_id.has_value()) {
+            auto it = key_of.find(msgs[i].tool_call_id.value());
+            if ( it != key_of.end())
+                last_idx[it->second] = i;
+        }
+
+    // Elide the body of every earlier result whose target has a newer result.
+    for ( size_t i = 0; i < msgs.size(); ++i ) {
+        if ( msgs[i].role != Role::TOOL || !msgs[i].tool_call_id.has_value())
+            continue;
+        auto it = key_of.find(msgs[i].tool_call_id.value());
+        if ( it == key_of.end())
+            continue;
+        auto last = last_idx.find(it->second);
+        if ( last == last_idx.end() || last->second == i )
+            continue; // this is the newest for its target — keep it
+        if ( msgs[i].content.size() <= 120 )
+            continue; // too small to bother eliding
+        size_t lines = static_cast<size_t>(std::count(msgs[i].content.begin(), msgs[i].content.end(), '\n')) + 1;
+        msgs[i].content = "[superseded by " + supersede_describe(it->second) + " — " +
+                          std::to_string(lines) + " lines elided; re-run the tool if you need it again]";
+    }
+    return msgs;
 }
 
 std::vector<Message> Conversation::within_token_budget(size_t max_tokens) const {

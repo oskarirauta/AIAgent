@@ -238,6 +238,7 @@ void Config::load(const std::string& path) {
         else if ( key == "auto_compact" ) auto_compact = parse_bool(value);
         else if ( key == "auto_compact_pct" ) auto_compact_pct = parse_size(value, auto_compact_pct, key);
         else if ( key == "workflow_autoresume" ) workflow_autoresume = parse_bool(value);
+        else if ( key == "supersede_tools" ) supersede_tools = parse_bool(value);
         else if ( key == "tools_safe" ) tools_safe = parse_list(value);
         else if ( key == "tools_danger" ) tools_danger = parse_list(value);
         else if ( key == "max_tokens" ) max_tokens = parse_size(value, max_tokens, key);
