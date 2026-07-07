@@ -22,6 +22,7 @@ OBJS:= \
 	objs/repl_inline.o \
 	objs/workflow.o \
 	objs/skills.o \
+	objs/commands.o \
 	objs/gitignore.o \
 	objs/mcp_client.o \
 	objs/syntax_highlighter.o \
@@ -124,6 +125,8 @@ objs/workflow.o: src/workflow.cpp
 objs/skills.o: src/skills.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/gitignore.o: src/gitignore.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/commands.o: src/commands.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/mcp_client.o: src/mcp/client.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;

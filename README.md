@@ -115,6 +115,13 @@ and `/skill off <name>` removes it. When tools are enabled the model can also
 load one itself via the `use_skill` tool — its description lists the available
 skills, so the model picks the one that fits the task.
 
+### Commands
+
+The interactive REPL has ~35 slash commands. Type **`/help`** for the grouped
+list and **`/help <command>`** for the detail of one (e.g. `/help compact`).
+They are catalogued in **[COMMANDS.md](COMMANDS.md)** (generated from
+`src/commands.cpp`, the single source of truth shared with in-app help).
+
 ### Prompt shortcuts
 
 - **`@path`** in a message expands the file inline — `look at @src/main.cpp and

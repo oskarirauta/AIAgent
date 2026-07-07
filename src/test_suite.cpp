@@ -29,6 +29,7 @@
 #include "agent/tools/registry.hpp"
 #include "agent/skills.hpp"
 #include "agent/gitignore.hpp"
+#include "agent/commands.hpp"
 #include "agent/tools/skill_tool.hpp"
 #include "agent/tools/list_directory.hpp"
 #include "agent/tools/find_symbol.hpp"
@@ -848,6 +849,24 @@ static void test_outline_file() {
     check(r.find("void draw();") == std::string::npos, "prototype (;) excluded");
     check(ol.execute(JSON::Object{ { "path", "/no/such/file" } }).rfind("error:", 0) == 0, "missing file errors");
     std::filesystem::remove(p);
+}
+
+static void test_commands_catalog() {
+    std::cout << "command catalog / help" << std::endl;
+    const auto& cat = agent::command_catalog();
+    check(cat.size() >= 30, "catalog has all commands");
+    for ( const auto& c : cat ) {
+        check(!c.name.empty() && !c.group.empty() && !c.summary.empty() && !c.detail.empty(),
+              std::string("catalog entry complete: ") + c.name);
+    }
+    std::string ov = agent::commands_overview();
+    check(ov.find("Tools & safety") != std::string::npos, "overview has group headers");
+    check(ov.find("/plan") != std::string::npos, "overview lists /plan");
+    check(agent::command_help("model").find("/model") != std::string::npos, "help by bare name");
+    check(agent::command_help("/model").find("current model") != std::string::npos, "help by /name");
+    check(agent::command_help("/info").find("/about") != std::string::npos, "help resolves an alias");
+    check(agent::command_help("nope").empty(), "unknown command -> empty");
+    check(agent::commands_markdown().find("# Commands") != std::string::npos, "markdown has a title");
 }
 
 static void test_gitignore() {
@@ -2177,6 +2196,7 @@ int main() {
     test_ultra_keyword();
     test_block_diff();
     test_outline_file();
+    test_commands_catalog();
     test_gitignore();
     test_gitignore_integration();
     test_project_map();

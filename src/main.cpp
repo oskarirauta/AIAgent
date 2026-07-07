@@ -9,6 +9,7 @@
 #include "logger.hpp"
 #include "env.hpp"
 #include "agent/config.hpp"
+#include "agent/commands.hpp"
 #include "agent/repl.hpp"
 #include "agent/signal_handler.hpp"
 #include "agent/api/client.hpp"
@@ -31,7 +32,10 @@ static usage_t make_usage(int argc, char **argv) {
 
     return usage_t{
         { argc, argv },
-        { "AI Agent", "\nversion ", "0.1.0", "author ", "Oskari Rauta", "copyright ", "2026, Oskari Rauta", "\nusage:\n   ", "[options] [prompt]", "\nOptions:", "\nUniversal Linux CLI AI Agent\n" },
+        { "AI Agent", "\nversion ", agent::VERSION, "author ", "Oskari Rauta", "copyright ", "2026, Oskari Rauta", "\nusage:\n   ", "[options] [prompt]", "\nOptions:",
+          "\nUniversal Linux CLI AI assistant — a provider-agnostic alternative to Kimi Code / Claude Code.\n"
+          "With no prompt it starts an interactive REPL; type /help there for the in-app commands.\n"
+          "Config: ~/.config/ai-agent/config (or -c). Data/credentials/memory: ~/.local/share/ai-agent (or -d).\n" },
         {
             { "help", { "h", "help", "show usage help" }},
             { "version", { "v", "version", "show version" }},

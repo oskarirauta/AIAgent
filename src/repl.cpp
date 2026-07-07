@@ -27,6 +27,7 @@
 #include "agent/tools/tasks_tool.hpp"
 #include "agent/tools/skill_tool.hpp"
 #include "agent/skills.hpp"
+#include "agent/commands.hpp"
 #include "agent/tools/run_command.hpp"
 
 namespace agent {
@@ -1283,40 +1284,12 @@ std::string Repl::handle_command(const std::string& line) {
     }
 
     if ( cmd == "/help" ) {
-        return "commands:\n"
-               "  /help                    show this help\n"
-               "  /about                   about the app, version, provider/model (alias /info)\n"
-               "  /settings                open the settings menu (or /settings <key> <value> to set one directly)\n"
-               "  /provider [name]         switch provider mid-session (carries the conversation over)\n"
-               "  /model [name]            show or change the model\n"
-               "  /btw <note>              add a note to the context without asking for a reply (alias /note)\n"
-               "  /advisor <on|off|model N>   (claude) let the model consult a stronger advisor model\n"
-               "  /workflows [id]          (claude) view background workflow runs the model started\n"
-               "  /mcp [refresh|prompt <server> <name> [k=v]]   MCP servers, tools, resources, prompts\n"
-               "  /tools <confirm|auto|insecure>   set the tool confirmation mode\n"
-               "  /plan [on|off]           read-only planning mode (no writes/runs until off)\n"
-               "  /strict <on|off>         also confirm safe read-only commands\n"
-               "  /thinking <on|off|low|medium|high|xhigh|max>   thinking level (alias /effort)\n"
-               "  /theme <dark|light|warm> switch the colour theme\n"
-               "  /stream <off|on|collapse> live reasoning; collapse hides it once the answer is done\n"
-               "  /memories [name]         list this provider's memory files, or view one\n"
-               "  /context                 show context usage (system, conversation, limit)\n"
-               "  /cost [budget <usd>|tokens <n>]   session token usage + estimated cost / budget\n"
-               "  /history                 list the messages in the current context\n"
-               "  /retry                   re-run your last message\n"
-               "  /undo                    remove the last exchange from history\n"
-               "  /tasks                   show the agent's current todo list\n"
-               "  !<command>              run a shell command yourself (recorded for the model)\n"
-               "  /queue [drop <n|all>]    messages queued behind the running turn\n"
-               "  /trust [drop <n|all>]    review/revoke this session's tool grants\n"
-               "  /skills                  list skills; /skill <name> activates one (/skill off <name>)\n"
-               "  /pin [text]              keep a note in context through /compact (/pins, /unpin <n|all>)\n"
-               "  /changes [diff|revert <path|all>]   files the agent changed this session\n"
-               "  /export [file]           write the conversation to a Markdown file\n"
-               "  /clear (/reset)          clear the conversation history\n"
-               "  /compact [keep <n>|all]  summarise older history, keeping the last n exchanges verbatim\n"
-               "  /settings auto_compact <on|off>   auto-compact when the context nears its budget\n"
-               "  /exit, /quit             leave";
+        if ( args.empty())
+            return commands_overview();
+        std::string detail = command_help(args);
+        return detail.empty()
+             ? "no such command: " + args + "  (try /help for the full list)"
+             : detail;
     }
 
     if ( cmd == "/history" ) {
@@ -1614,7 +1587,7 @@ std::string Repl::handle_command(const std::string& line) {
     }
 
     if ( cmd == "/info" || cmd == "/about" ) {
-        return "agent version 0.1.0\n"
+        return std::string("agent version ") + agent::VERSION + "\n"
                "A lightweight, local C++ AI assistant for the command line, a\n"
                "provider-agnostic alternative to tools like Kimi Code and Claude Code.\n"
                "It chats, reads/writes files, runs commands and greps — with per-provider\n"
