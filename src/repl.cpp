@@ -257,6 +257,24 @@ std::string Repl::changes_command(const std::string& args) {
 }
 
 std::string Repl::export_transcript(const std::string& path) {
+    // Keep exports inside the home or working directory — never let a path
+    // (which the model can propose) overwrite an arbitrary system file.
+    {
+        std::error_code ec;
+        std::string ap = std::filesystem::weakly_canonical(std::filesystem::absolute(path, ec), ec).string();
+        if ( ap.empty()) ap = std::filesystem::absolute(path, ec).string();
+        auto within = [&](const std::string& base) {
+            if ( base.empty()) return false;
+            std::error_code bec;
+            std::string b = std::filesystem::weakly_canonical(std::filesystem::absolute(base, bec), bec).string();
+            return !b.empty() && ( ap == b || ap.rfind(b + "/", 0) == 0 );
+        };
+        std::string cwd;
+        try { cwd = std::filesystem::current_path().string(); } catch ( ... ) {}
+        if ( !within(_config.home_dir) && !within(cwd))
+            return "error: /export path must be inside your home or the working directory";
+    }
+
     const auto& msgs = _conversation.messages();
     std::string md = "# Conversation export\n\n";
     std::string date = current_date_line();

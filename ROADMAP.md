@@ -233,15 +233,23 @@ guard, cached-token accounting (+ OpenAI include_usage), /thinking on openai/
 openrouter, auto-retry with backoff, cache-stable hysteresis trimming, tool-
 result supersession, and rolling compact (keep-tail + verbatim tasks/changes).
 
-Batch 4 — remaining:
-- **`outline_file` tool**: symbols of one file with line numbers (find_symbol
-  logic on a single file).
-- **`.gitignore`-aware traversal** (90% semantics) for the search tools.
-- **UI polish**: settable paste thresholds in `/settings`, `/paste <n>` to
-  expand a collapsed paste block.
+Batch 4 — **done**: `outline_file`, `.gitignore`-aware traversal, skills
+(/skill + use_skill), per-turn tool-call budget, attention cues (bell on a
+blocking confirm + long-turn digest), and `/plan` read-only mode. See Done.
+
+Still open:
+- **UI polish**: `/paste <n>` to expand a collapsed paste block (settable paste
+  thresholds already shipped as the `paste_preview` setting).
 - **more providers** (enough, not every one) — the one open-ended item; the
   current set (OpenAI, Ollama, Anthropic, Moonshot, OpenRouter, Kimi, Claude)
   covers real use.
+- **Security hardening** (from an external audit): `/export` now stays inside
+  home/cwd and CI runs the test suite (done). Open, pending a policy call:
+  project-local `./.mcp.json` auto-spawns its `command` binaries at startup
+  (untrusted-repo risk), and `fetch_url` has no host filtering (SSRF to
+  metadata/localhost). Most other audit items were false positives or by-design
+  (allowlist-based `classify_safe`, whole-exchange `undo_last`, caught tool
+  exceptions).
 
 ## Considered / dropped
 
