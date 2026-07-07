@@ -7,6 +7,8 @@
 #include <fcntl.h>
 #include <fstream>
 #include <poll.h>
+#include <ctime>
+#include <set>
 #include <signal.h>
 #include <sstream>
 #include <thread>
@@ -14,6 +16,8 @@
 #include <sys/wait.h>
 #include <curl/curl.h>
 #include "logger.hpp"
+
+extern char** environ; // the process environment, for building a child's envp
 
 namespace agent::mcp {
 
@@ -146,27 +150,52 @@ int Client::load_config(const std::string& path, bool trusted) {
 // ── stdio transport ───────────────────────────────────────────────────────
 
 bool Client::spawn(Server& s) {
-    int to_child[2], from_child[2];
-    if ( pipe(to_child) != 0 || pipe(from_child) != 0 ) { s.error = "pipe() failed"; return false; }
+    int to_child[2] = { -1, -1 }, from_child[2] = { -1, -1 };
+    auto close_all = [&]() {
+        for ( int fd : { to_child[0], to_child[1], from_child[0], from_child[1] } )
+            if ( fd >= 0 ) ::close(fd);
+    };
+    // O_CLOEXEC so a concurrently-forked sibling child (parallel connect_all)
+    // never inherits these pipe fds; close every fd on any failure path.
+    if ( pipe2(to_child, O_CLOEXEC) != 0 ) { s.error = "pipe() failed"; return false; }
+    if ( pipe2(from_child, O_CLOEXEC) != 0 ) { s.error = "pipe() failed"; close_all(); return false; }
+
+    // Build the child's environment in the PARENT: setenv() between fork() and
+    // exec() is not async-signal-safe in a multithreaded process (it may take a
+    // malloc lock another thread held at fork time). Pass it via execvpe instead.
+    std::set<std::string> overridden;
+    for ( const auto& [k, v] : s.env ) overridden.insert(k);
+    std::vector<std::string> envs;
+    for ( char** e = environ; e && *e; ++e ) {
+        std::string entry(*e);
+        size_t eq = entry.find('=');
+        std::string key = ( eq == std::string::npos ) ? entry : entry.substr(0, eq);
+        if ( !overridden.count(key)) envs.push_back(std::move(entry));
+    }
+    for ( const auto& [k, v] : s.env ) envs.push_back(k + "=" + v);
+    std::vector<char*> envp;
+    envp.reserve(envs.size() + 1);
+    for ( auto& e : envs ) envp.push_back(const_cast<char*>(e.c_str()));
+    envp.push_back(nullptr);
+
+    std::vector<char*> argv;
+    argv.push_back(const_cast<char*>(s.command.c_str()));
+    for ( auto& a : s.args ) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+
     pid_t pid = fork();
-    if ( pid < 0 ) { s.error = "fork() failed"; return false; }
+    if ( pid < 0 ) { s.error = "fork() failed"; close_all(); return false; }
     if ( pid == 0 ) {
+        // Child: only async-signal-safe calls until exec. dup2 clears O_CLOEXEC on
+        // the target, so stdin/stdout survive exec while the pipe fds close.
         dup2(to_child[0], STDIN_FILENO);
         dup2(from_child[1], STDOUT_FILENO);
         int devnull = open("/dev/null", O_WRONLY);
         if ( devnull >= 0 ) { dup2(devnull, STDERR_FILENO); close(devnull); }
-        close(to_child[0]); close(to_child[1]);
-        close(from_child[0]); close(from_child[1]);
-        for ( const auto& [k, v] : s.env )
-            setenv(k.c_str(), v.c_str(), 1);
-        std::vector<char*> argv;
-        argv.push_back(const_cast<char*>(s.command.c_str()));
-        for ( auto& a : s.args ) argv.push_back(const_cast<char*>(a.c_str()));
-        argv.push_back(nullptr);
-        execvp(s.command.c_str(), argv.data());
+        execvpe(s.command.c_str(), argv.data(), envp.data());
         _exit(127);
     }
-    close(to_child[0]); close(from_child[1]);
+    ::close(to_child[0]); ::close(from_child[1]);
     s.pid = pid; s.in_fd = to_child[1]; s.out_fd = from_child[0];
     return true;
 }
@@ -182,6 +211,12 @@ bool Client::write_all(Server& s, const std::string& data) {
 }
 
 bool Client::read_line(Server& s, std::string& line, int timeout_ms) {
+    // Bound the buffer so a server that never emits a newline can't grow it
+    // without limit, and treat timeout_ms as an absolute deadline so a server
+    // dripping bytes slowly can't extend the wait indefinitely.
+    constexpr size_t MAX_RBUF = 16u * 1024 * 1024;
+    struct timespec start {};
+    clock_gettime(CLOCK_MONOTONIC, &start);
     for ( ;; ) {
         size_t nl = s.rbuf.find('\n');
         if ( nl != std::string::npos ) {
@@ -189,8 +224,17 @@ bool Client::read_line(Server& s, std::string& line, int timeout_ms) {
             s.rbuf.erase(0, nl + 1);
             return true;
         }
+        if ( s.rbuf.size() > MAX_RBUF ) {
+            s.error = "server response exceeded the buffer limit";
+            return false;
+        }
+        struct timespec now {};
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long elapsed = ( now.tv_sec - start.tv_sec ) * 1000 + ( now.tv_nsec - start.tv_nsec ) / 1000000;
+        int remaining = timeout_ms - static_cast<int>(elapsed);
+        if ( remaining <= 0 ) return false;
         struct pollfd pfd { s.out_fd, POLLIN, 0 };
-        int pr = poll(&pfd, 1, timeout_ms);
+        int pr = poll(&pfd, 1, remaining);
         if ( pr <= 0 ) return false;
         char buf[8192];
         ssize_t n = ::read(s.out_fd, buf, sizeof(buf));
