@@ -1894,6 +1894,25 @@ std::string Repl::handle_command(const std::string& line) {
                ( _config.strict ? "  (safe read-only commands now also ask)" : "" );
     }
 
+    if ( cmd == "/autoresume" ) {
+        std::string m = common::to_lower(common::trim_ws(args));
+        if ( m.empty())
+            return std::string("workflow autoresume: ") + ( _config.workflow_autoresume ? "on" : "off" ) +
+                   ( _config.workflow_autoresume
+                     ? "\nA finished background workflow resumes the conversation by itself so the model "
+                       "picks up its results (bounded to 2 auto-turns per message)."
+                     : "\nA finished background workflow only folds its results in on your next message. "
+                       "Turn on to have the model pick them up automatically." );
+        if ( m == "on" || m == "true" || m == "1" || m == "yes" ) _config.workflow_autoresume = true;
+        else if ( m == "off" || m == "false" || m == "0" || m == "no" ) _config.workflow_autoresume = false;
+        else return "usage: /autoresume [on|off]";
+        _workflow_autoresume.store(_config.workflow_autoresume, std::memory_order_relaxed);
+        _config.save_settings(_config.home_dir);
+        return std::string("workflow autoresume: ") + ( _config.workflow_autoresume
+             ? "on — a finished workflow will resume the conversation automatically"
+             : "off" );
+    }
+
     if ( cmd == "/thinking" || cmd == "/effort" ) {
         if ( args.empty())
             return "thinking: " + ( _config.thinking.empty() ? std::string("(provider default)") : _config.thinking );
@@ -2057,7 +2076,8 @@ void Repl::run_tty() {
                 "the task accordingly.");
         inline_repl.notify(head + ( resumed
             ? " — picking the results up automatically"
-            : " — results fold in on your next message (/workflows " + std::to_string(r.id) + " for details)" ));
+            : " — results fold in on your next message (/workflows " + std::to_string(r.id) +
+              " for details · /autoresume on to pick up automatically)" ));
     });
 
     inline_repl.run();

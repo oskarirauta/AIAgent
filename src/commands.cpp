@@ -109,6 +109,12 @@ const std::vector<CommandDoc>& command_catalog() {
       "`/skill <name>` activates a skill's instructions for the session (injected "
       "into the system prompt, surviving /compact). `/skill off <name>` deactivates. "
       "The model can also load one itself via the use_skill tool." },
+    { "/autoresume", "", "[on|off]", "Skills & workflows",
+      "auto-feed a finished workflow's results to the model",
+      "When a background workflow finishes, automatically resume the conversation so "
+      "the model reads its results and continues — instead of the results only folding "
+      "in on your next message. Bounded to 2 auto-turns per real message. Also the "
+      "\"workflow resume\" row in /settings." },
     { "/workflows", "", "[id | cancel <id> | retry <id>]", "Skills & workflows",
       "(claude) background workflow runs",
       "Lists background workflow runs the model started (via run_workflow). With an "

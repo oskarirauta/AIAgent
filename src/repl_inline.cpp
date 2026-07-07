@@ -47,7 +47,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
         // updates local state (last value wins: /effort medium then /effort max
         // leaves only max, a natural dedup), applied before the next prompt. They
         // don't change the running turn's tool gating or rebuild the conversation.
-        "/effort", "/thinking", "/stream", "/model"
+        "/effort", "/thinking", "/stream", "/model", "/autoresume"
     };
     return immediate.count(cmd) > 0;
 }
@@ -2354,8 +2354,9 @@ void InlineRepl::open_settings_menu() {
         "summarise older history automatically as it nears the budget", { "off", "on" });
     add("max_tokens", "max reply", std::to_string(_config.max_tokens), CTX,
         "cap on a single reply's output tokens", {}, true, 256, 200000, 1024, "tokens");
-    add("autoresume", "autoresume", _config.workflow_autoresume ? "on" : "off", CTX,
-        "a finished workflow resumes the conversation by itself (bounded)", { "off", "on" });
+    add("autoresume", "workflow resume", _config.workflow_autoresume ? "on" : "off", CTX,
+        "when a background workflow finishes, feed its results to the model automatically",
+        { "off", "on" });
 
     add("theme", "theme", _theme.name, UI,
         "colour theme (never sets the terminal background)", { "dark", "light", "warm" });
