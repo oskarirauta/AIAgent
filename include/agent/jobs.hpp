@@ -20,9 +20,9 @@ struct BackgroundJob {
     std::string command;
     pid_t pid = -1;
     pid_t pgid = -1;
-    std::atomic<bool> running{ true };
-    int exit_code = 0;
-    bool killed = false;                 // stopped by us, not a natural exit
+    std::atomic<bool> running{ true };   // release on store (exit), acquire on load
+    int exit_code = 0;                   // published before the `running` release-store
+    std::atomic<bool> killed{ false };   // stopped by us, not a natural exit
     std::chrono::steady_clock::time_point start;
     std::chrono::steady_clock::time_point ended;
     std::string output;                  // guarded by `mx`; capped to a tail
@@ -48,8 +48,10 @@ public:
     ~BackgroundJobs();
 
     // Notice printed when a job exits (id, command, a short status). Set by the app.
+    // Guarded by _cb_mx so set_on_finish(nullptr) at teardown synchronizes with an
+    // in-flight callback (the callback captures app state that is about to die).
     using finish_fn = std::function<void(int id, const std::string& command, const std::string& status)>;
-    void set_on_finish(finish_fn fn) { _on_finish = std::move(fn); }
+    void set_on_finish(finish_fn fn) { std::lock_guard<std::mutex> lk(_cb_mx); _on_finish = std::move(fn); }
 
     // Start `command` under `/bin/sh -c` in `cwd`, with `extra_env` (NAME=value)
     // exported. Returns the new job id, or -1 on failure (message in `error`).
@@ -70,6 +72,7 @@ private:
 
     std::vector<std::unique_ptr<BackgroundJob>> _jobs;
     std::mutex _mx;
+    std::mutex _cb_mx;       // guards _on_finish (set vs invoke)
     int _next_id = 1;
     finish_fn _on_finish;
 };

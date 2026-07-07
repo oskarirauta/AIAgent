@@ -1,5 +1,6 @@
 #include "agent/jobs.hpp"
 
+#include <cerrno>
 #include <csignal>
 #include <cstring>
 #include <sstream>
@@ -104,22 +105,34 @@ int BackgroundJobs::start(const std::string& command, const std::string& cwd,
     int rfd = fds[0];
     jp->reader = std::thread([this, jp, rfd]() {
         char buf[8192];
-        ssize_t n;
-        while (( n = read(rfd, buf, sizeof(buf))) > 0 ) {
-            std::lock_guard<std::mutex> lk(jp->mx);
-            jp->output.append(buf, static_cast<size_t>(n));
-            if ( jp->output.size() > OUTPUT_CAP )
-                jp->output.erase(0, jp->output.size() - OUTPUT_CAP);
+        for (;;) {
+            ssize_t n = read(rfd, buf, sizeof(buf));
+            if ( n > 0 ) {
+                std::lock_guard<std::mutex> lk(jp->mx);
+                jp->output.append(buf, static_cast<size_t>(n));
+                // Compact only when we drift well past the cap, so a chatty job does
+                // not pay an O(cap) memmove on every read — trim back to the tail.
+                if ( jp->output.size() > OUTPUT_CAP * 2 )
+                    jp->output.erase(0, jp->output.size() - OUTPUT_CAP);
+                continue;
+            }
+            if ( n < 0 && errno == EINTR )
+                continue; // a signal (SIGWINCH/SIGINT) interrupted the read, not EOF
+            break;        // EOF (0) or a genuine error
         }
         close(rfd);
         int status = 0;
-        waitpid(jp->pid, &status, 0);
+        while ( waitpid(jp->pid, &status, 0) < 0 && errno == EINTR ) {}
         jp->exit_code = WIFEXITED(status) ? WEXITSTATUS(status)
                                           : ( WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1 );
         jp->ended = std::chrono::steady_clock::now();
-        jp->running.store(false, std::memory_order_relaxed);
+        jp->running.store(false, std::memory_order_release); // publishes exit_code/ended
+        // Invoke the completion callback under _cb_mx so a concurrent
+        // set_on_finish(nullptr) at teardown cannot race with (or free out from
+        // under) an in-flight callback.
+        std::lock_guard<std::mutex> lk(_cb_mx);
         if ( _on_finish ) {
-            std::string st = jp->killed ? "stopped"
+            std::string st = jp->killed.load() ? "stopped"
                             : ( jp->exit_code == 0 ? "exited ok"
                                                    : "exited " + std::to_string(jp->exit_code));
             _on_finish(jp->id, jp->command, st);
@@ -133,12 +146,12 @@ std::vector<JobInfo> BackgroundJobs::list() {
     reap_done();
     std::vector<JobInfo> out;
     for ( const auto& j : _jobs ) {
-        bool run = j->running.load(std::memory_order_relaxed);
+        bool run = j->running.load(std::memory_order_acquire);
         auto end = run ? std::chrono::steady_clock::now() : j->ended;
         long secs = std::chrono::duration_cast<std::chrono::seconds>(end - j->start).count();
         size_t olen;
         { std::lock_guard<std::mutex> ol(j->mx); olen = j->output.size(); }
-        out.push_back({ j->id, j->command, run, j->exit_code, j->killed, secs, olen });
+        out.push_back({ j->id, j->command, run, j->exit_code, j->killed.load(), secs, olen });
     }
     return out;
 }
@@ -171,8 +184,8 @@ bool BackgroundJobs::stop(int id) {
     std::lock_guard<std::mutex> lk(_mx);
     for ( const auto& j : _jobs ) {
         if ( j->id != id ) continue;
-        if ( j->running.load(std::memory_order_relaxed) && j->pgid > 0 ) {
-            j->killed = true;
+        if ( j->running.load(std::memory_order_acquire) && j->pgid > 0 ) {
+            j->killed.store(true);
             kill(-j->pgid, SIGTERM);
         }
         return true;
@@ -184,8 +197,8 @@ int BackgroundJobs::stop_all() {
     std::lock_guard<std::mutex> lk(_mx);
     int n = 0;
     for ( const auto& j : _jobs ) {
-        if ( j->running.load(std::memory_order_relaxed) && j->pgid > 0 ) {
-            j->killed = true;
+        if ( j->running.load(std::memory_order_acquire) && j->pgid > 0 ) {
+            j->killed.store(true);
             kill(-j->pgid, SIGTERM);
             ++n;
         }
@@ -203,7 +216,7 @@ void BackgroundJobs::reap_done() {
     // Called with _mx held. Finished jobs are kept in the list (for /jobs history)
     // but their thread is joined once.
     for ( auto& j : _jobs )
-        if ( !j->running.load(std::memory_order_relaxed) && j->reader.joinable())
+        if ( !j->running.load(std::memory_order_acquire) && j->reader.joinable())
             j->reader.join();
 }
 
