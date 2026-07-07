@@ -1571,9 +1571,13 @@ void InlineRepl::on_enter() {
     _input.clear();
     _cursor = 0;
     _input_window_start = 0;
+    // Echo (which expands paste placeholders into framed preview blocks) MUST run
+    // while _pastes still holds the entries — echo first, then hand them to
+    // _sent_pastes and clear, then start the turn without re-echoing.
+    echo_user(display);
     for ( auto& p : _pastes ) _sent_pastes.push_back(p); // keep for /paste <n>
     _pastes.clear();
-    start_turn(line, display);
+    start_turn(line, display, /*already_echoed=*/true);
 }
 
 void InlineRepl::start_turn(const std::string& line, const std::string& display, bool already_echoed) {
