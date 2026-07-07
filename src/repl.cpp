@@ -24,6 +24,7 @@
 #include "agent/tools/web_search.hpp"
 #include "agent/tools/fetch_url.hpp"
 #include "agent/tools/mcp_tool.hpp"
+#include "agent/tools/ask_user.hpp"
 #include "agent/tools/tasks_tool.hpp"
 #include "agent/tools/skill_tool.hpp"
 #include "agent/skills.hpp"
@@ -1931,15 +1932,16 @@ std::string Repl::handle_command(const std::string& line) {
 
     if ( cmd == "/bell" ) {
         std::string m = common::to_lower(common::trim_ws(args));
-        static const std::vector<std::string> modes = { "never", "question", "attention", "always" };
+        static const std::vector<std::string> modes = { "never", "ask_user", "question", "attention", "always" };
         if ( m.empty())
             return "bell: " + _config.bell +
-                   "\n  always    — ring on every answer + when your attention is needed"
+                   "\n  always    — ring on every answer + everything below"
                    "\n  attention — ring on a workflow finishing, a tool-permission prompt, or a question"
-                   "\n  question  — ring only when the answer is a question"
+                   "\n  question  — ring when the answer is a question (or the model asks via ask_user)"
+                   "\n  ask_user  — ring only when the model asks you a question via the ask_user tool"
                    "\n  never     — never ring";
         if ( std::find(modes.begin(), modes.end(), m) == modes.end())
-            return "usage: /bell <never|question|attention|always>";
+            return "usage: /bell <never|ask_user|question|attention|always>";
         _config.bell = m;
         _config.save_settings(_config.home_dir);
         return "bell: " + _config.bell;
@@ -2087,6 +2089,16 @@ void Repl::run_tty() {
     set_progress_callback([&inline_repl](const std::string& s) { inline_repl.set_activity(s); });
     set_tool_notice_callback([&inline_repl](const std::string& s) { inline_repl.notify_tool(s); });
 
+    // ask_user tool: the model can pause and ask the user a question through the
+    // interactive terminal. Only available in the interactive REPL.
+    if ( _config.tools_enabled ) {
+        _registry.remove("ask_user");
+        _registry.add(std::make_unique<tools::AskUser>(
+            [&inline_repl](const std::string& q, const std::vector<std::string>& opts) {
+                return inline_repl.ask_user(q, opts);
+            }));
+    }
+
     // Workflow completion notice: printed above the live block with a bell, so a
     // long-running background run announces itself even while you're idle. With
     // workflow_autoresume on, a synthetic prompt joins the normal pending queue
@@ -2119,6 +2131,7 @@ void Repl::run_tty() {
     _workflows.set_on_finish(nullptr);
     set_tool_notice_callback(nullptr);
     set_progress_callback(nullptr);
+    _registry.remove("ask_user"); // its callback captured the now-dead inline_repl
 
     // Persist UI/behaviour settings changed this session (theme, multiline,
     // thinking, context) so they are restored next launch.

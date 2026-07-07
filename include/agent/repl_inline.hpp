@@ -53,6 +53,11 @@ public:
     // before the event loop exists to service the worker-thread confirm() above.
     tools::Decision confirm_on_main(const tools::ConfirmRequest& req, std::string& note);
 
+    // ask_user tool: the worker asks the user a question and blocks until the
+    // main thread presents it (a menu for options, else a text prompt) and reads
+    // the answer. Returns the user's answer (empty if cancelled).
+    std::string ask_user(const std::string& question, const std::vector<std::string>& options);
+
     // Publish what the worker is currently doing (e.g. a running command) so the
     // status line can show it. Thread-safe.
     void set_activity(const std::string& activity);
@@ -153,6 +158,11 @@ private:
     void draw_confirm_menu(const tools::ConfirmRequest& req, bool redraw);
     void handle_confirm_key(int c);
     void commit_confirm(tools::Decision d, const std::string& label);
+
+    void render_ask_dialog();
+    void draw_ask_menu(bool redraw);
+    void handle_ask_key(int c);
+    void commit_ask(const std::string& answer);
 
     // Interactive settings menu (arrow-select), opened by a bare /settings.
     struct SettingRow {
@@ -281,6 +291,18 @@ private:
     bool _confirm_answered = false;
     tools::Decision _confirm_decision = tools::Decision::deny;
     std::string _confirm_note;          // one-line reason captured with a "Deny with a reason"
+
+    // ask_user handshake (worker asks a question, main thread answers) — mirrors
+    // the confirm handshake, guarded by _mx / _cv.
+    bool _ask_pending = false;
+    std::string _ask_question;
+    std::vector<std::string> _ask_options;
+    bool _ask_answered = false;
+    std::string _ask_answer;
+    bool _asking = false;               // the ask dialog is on screen (main thread)
+    int _ask_menu_lines = 0;            // lines drawn (for in-place redraw)
+    int _ask_sel = 0;                   // selected option
+    std::string _ask_input;             // free-text answer being typed (no options)
 
     // Main-thread turn state.
     bool _turn_running = false;

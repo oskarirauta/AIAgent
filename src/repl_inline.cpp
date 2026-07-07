@@ -31,13 +31,17 @@ namespace agent {
 static struct termios g_orig_termios;
 static bool g_termios_saved = false;
 
-// Terminal-bell policy as an ordered level: never < question < attention < always.
-// An event rings if the configured level is at least the event's threshold.
+// Terminal-bell policy as an ordered level:
+//   never < ask_user < question < attention < always.
+// An event rings if the configured level is at least the event's threshold:
+//   ask_user tool = 1, answer-is-a-question = 2, tool-permission/workflow = 3,
+//   every answer = 4.
 static int bell_level(const std::string& mode) {
     if ( mode == "never" ) return 0;
-    if ( mode == "question" ) return 1;
-    if ( mode == "always" ) return 3;
-    return 2; // attention (default)
+    if ( mode == "ask_user" || mode == "ask" ) return 1;
+    if ( mode == "question" ) return 2;
+    if ( mode == "always" ) return 4;
+    return 3; // attention (default)
 }
 
 // Local/display-only slash commands: safe to run mid-turn because they only read
@@ -755,7 +759,7 @@ void InlineRepl::drain_notices() {
             wr(_theme.dim + n.text + Theme::reset + "\r\n");
         }
     }
-    if ( ring && bell_level(_config.bell) >= 2 ) // a notice (workflow done) is "attention"
+    if ( ring && bell_level(_config.bell) >= 3 ) // a notice (workflow done) is "attention"
         wr("\a"); // bell: the user may be looking elsewhere
     draw_live();
 }
@@ -1380,12 +1384,12 @@ void InlineRepl::run() {
 
         // Async notices (workflow completions etc.) print above the live block;
         // held back while a dialog owns the screen.
-        if ( !_confirming && !_in_settings && !_in_list )
+        if ( !_confirming && !_asking && !_in_settings && !_in_list )
             drain_notices();
 
         // Idle + something queued (e.g. a workflow auto-resume prompt enqueued
         // from a background thread): run it through the normal turn machinery.
-        if ( !_turn_running && !_confirming && !_in_settings && !_in_list ) {
+        if ( !_turn_running && !_confirming && !_asking && !_in_settings && !_in_list ) {
             bool has;
             {
                 std::lock_guard<std::mutex> lk(_mx);
@@ -1420,6 +1424,8 @@ void InlineRepl::run() {
             }
             if ( _confirming )
                 handle_confirm_key(c);
+            else if ( _asking )
+                handle_ask_key(c);
             else if ( _in_list )
                 handle_list_key(c);
             else if ( _in_settings )
@@ -1435,7 +1441,7 @@ void InlineRepl::run() {
                     _defer_draw = true;
                     handle_byte(c);
                     long budget = 1 << 20; // hard cap per loop iteration
-                    while ( budget-- > 0 && !_confirming && !_in_settings && !_in_list ) {
+                    while ( budget-- > 0 && !_confirming && !_asking && !_in_settings && !_in_list ) {
                         int rem = 0;
                         if ( ioctl(STDIN_FILENO, FIONREAD, &rem) != 0 || rem <= 0 )
                             break;
@@ -1452,7 +1458,7 @@ void InlineRepl::run() {
             }
         } else if ( r < 0 && errno != EINTR ) {
             break;
-        } else if ( _turn_running && !_confirming && !_in_settings && !_in_list ) {
+        } else if ( _turn_running && !_confirming && !_asking && !_in_settings && !_in_list ) {
             // Idle tick while working: advance the spinner.
             ++_spin;
             draw_live();
@@ -1678,14 +1684,15 @@ void InlineRepl::finish_async_command() {
 void InlineRepl::poll_worker() {
     if ( !_turn_running )
         return;
-    // A modal menu (opened mid-turn) owns the screen — don't let streamed output
-    // draw over it. The chunks stay buffered and flush when the menu closes.
-    if ( _in_settings || _in_list )
+    // A modal menu / ask dialog owns the screen — don't let streamed output draw
+    // over it. The chunks stay buffered and flush when it closes.
+    if ( _in_settings || _in_list || _asking )
         return;
 
     std::vector<std::string> chunks;
     bool done = false;
     bool need_confirm = false;
+    bool need_ask = false;
     tools::ConfirmRequest req;
     {
         std::lock_guard<std::mutex> lk(_mx);
@@ -1698,6 +1705,8 @@ void InlineRepl::poll_worker() {
             need_confirm = true;
             req = _confirm_req;
         }
+        if ( _ask_pending && !_asking )
+            need_ask = true;
     }
 
     // Flush any streamed output we just drained BEFORE showing a confirm dialog —
@@ -1722,7 +1731,13 @@ void InlineRepl::poll_worker() {
         return;
     }
 
-    if ( done && !_confirming ) {
+    if ( need_ask ) {
+        render_ask_dialog();
+        _asking = true;
+        return;
+    }
+
+    if ( done && !_confirming && !_asking ) {
         if ( _async_command )
             finish_async_command();
         else
@@ -1794,7 +1809,7 @@ void InlineRepl::finish_turn() {
         while ( !tail.empty() && std::isspace(static_cast<unsigned char>(tail.back())))
             tail.pop_back();
         bool is_question = !tail.empty() && tail.back() == '?';
-        int need = is_question ? 1 /*question*/ : 3 /*always*/;
+        int need = is_question ? 2 /*question*/ : 4 /*always*/;
         if ( bell_level(_config.bell) >= need )
             wr("\a");
     }
@@ -2020,7 +2035,7 @@ void InlineRepl::render_confirm_dialog(const tools::ConfirmRequest& req) {
     auto ran = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::steady_clock::now() - _turn_start).count();
     // A tool-permission prompt is an "attention" event.
-    if ( ran >= 4 && !_confirm_belled && bell_level(_config.bell) >= 2 ) {
+    if ( ran >= 4 && !_confirm_belled && bell_level(_config.bell) >= 3 ) {
         wr("\a");
         _confirm_belled = true;
     }
@@ -2201,7 +2216,7 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
     if ( trimmed == "/bell" ) {
         ListMenu m;
         m.title = "terminal bell";
-        m.rows = { "never", "question", "attention", "always" };
+        m.rows = { "never", "ask_user", "question", "attention", "always" };
         m.keys = m.rows;
         m.select_cmd = "/bell ";
         m.current = _config.bell.empty() ? "attention" : _config.bell;
@@ -2491,8 +2506,8 @@ void InlineRepl::open_settings_menu() {
     add("theme", "theme", _theme.name, UI,
         "colour theme (never sets the terminal background)", { "dark", "light", "warm" });
     add("bell", "bell", _config.bell, UI,
-        "terminal bell: always answer · attention (workflow/tool/question) · question only · never",
-        { "never", "question", "attention", "always" });
+        "bell: always · attention (workflow/tool/?) · question · ask_user (model asks you) · never",
+        { "never", "ask_user", "question", "attention", "always" });
     add("multiline", "multiline", _config.multiline ? "on" : "off", UI,
         "Enter inserts a newline; Alt+Enter sends the message", { "off", "on" });
     add("paste_preview", "paste preview",
@@ -3224,6 +3239,122 @@ tools::Decision InlineRepl::confirm(const tools::ConfirmRequest& req, std::strin
     _confirm_pending = false;
     note = _confirm_note;
     return _confirm_answered ? _confirm_decision : tools::Decision::deny;
+}
+
+std::string InlineRepl::ask_user(const std::string& question, const std::vector<std::string>& options) {
+    // Worker thread: hand the question to the main thread and block until answered.
+    std::unique_lock<std::mutex> lk(_mx);
+    _ask_question = question;
+    _ask_options = options;
+    _ask_answered = false;
+    _ask_answer.clear();
+    _ask_pending = true;
+    _cv.wait(lk, [this]() {
+        return _ask_answered || !agent::running.load(std::memory_order_relaxed);
+    });
+    _ask_pending = false;
+    return _ask_answered ? _ask_answer : std::string();
+}
+
+void InlineRepl::render_ask_dialog() {
+    erase_live();
+    tcflush(STDIN_FILENO, TCIFLUSH);
+    wr("\033[?25l");
+    // An ask_user prompt is the lowest-threshold bell event: the model is blocked
+    // waiting for your decision — exactly the "you looked away" case.
+    if ( bell_level(_config.bell) >= 1 )
+        wr("\a");
+    wr("\n" + _theme.command + "❓ " + _ask_question + Theme::reset + "\n");
+    _ask_sel = 0;
+    _ask_input.clear();
+    _ask_menu_lines = 0;
+    draw_ask_menu(false);
+}
+
+void InlineRepl::draw_ask_menu(bool redraw) {
+    std::string out;
+    if ( redraw && _ask_menu_lines > 0 )
+        out += "\r\033[" + std::to_string(_ask_menu_lines) + "A";
+    out += "\033[J";
+    int lines = 0;
+    if ( _ask_options.empty()) {
+        // Free-text answer.
+        out += _theme.dim + "type your answer (Enter to send, Esc to skip):" + Theme::reset + "\r\n";
+        out += "\033[1;7m ❯ \033[0m " + _ask_input + "\r\n";
+        lines = 2;
+    } else {
+        for ( size_t i = 0; i < _ask_options.size(); ++i ) {
+            if ( static_cast<int>(i) == _ask_sel )
+                out += "\033[1;7m ❯ " + _ask_options[i] + " \033[0m\r\n";
+            else
+                out += "   " + _ask_options[i] + "\r\n";
+            lines++;
+        }
+        out += _theme.dim + "  ↑↓ move · ⏎ pick · esc skip" + Theme::reset + "\r\n";
+        lines++;
+    }
+    wr(out);
+    _ask_menu_lines = lines;
+}
+
+void InlineRepl::handle_ask_key(int c) {
+    if ( _ask_options.empty()) {
+        // Free-text entry.
+        if ( c == '\r' || c == '\n' ) { commit_ask(common::trim_ws(_ask_input)); return; }
+        if ( c == 0x1b ) { commit_ask(""); return; } // esc = skip
+        if ( c == 0x7f || c == 0x08 ) {
+            if ( !_ask_input.empty()) {
+                _ask_input.pop_back();
+                while ( !_ask_input.empty() &&
+                        (static_cast<unsigned char>(_ask_input.back()) & 0xC0) == 0x80 )
+                    _ask_input.pop_back();
+            }
+            draw_ask_menu(true);
+            return;
+        }
+        if ( c >= 0x20 ) { _ask_input += static_cast<char>(c); draw_ask_menu(true); }
+        return;
+    }
+    int n = static_cast<int>(_ask_options.size());
+    if ( c == 0x1b ) {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(STDIN_FILENO, &fds);
+        struct timeval tv { 0, 40 * 1000 };
+        if ( select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0 ) {
+            int b1 = read_byte();
+            if ( b1 == '[' || b1 == 'O' ) {
+                int b2 = read_byte();
+                if ( b2 == 'A' ) { _ask_sel = ( _ask_sel - 1 + n ) % n; draw_ask_menu(true); }
+                else if ( b2 == 'B' ) { _ask_sel = ( _ask_sel + 1 ) % n; draw_ask_menu(true); }
+            }
+            return;
+        }
+        commit_ask(""); // bare esc = skip
+        return;
+    }
+    if ( c == '\r' || c == '\n' ) {
+        if ( _ask_sel >= 0 && _ask_sel < n )
+            commit_ask(_ask_options[_ask_sel]);
+        return;
+    }
+}
+
+void InlineRepl::commit_ask(const std::string& answer) {
+    if ( _ask_menu_lines > 0 )
+        wr("\r\033[" + std::to_string(_ask_menu_lines) + "A\033[J");
+    wr("\033[?25h");
+    wr("\033[1m→ " + ( answer.empty() ? std::string("(skipped)") : answer ) + "\033[0m\n");
+    _ask_menu_lines = 0;
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        _ask_answer = answer;
+        _ask_answered = true;
+        _ask_pending = false;
+    }
+    _cv.notify_all();
+    _asking = false;
+    draw_live();
 }
 
 } // namespace agent
