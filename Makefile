@@ -1,7 +1,10 @@
 all: world
 
 CXX?=g++
-CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include -g
+STRIP?=strip
+# Production defaults: optimised, no debug symbols. For a debug build, override on
+# the command line, e.g. `make CXXFLAGS='--std=c++17 -Wall -fPIC -I./include -g'`.
+CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include -O2
 # Emit header dependency files (.d) so changing a header recompiles every source
 # that includes it — mixing objects built against different struct layouts causes
 # memory corruption at runtime.
@@ -165,13 +168,26 @@ objs/test_suite.o: src/test_suite.cpp
 agent: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(ENV_OBJS) $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@ $(LIBS);
 
+# Strip the release binary (symbols/debug info). Separate target so a plain `make`
+# still leaves symbols for a backtrace; `make release` builds and strips.
+strip: agent
+	$(STRIP) agent
+
+release: agent strip
+
 TEST_OBJS:= $(filter-out objs/main.o,$(OBJS)) objs/test_suite.o
 
-test: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(ENV_OBJS) $(TEST_OBJS)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o test_runner $(LIBS);
+# Tests are opt-in: a plain `make` builds only the agent. Run them with `make tests`
+# (builds test_runner and executes it). `make test` is kept as an alias.
+tests: test_runner
 	./test_runner
 
-.PHONY: clean
+test: tests
+
+test_runner: $(USAGE_OBJS) $(COMMON_OBJS) $(LOGGER_OBJS) $(JSON_OBJS) $(THROWS_OBJS) $(SIGNAL_OBJS) $(PROCESS_OBJS) $(ENV_OBJS) $(TEST_OBJS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o test_runner $(LIBS);
+
+.PHONY: all world strip release tests test clean
 clean:
 	@rm -rf objs agent test_runner
 
