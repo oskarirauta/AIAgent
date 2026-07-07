@@ -561,26 +561,35 @@ std::string InlineRepl::status_line() const {
 
         // Queued messages: show the count and a peek at the next prompt so you
         // can see WHAT is waiting, not just how many.
-        std::string qclip, qplain;
+        std::string qclip;
         if ( queued > 0 ) {
             for ( char& c : next_queued )
                 if ( c == '\n' || c == '\t' ) c = ' ';
             qclip = clip(next_queued, 24);
-            qplain = " · " + std::to_string(queued) + " queued: “" + qclip + "”";
         }
 
         // Everything must fit ONE terminal row: draw_live prints this verbatim and
         // erase_live assumes the status occupies exactly one line — an overflowing
-        // status leaves stale frames behind on every spinner tick.
+        // status leaves stale frames behind on every spinner tick. When space is
+        // tight, drop parts in priority order: the Ctrl-C hint first, then the
+        // queued preview text, then the queued suffix entirely; `what` last.
         int cols = term_cols() - 1; // one column of margin: avoid the autowrap edge
-        int overhead = 2 /* spinner+sp */ + 1 + static_cast<int>(secs_s.size())
-                     + 22 /* " (Ctrl-C to interrupt)" */ + display_width(qplain);
+        int fixed = 2 /* spinner+sp */ + 1 + static_cast<int>(secs_s.size());
         std::string hint = " (Ctrl-C to interrupt)";
-        if ( cols - overhead < 12 ) { // narrow terminal: drop the hint first
-            overhead -= 22;
-            hint.clear();
-        }
-        what = clip(what, std::max(8, cols - overhead));
+        bool q_suffix = queued > 0, q_preview = queued > 0;
+
+        auto qwidth = [&]() -> int {
+            if ( !q_suffix ) return 0;
+            int w = 3 + static_cast<int>(std::to_string(queued).size()) + 7; // " · N queued"
+            if ( q_preview ) w += 3 + display_width(qclip) + 1;              // ": “…”"
+            return w;
+        };
+        auto room = [&]() { return cols - fixed - static_cast<int>(hint.size()) - qwidth(); };
+
+        if ( room() < 12 ) hint.clear();
+        if ( room() < 12 ) q_preview = false;
+        if ( room() < 12 ) q_suffix = false;
+        what = clip(what, std::max(1, room()));
 
         // Pre-styled: a bright spinner + label stands out against the dim idle
         // status line. (draw_live prints this verbatim while a turn is running.)
@@ -588,10 +597,12 @@ std::string InlineRepl::status_line() const {
                       + _theme.accent + what + " " + secs_s + Theme::reset;
         if ( !hint.empty())
             s += _theme.dim + hint + Theme::reset;
-        if ( queued > 0 )
+        if ( q_suffix ) {
             s += _theme.dim + " · " + Theme::reset + _theme.warn +
-                 std::to_string(queued) + " queued" + Theme::reset + _theme.dim +
-                 ": “" + qclip + "”" + Theme::reset;
+                 std::to_string(queued) + " queued" + Theme::reset;
+            if ( q_preview )
+                s += _theme.dim + ": “" + qclip + "”" + Theme::reset;
+        }
         return s;
     }
 
@@ -634,11 +645,16 @@ void InlineRepl::set_activity(const std::string& activity) {
 
 void InlineRepl::notify(const std::string& line) {
     std::lock_guard<std::mutex> lk(_mx);
-    _notices.push(line);
+    _notices.push({ line, true });
+}
+
+void InlineRepl::notify_quiet(const std::string& line) {
+    std::lock_guard<std::mutex> lk(_mx);
+    _notices.push({ line, false });
 }
 
 void InlineRepl::drain_notices() {
-    std::vector<std::string> lines;
+    std::vector<Notice> lines;
     {
         std::lock_guard<std::mutex> lk(_mx);
         while ( !_notices.empty()) {
@@ -649,9 +665,17 @@ void InlineRepl::drain_notices() {
     if ( lines.empty())
         return;
     erase_live();
-    for ( const auto& l : lines )
-        wr(_theme.accent + "● " + l + Theme::reset + "\r\n");
-    wr("\a"); // bell: the user may be looking elsewhere
+    bool ring = false;
+    for ( const auto& n : lines ) {
+        if ( n.bell ) {
+            wr(_theme.accent + "● " + n.text + Theme::reset + "\r\n");
+            ring = true;
+        } else {
+            wr(_theme.dim + n.text + Theme::reset + "\r\n");
+        }
+    }
+    if ( ring )
+        wr("\a"); // bell: the user may be looking elsewhere
     draw_live();
 }
 
@@ -988,7 +1012,7 @@ const std::vector<std::string>& slash_commands() {
         "/help", "/about", "/settings", "/provider", "/model", "/btw", "/note",
         "/tools", "/strict", "/thinking", "/effort", "/theme", "/stream",
         "/memories", "/context", "/cost", "/history", "/retry", "/undo", "/tasks",
-        "/pin", "/pins", "/unpin",
+        "/pin", "/pins", "/unpin", "/queue",
         "/changes", "/export", "/compact", "/clear", "/reset", "/mcp", "/advisor",
         "/workflows", "/exit", "/quit"
     };
@@ -1363,12 +1387,19 @@ void InlineRepl::on_enter() {
         _input_window_start = 0;
         _pastes.clear();
 
+        // /queue inspects or edits the pending queue itself, so it must run NOW,
+        // not be appended to the very queue it manages.
+        if ( trimmed == "/queue" || trimmed.rfind("/queue ", 0) == 0 ) {
+            queue_command(trimmed);
+            return;
+        }
+
         // While a turn is streaming, queue the command so it runs when the queue
         // advances, instead of interleaving with (and cluttering) the output.
         // Flush type-ahead so keys aimed at a not-yet-open interactive menu can't
         // trigger anything by accident.
         if ( _turn_running ) {
-            _pending.push(trimmed);
+            _pending.push_back(trimmed);
             tcflush(STDIN_FILENO, TCIFLUSH);
             draw_live();
             return;
@@ -1383,7 +1414,7 @@ void InlineRepl::on_enter() {
 
     if ( _turn_running ) {
         // A turn is in flight — queue this one to auto-send when it finishes.
-        _pending.push(line);
+        _pending.push_back(line);
         _input.clear();
         _cursor = 0;
         _input_window_start = 0;
@@ -1688,6 +1719,55 @@ void InlineRepl::draw_confirm_menu(const tools::ConfirmRequest& req, bool redraw
     _confirm_menu_lines = n;
 }
 
+// /queue — list the prompts/commands waiting behind the running turn;
+// /queue drop <n|all> removes entries. Runs immediately, even mid-turn.
+void InlineRepl::queue_command(const std::string& line) {
+    std::istringstream iss(line);
+    std::string cmd, sub, arg;
+    iss >> cmd >> sub >> arg;
+
+    std::string result;
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        if ( sub.empty()) {
+            if ( _pending.empty())
+                result = "queue is empty";
+            else {
+                result = "queued (runs after the current turn):\n";
+                for ( size_t i = 0; i < _pending.size(); ++i ) {
+                    std::string p = _pending[i];
+                    for ( char& ch : p )
+                        if ( ch == '\n' || ch == '\t' ) ch = ' ';
+                    if ( p.size() > 120 ) p = p.substr(0, 120) + "…";
+                    result += "\n  " + std::to_string(i + 1) + ". " + p;
+                }
+                result += "\n\n/queue drop <n|all> removes";
+            }
+        } else if ( common::to_lower(sub) == "drop" ) {
+            if ( common::to_lower(arg) == "all" ) {
+                size_t n = _pending.size();
+                _pending.clear();
+                result = "dropped " + std::to_string(n) + " queued message(s)";
+            } else {
+                int n = 0;
+                try { n = std::stoi(arg); } catch ( ... ) { n = 0; }
+                if ( n < 1 || n > static_cast<int>(_pending.size()))
+                    result = _pending.empty() ? "queue is empty"
+                                              : "no queued message #" + arg + " (see /queue)";
+                else {
+                    std::string dropped = _pending[n - 1];
+                    if ( dropped.size() > 60 ) dropped = dropped.substr(0, 60) + "…";
+                    _pending.erase(_pending.begin() + ( n - 1 ));
+                    result = "dropped #" + arg + ": " + dropped;
+                }
+            }
+        } else {
+            result = "usage: /queue [drop <n|all>]";
+        }
+    }
+    render_command(line, result);
+}
+
 void InlineRepl::render_command(const std::string& cmd, const std::string& result) {
     erase_live();
     // A system message: the command echoed with a ⚙ marker, a blank line, then
@@ -1792,17 +1872,24 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
 
 void InlineRepl::drain_pending() {
     // Run queued items in order: a command (starts with '/') renders locally; a
-    // message starts a turn (and draining stops until it finishes). Stops early
-    // if a command starts a turn or opens the interactive menu.
+    // message starts a turn (and draining stops until it finishes). CONSECUTIVE
+    // messages are merged and sent as ONE turn, so a backlog typed during a long
+    // answer flushes in a single round instead of one message per turn. Stops
+    // early if a command starts a turn or opens the interactive menu.
     while ( !_pending.empty()) {
         std::string next = _pending.front();
-        _pending.pop();
+        _pending.pop_front();
         if ( !next.empty() && next[0] == '/' ) {
             run_command_line(next);
             if ( _turn_running || _in_settings )
                 return;
         } else {
-            start_turn(next, next);
+            std::string combined = next;
+            while ( !_pending.empty() && ( _pending.front().empty() || _pending.front()[0] != '/' )) {
+                combined += "\n\n" + _pending.front();
+                _pending.pop_front();
+            }
+            start_turn(combined, combined);
             return;
         }
     }

@@ -109,6 +109,15 @@ The native Claude provider uses the Claude Code OAuth flow (authorization-code +
 
 On first run it prints an authorization URL. Open it, log in, and paste the code shown on the confirmation page back into the terminal. The token is saved to `credentials/claude.json` and refreshed automatically. Default model: `claude-opus-4-8`.
 
+### Extended thinking on the Claude provider
+
+`/thinking on|low|…|max` enables extended thinking, and `/stream on` shows the reasoning live (dimmed, `💭`). Whether the reasoning **text** is visible depends on the model — the subscription API redacts it per model:
+
+- **`claude-sonnet-4-6`** — full thinking text streams and is shown. Use this if you want to watch the reasoning: `/model claude-sonnet-4-6`.
+- **`claude-opus-4-8`** — the thinking happens (and improves answers), but the API returns the block with empty text, so there is nothing to show. No client-side setting unlocks it.
+
+Tool use works with thinking on either model (the signed thinking blocks are replayed across tool calls as the API requires). The prompt keywords `ultracode` / `ultrathink` raise the effort to `max` for that single turn.
+
 Neither provider opens a browser for you — the URL is printed so you can open it yourself (handy over SSH / on headless machines). Use `--login` to force a fresh login (e.g. to switch accounts).
 
 ## OpenRouter provider

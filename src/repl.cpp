@@ -969,11 +969,43 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             if ( !parallel_safe.count(tc.name)) { run_parallel = false; break; }
 
         std::vector<std::string> results(resp.tool_calls.size());
+        // The most descriptive string argument, for the one-line transcript note.
+        auto arg_hint = [](const JSON& args) -> std::string {
+            if ( args != JSON::TYPE::OBJECT )
+                return "";
+            for ( const char* k : { "path", "command", "pattern", "symbol", "query", "url", "name" }) {
+                if ( args.contains(k) && args[k] == JSON::TYPE::STRING ) {
+                    std::string v = args[k].to_string();
+                    for ( char& c : v )
+                        if ( c == '\n' || c == '\t' ) c = ' ';
+                    if ( v.size() > 48 ) v = v.substr(0, 48) + "…";
+                    return v;
+                }
+            }
+            return "";
+        };
         auto run_one = [&](size_t i) {
+            auto t0 = std::chrono::steady_clock::now();
             try {
                 results[i] = _registry.execute(resp.tool_calls[i].name, resp.tool_calls[i].arguments);
             } catch ( const std::exception& e ) {
                 results[i] = std::string("error: ") + e.what();
+            }
+            if ( _tool_notice_cb ) {
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - t0).count();
+                char dur[24];
+                std::snprintf(dur, sizeof(dur), "%.1fs", ms / 1000.0);
+                std::string hint = arg_hint(resp.tool_calls[i].arguments);
+                std::string line = "⚙ " + resp.tool_calls[i].name +
+                                   ( hint.empty() ? "" : " " + hint ) + " · " + dur;
+                if ( results[i].rfind("error:", 0) == 0 ) {
+                    std::string err = results[i].substr(0, 80);
+                    size_t nl = err.find('\n');
+                    if ( nl != std::string::npos ) err.resize(nl);
+                    line += " · " + err;
+                }
+                _tool_notice_cb(line);
             }
         };
 
@@ -1043,6 +1075,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /retry                   re-run your last message\n"
                "  /undo                    remove the last exchange from history\n"
                "  /tasks                   show the agent's current todo list\n"
+               "  /queue [drop <n|all>]    messages queued behind the running turn\n"
                "  /pin [text]              keep a note in context through /compact (/pins, /unpin <n|all>)\n"
                "  /changes [diff|revert <path|all>]   files the agent changed this session\n"
                "  /export [file]           write the conversation to a Markdown file\n"
@@ -1577,6 +1610,7 @@ void Repl::run_tty() {
     }
     inline_repl.set_command_callback([this](const std::string& cmd) { return handle_command(cmd); });
     set_progress_callback([&inline_repl](const std::string& s) { inline_repl.set_activity(s); });
+    set_tool_notice_callback([&inline_repl](const std::string& s) { inline_repl.notify_quiet(s); });
 
     // Workflow completion notice: printed above the live block with a bell, so a
     // long-running background run announces itself even while you're idle.
@@ -1593,9 +1627,11 @@ void Repl::run_tty() {
 
     inline_repl.run();
 
-    // inline_repl is about to go out of scope; synchronously detach the callback
+    // inline_repl is about to go out of scope; synchronously detach the callbacks
     // so a run finishing right now cannot touch a dead object.
     _workflows.set_on_finish(nullptr);
+    set_tool_notice_callback(nullptr);
+    set_progress_callback(nullptr);
 
     // Persist UI/behaviour settings changed this session (theme, multiline,
     // thinking, context) so they are restored next launch.

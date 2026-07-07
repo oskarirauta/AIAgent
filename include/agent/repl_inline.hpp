@@ -6,6 +6,7 @@
 #include <functional>
 #include <mutex>
 #include <queue>
+#include <deque>
 #include <string>
 #include <thread>
 #include <utility>
@@ -55,6 +56,10 @@ public:
     // live block by the main loop, with a terminal bell. Thread-safe; callable
     // from background threads.
     void notify(const std::string& line);
+
+    // Same, but rendered dim and without the bell — for routine progress notes
+    // (one compact line per executed tool call).
+    void notify_quiet(const std::string& line);
 
     // Handler for slash commands (other than /exit and /quit), run locally on the
     // main thread; returns text to show as a system message.
@@ -232,8 +237,10 @@ private:
     int _settings_selection = 0;
     int _settings_menu_lines = 0;
     std::vector<SettingRow> _settings_rows;
-    std::queue<std::string> _pending;      // prompts queued while a turn is running
-    std::queue<std::string> _notices;      // async notices (guarded by _mx)
+    std::deque<std::string> _pending;      // prompts queued while a turn is running
+    void queue_command(const std::string& line); // /queue [drop <n|all>] — inspect/edit _pending
+    struct Notice { std::string text; bool bell; };
+    std::queue<Notice> _notices;           // async notices (guarded by _mx)
     void drain_notices();                  // print queued notices above the live block
 
     // While true, draw_live() is a no-op: the main loop is feeding a burst of

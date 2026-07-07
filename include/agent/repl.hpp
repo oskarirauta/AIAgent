@@ -66,8 +66,12 @@ private:
     // A sink for slow-command progress text (wired to the REPL's status line), so
     // /compact can show a live progress bar while it summarises.
     std::function<void(const std::string&)> _progress_cb;
+    // One compact transcript line per executed tool call (e.g. "⚙ read_file
+    // src/x.cpp · 0.3s"). May be called from worker/pool threads.
+    std::function<void(const std::string&)> _tool_notice_cb;
 public:
     void set_progress_callback(std::function<void(const std::string&)> cb) { _progress_cb = std::move(cb); }
+    void set_tool_notice_callback(std::function<void(const std::string&)> cb) { _tool_notice_cb = std::move(cb); }
 private:
     // Switch the active provider mid-session, carrying the current conversation
     // over (re-auth non-interactively). Returns text to display.
