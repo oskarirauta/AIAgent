@@ -55,7 +55,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
         // read-only displays / menus
         "/about", "/info", "/help", "/theme", "/settings", "/workflows",
         "/trust", "/history", "/memories", "/tasks", "/skills", "/pins",
-        "/context", "/cost", "/changes", "/mcp", "/paste",
+        "/context", "/cost", "/changes", "/mcp", "/paste", "/raw",
         // settings that only affect the NEXT request — running them mid-turn just
         // updates local state (last value wins: /effort medium then /effort max
         // leaves only max, a natural dedup), applied before the next prompt. They
@@ -2177,6 +2177,14 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         open_list_menu(std::move(m));
         return;
     }
+    // /raw shows the exact request/response of the last turn — prose (JSON), so
+    // open it straight into the scrollable, word-wrapped detail view.
+    if ( trimmed == "/raw" || trimmed.rfind("/raw ", 0) == 0 ) {
+        std::string text = _command_cb ? _command_cb(trimmed) : "";
+        open_list_detail("raw", text);
+        return;
+    }
+
     // /paste reviews the large pastes sent this session — bare opens a list
     // (Enter shows the full text), /paste <n> jumps straight to one.
     if ( trimmed == "/paste" || trimmed.rfind("/paste ", 0) == 0 ) {

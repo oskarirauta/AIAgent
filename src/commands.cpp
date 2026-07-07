@@ -132,6 +132,11 @@ const std::vector<CommandDoc>& command_catalog() {
       "attention: only a workflow finishing, a tool-permission prompt, or an answer that "
       "is a question. question: only when the answer is a question. never: silent. Bare "
       "/bell opens a picker; also the \"bell\" row in /settings." },
+    { "/raw", "", "[request|response]", "Session & UI", "inspect the last model request/response",
+      "Shows the exact JSON request last sent to the provider and the response "
+      "received (assembled from the stream when streaming), in a scrollable view — "
+      "for debugging prompts, tools and provider quirks. `/raw request` or `/raw "
+      "response` shows just one. Auth headers are not part of the body shown." },
     { "/theme", "", "<dark|light|warm>", "Session & UI", "switch the colour theme",
       "Changes the terminal colour theme. Persisted across sessions. Never sets the "
       "terminal background." },

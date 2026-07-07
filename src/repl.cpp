@@ -33,6 +33,20 @@
 
 namespace agent {
 
+// Render a streamed Response back into a readable blob for /raw (there is no raw
+// JSON body to keep in the streaming path — it was assembled from SSE deltas).
+static std::string raw_response_dump(const providers::Response& r) {
+    std::string s = "(assembled from stream)\n";
+    if ( !r.message.empty()) s += "\ncontent:\n" + r.message + "\n";
+    if ( !r.thinking.empty()) s += "\nreasoning:\n" + r.thinking + "\n";
+    for ( const auto& tc : r.tool_calls )
+        s += "\ntool_call " + tc.name + ":\n" + tc.arguments.dump() + "\n";
+    s += "\nusage: input=" + std::to_string(r.input_tokens) +
+         " output=" + std::to_string(r.output_tokens);
+    if ( r.cached_input_tokens ) s += " cached=" + std::to_string(r.cached_input_tokens);
+    return s;
+}
+
 // A line stating today's date, appended to the system prompt so the model does not
 // have to shell out to `date` (which busybox may lack) to know the current day.
 static std::string current_date_line() {
@@ -1108,6 +1122,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                 if ( can_stream ) {
                     request["stream"] = true;
                     _provider->prepare_stream_request(request); // e.g. stream_options.include_usage
+                    _last_request = request.dump(); // for /raw
                     std::string body = request.dump_minified();
                     std::string buffer;
                     bool done = false;
@@ -1134,13 +1149,16 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                         return "";
                     }
                     resp = _provider->stream_result();
+                    _last_response = raw_response_dump(resp); // for /raw (assembled from the stream)
                 } else {
+                    _last_request = request.dump(); // for /raw
                     std::string body = request.dump_minified();
                     std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body, abort_flag);
                     if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
                         _conversation.undo_last();
                         return "";
                     }
+                    _last_response = response_str; // for /raw (the raw JSON body)
                     resp = _provider->parse_response(JSON::parse(response_str));
                 }
                 break; // success
@@ -1682,6 +1700,18 @@ std::string Repl::handle_command(const std::string& line) {
             return "nothing to retry";
         save_conversation();
         return last; // the inline REPL re-submits this as a fresh turn
+    }
+
+    if ( cmd == "/raw" ) {
+        std::string a = common::to_lower(common::trim_ws(args));
+        if ( _last_request.empty() && _last_response.empty())
+            return "no model request has been sent yet this session";
+        if ( a == "request" || a == "req" )
+            return _last_request.empty() ? "no request captured" : _last_request;
+        if ( a == "response" || a == "resp" )
+            return _last_response.empty() ? "no response captured" : _last_response;
+        return "── request (last sent to " + _config.provider + ") ──\n" + _last_request +
+               "\n\n── response ──\n" + _last_response;
     }
 
     if ( cmd == "/info" || cmd == "/about" ) {
