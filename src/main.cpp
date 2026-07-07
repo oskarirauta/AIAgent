@@ -51,7 +51,8 @@ static usage_t make_usage(int argc, char **argv) {
             { "no_tools", { "T", "no-tools", "disable tool calls (safer mode)" }},
             { "yes_tools", { "Y", "yes-tools", "run ordinary tools without confirmation (danger-listed commands still warn)" }},
             { "insecure", { "I", "insecure", "run ALL tools without any confirmation, including dangerous commands" }},
-            { "prompt", { "P", "prompt", "single prompt mode, exit after answer", usage_t::OPTIONAL }}
+            { "prompt", { "P", "prompt", "single prompt mode, exit after answer", usage_t::OPTIONAL }},
+            { "output_format", { "o", "output-format", "single-prompt output: text (default) or json", usage_t::OPTIONAL }}
         }
     };
 }
@@ -193,6 +194,10 @@ int main(int argc, char **argv) {
         if ( !remainder.empty()) {
             prompt = common::join_vector(remainder, " ");
         }
+    }
+    if ( usage["output_format"] ) {
+        std::string of = usage["output_format"].stringValue();
+        config.output_format = ( of == "json" ) ? "json" : "text";
     }
 
     logger::info["agent"] << "provider: " << config.provider << ", model: " << config.model << std::endl;

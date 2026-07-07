@@ -26,6 +26,7 @@ public:
     std::string log_level = "info";
     std::string system_prompt = "You are a helpful Linux CLI assistant.";
     std::string home_dir;
+    std::string output_format = "text"; // single-prompt (-P) output: text | json
     std::string theme = "dark"; // colour theme: dark | light | warm
     bool multiline = false;     // multi-line prompt: show long input wrapped across lines
     std::string thinking;       // thinking/effort level (empty = provider default); applied by Kimi

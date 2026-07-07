@@ -2312,14 +2312,42 @@ void Repl::run_once(const std::string& prompt) {
     _registry.set_strict(_config.strict);
     _registry.set_plan_mode(_config.plan_mode);
 
+    bool json = _config.output_format == "json";
     try {
-        std::string reply = process_turn(prompt, [](const std::string& chunk) {
-            std::cout << plain_stream_text(chunk) << std::flush;
-        });
-        std::cout << std::endl;
+        std::string reply;
+        if ( json ) {
+            // Machine-readable: capture the answer (a no-op stream sink, so the same
+            // streaming path runs but nothing is printed live) and emit one JSON
+            // object — stdout stays a clean, parseable result. Logs go to stderr;
+            // pair with -l quiet for JSON-only output.
+            reply = process_turn(prompt, [](const std::string&) {});
+        } else {
+            reply = process_turn(prompt, [](const std::string& chunk) {
+                std::cout << plain_stream_text(chunk) << std::flush;
+            });
+            std::cout << std::endl;
+        }
         save_conversation();
+        if ( json ) {
+            JSON out = JSON::Object{
+                { "provider", _config.provider },
+                { "model", _config.model },
+                { "response", agent::normalize_text(reply) },
+                { "usage", JSON::Object{
+                    { "input_tokens", static_cast<long long>(_stats.session_input.load()) },
+                    { "output_tokens", static_cast<long long>(_stats.session_output.load()) },
+                    { "cached_input_tokens", static_cast<long long>(_stats.session_cached.load()) }
+                }}
+            };
+            std::cout << out.dump() << std::endl;
+        }
     } catch ( const std::exception& e ) {
-        logger::error << "request failed: " << e.what() << std::endl;
+        if ( json ) {
+            JSON err = JSON::Object{ { "error", std::string(e.what()) } };
+            std::cout << err.dump() << std::endl;
+        } else {
+            logger::error << "request failed: " << e.what() << std::endl;
+        }
     }
 }
 

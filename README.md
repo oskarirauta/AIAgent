@@ -243,6 +243,10 @@ locally-installed models), so you can pick from a menu after connecting.
 # Single prompt, then exit
 ./agent "explain this code"
 
+# Scriptable: one JSON object on stdout (response + provider/model + token usage)
+./agent -l quiet -o json -P "list 3 git aliases"
+#   {"model":"…","provider":"…","response":"…","usage":{…}}
+
 # Plain API-key providers
 ./agent -p openai   -k $OPENAI_API_KEY   -m gpt-4o "write a bash script"
 ./agent -p anthropic -k $ANTHROPIC_API_KEY -m claude-3-5-sonnet-latest

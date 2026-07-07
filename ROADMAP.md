@@ -293,11 +293,12 @@ Working toward a long-lived "actually finished" release; going through each:
 - ✅ **Compound-command safety** (raised mid-review) — the danger classifier and
   the allow-similar key now inspect every stage, so `cd /tmp && rm -rf /` can't
   slip through as "cd".
-- ☐ **Stale-read guard** for edits — refuse a silent clobber if a file changed
-  on disk since the model last read it. **Next up.**
+- ✅ **Stale-read guard** — write_file/edit_file refuse to clobber a file that
+  changed on disk since the model read it (shared FileTracker).
 - ☐ **Cross-provider failover** — on repeated 429/5xx, fall back to another
   configured provider.
-- ☐ **`--output-format json`** — a scriptable headless mode.
+- ✅ **`--output-format json`** — scriptable headless mode: `-o json` emits one JSON
+  object (response + provider/model + usage) on stdout.
 
 ## Considered / dropped
 
