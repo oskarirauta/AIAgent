@@ -1455,15 +1455,21 @@ void InlineRepl::on_enter() {
         std::lock_guard<std::mutex> lk(_mx);
         _auto_since_user = 0; // real user input resets the auto-resume guard
     }
-    start_turn(line, display);
-}
-
-void InlineRepl::start_turn(const std::string& line, const std::string& display) {
-    echo_user(display);
+    // The input was consumed into `line`; clear it here (start_turn leaves the
+    // input alone so queued turns can't wipe in-progress typing).
     _input.clear();
     _cursor = 0;
     _input_window_start = 0;
     _pastes.clear();
+    start_turn(line, display);
+}
+
+void InlineRepl::start_turn(const std::string& line, const std::string& display) {
+    // NOTE: deliberately does NOT touch _input/_pastes. A turn can start from the
+    // pending queue (or a workflow auto-resume) while the user is mid-sentence —
+    // wiping the input here silently discarded that typing. The submit path
+    // (on_enter) clears its own consumed input before calling this.
+    echo_user(display);
     begin_reply();
 
     {
