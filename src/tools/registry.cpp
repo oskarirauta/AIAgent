@@ -200,7 +200,31 @@ void Registry::set_extra_danger(const std::vector<std::string>& cmds) {
     extra_danger_list() = cmds;
 }
 
-std::string Registry::classify_danger(const std::string& command) {
+// Split a command line on the top-level sequencing / pipe / background connectors
+// (&&, ||, ;, |, &, newline) so each stage is classified on its own. A dangerous
+// command hidden after a benign prefix (`cd /tmp && rm -rf /`, `cd x; rm -rf y`)
+// must never be judged by the prefix alone.
+static std::vector<std::string> split_shell_segments(const std::string& command) {
+    std::vector<std::string> parts;
+    std::string cur;
+    for ( size_t i = 0; i < command.size(); ) {
+        if ( command[i] == '&' && i + 1 < command.size() && command[i + 1] == '&' ) {
+            parts.push_back(cur); cur.clear(); i += 2;
+        } else if ( command[i] == '|' && i + 1 < command.size() && command[i + 1] == '|' ) {
+            parts.push_back(cur); cur.clear(); i += 2;
+        } else if ( command[i] == ';' || command[i] == '|' || command[i] == '&' || command[i] == '\n' ) {
+            parts.push_back(cur); cur.clear(); i += 1;
+        } else {
+            cur += command[i]; ++i;
+        }
+    }
+    parts.push_back(cur);
+    return parts;
+}
+
+// Danger classification for a SINGLE stage (no connectors). classify_danger below
+// runs this over every stage of a compound command.
+static std::string classify_danger_segment(const std::string& command) {
     std::vector<std::string> tokens = tokenize(command);
     if ( tokens.empty())
         return "";
@@ -251,18 +275,6 @@ std::string Registry::classify_danger(const std::string& command) {
 
     std::string program = basename_of(tokens[0]);
 
-    // Pipe-into-shell: fetching remote content and executing it.
-    std::string lower = common::to_lower(command);
-    if ( (lower.find("curl") != std::string::npos || lower.find("wget") != std::string::npos) &&
-         (lower.find("| sh") != std::string::npos || lower.find("|sh") != std::string::npos ||
-          lower.find("| bash") != std::string::npos || lower.find("|bash") != std::string::npos)) {
-        return "pipes downloaded content straight into a shell";
-    }
-
-    // Fork bomb.
-    if ( command.find(":(){") != std::string::npos )
-        return "looks like a fork bomb";
-
     // Sensitive system files / block devices, referenced by any command.
     static const std::vector<std::string> sensitive_exact = {
         "/etc/passwd", "/etc/shadow", "/etc/gshadow", "/etc/group",
@@ -307,6 +319,49 @@ std::string Registry::classify_danger(const std::string& command) {
     }
 
     return "";
+}
+
+std::string Registry::classify_danger(const std::string& command) {
+    // Whole-command checks that intentionally span the connectors.
+    std::string lower = common::to_lower(command);
+    if ( (lower.find("curl") != std::string::npos || lower.find("wget") != std::string::npos) &&
+         (lower.find("| sh") != std::string::npos || lower.find("|sh") != std::string::npos ||
+          lower.find("| bash") != std::string::npos || lower.find("|bash") != std::string::npos)) {
+        return "pipes downloaded content straight into a shell";
+    }
+    if ( command.find(":(){") != std::string::npos )
+        return "looks like a fork bomb";
+
+    // Every stage is judged on its own, so a dangerous command after a benign
+    // prefix (`cd /tmp && rm -rf /`) is still flagged.
+    for ( const auto& seg : split_shell_segments(command)) {
+        std::string r = classify_danger_segment(common::trim_ws(seg));
+        if ( !r.empty())
+            return r;
+    }
+    return "";
+}
+
+// The command that "allow all commands like this" should be keyed on: the first
+// real program, stepping over a leading `cd <dir>` (and its connector) plus the
+// wrapper programs, so a benign `cd` prefix can never make a whole compound get
+// blanket-allowed under the key "cd".
+static std::string primary_program(const std::string& command) {
+    for ( const auto& seg : split_shell_segments(command)) {
+        std::string s = common::trim_ws(seg);
+        if ( s.empty())
+            continue;
+        std::vector<std::string> toks = tokenize(s);
+        if ( toks.empty())
+            continue;
+        std::string prog = basename_of(toks[0]);
+        if ( prog == "cd" || prog == "pushd" || prog == "popd" )
+            continue; // keep looking for the command that actually does something
+        return prog;
+    }
+    // All stages were cd/empty — key on cd then (it really is just a cd).
+    std::vector<std::string> toks = tokenize(common::trim_ws(command));
+    return toks.empty() ? command : basename_of(toks[0]);
 }
 
 std::string Registry::classify_path_danger(const std::string& path) {
@@ -536,13 +591,12 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
     if ( danger.empty())
         danger = tool->danger_reason(args); // e.g. an MCP destructiveHint
 
-    // Program / key used for "allow session" and "allow similar".
+    // Program / key used for "allow session" and "allow similar". For a shell
+    // command this is the first REAL program (past a leading `cd`), so allowing
+    // "all commands like this" can never blanket-approve a compound under "cd".
     std::string similar_key = name;
-    if ( is_shell ) {
-        auto toks = tokenize(command);
-        if ( !toks.empty())
-            similar_key = basename_of(toks[0]);
-    }
+    if ( is_shell )
+        similar_key = primary_program(command);
     std::string exact_key = is_shell ? command : summary;
 
     auto run = [&]() -> std::string {
@@ -586,9 +640,11 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
     if ( _turn_grant && danger.empty())
         return run();
 
-    // Previously granted this session?
+    // Previously granted this session? A danger-flagged call never rides a broad
+    // "allow similar" grant — even if the program was allow-similar'd on a benign
+    // invocation, a dangerous one (rm -rf /, mkfs, …) still asks.
     if ( _allow_exact.count(exact_key)) { ++_grant_uses[exact_key]; return run(); }
-    if ( _allow_similar.count(similar_key)) { ++_grant_uses[similar_key]; return run(); }
+    if ( danger.empty() && _allow_similar.count(similar_key)) { ++_grant_uses[similar_key]; return run(); }
 
     // Fail safe: if confirmation is required but no UI is available to ask, deny.
     if ( !_confirm_cb ) {
@@ -603,7 +659,9 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
     req.danger = danger;
     req.similar_key = similar_key;
     req.preview = change_preview(name, args);
-    req.can_similar = true;
+    // Don't offer "allow all like this" for a dangerous command — that is exactly
+    // how a blanket grant would later wave through a compound's dangerous stage.
+    req.can_similar = danger.empty();
 
     std::string note;
     Decision d = _confirm_cb(req, note);

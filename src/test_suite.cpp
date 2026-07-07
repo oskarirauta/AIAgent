@@ -2007,6 +2007,42 @@ static void test_trust_grants() {
     check(reg.grants().empty(), "no grants after revoke all");
 }
 
+// A benign `cd` prefix must never let an "allow all like this" grant wave through
+// a compound's dangerous stage, and the grant must key on the real program.
+static void test_compound_grant_safety() {
+    std::cout << "safety: compound commands + allow-similar" << std::endl;
+    using namespace agent::tools;
+    Registry reg;
+    reg.register_defaults();
+    reg.set_mode(ConfirmMode::confirm);
+    reg.set_strict(true); // so even "safe" commands are gated, isolating the grant logic
+    int prompts = 0;
+    Decision give = Decision::similar;
+    reg.set_confirm_callback([&](const ConfirmRequest& rq, std::string&) {
+        ++prompts;
+        // A dangerous command must never offer the blanket "allow similar" option.
+        if ( !rq.danger.empty()) check(!rq.can_similar, "no allow-similar on a dangerous command");
+        return give;
+    });
+
+    // Grant "allow similar" from a benign `cd … && ls` — it must key on ls, not cd.
+    reg.execute("run_command", JSON::Object{ { "command", "cd /usr/src && ls -a" } });
+    check(prompts == 1, "first compound prompted");
+    bool ls_keyed = false;
+    for ( const auto& x : reg.grants()) if ( x.key == "ls" ) ls_keyed = true;
+    check(ls_keyed, "allow-similar keyed on the real program (ls), not cd");
+
+    // A later benign `cd … && ls` now auto-runs (ls is allowed) — no new prompt.
+    reg.execute("run_command", JSON::Object{ { "command", "cd /tmp && ls -la" } });
+    check(prompts == 1, "benign cd && ls auto-runs under the ls grant");
+
+    // But a dangerous compound behind the SAME cd prefix must STILL prompt.
+    give = Decision::deny;
+    std::string r = reg.execute("run_command", JSON::Object{ { "command", "cd /tmp && rm -rf /" } });
+    check(prompts == 2, "dangerous cd && rm -rf still prompts (not waved through by cd)");
+    check(r.find("declined") != std::string::npos, "and can be denied");
+}
+
 static void test_plan_mode() {
     std::cout << "plan mode (read-only tools only)" << std::endl;
     using namespace agent::tools;
@@ -2163,6 +2199,16 @@ static void test_danger_list() {
     check(!Registry::classify_danger("sudo rm -rf /tmp/x").empty(), "sudo-wrapped rm -rf flagged");
     check(!Registry::classify_danger("nohup nice env X=1 rm -rf /tmp/x").empty(), "chained wrappers unwrapped");
     check(Registry::classify_danger("env FOO=bar ls").empty(), "env-wrapped ls still not flagged");
+
+    // Compound commands: a dangerous stage after a benign prefix must be caught —
+    // NOT judged by the leading `cd`/echo alone.
+    check(!Registry::classify_danger("cd /tmp && rm -rf /").empty(), "cd && rm -rf flagged");
+    check(!Registry::classify_danger("cd /usr/src; rm -rf x").empty(), "cd ; rm -rf flagged");
+    check(!Registry::classify_danger("echo hi && dd if=/dev/zero of=/dev/sda").empty(), "echo && dd flagged");
+    check(!Registry::classify_danger("ls | rm -rf /tmp/x").empty(), "piped rm -rf flagged");
+    check(!Registry::classify_danger("make & rm -rf /tmp/x").empty(), "backgrounded prefix + rm -rf flagged");
+    check(Registry::classify_danger("cd /tmp && ls -la").empty(), "cd && ls still not flagged");
+    check(Registry::classify_danger("cd a && git log | grep x").empty(), "benign compound not flagged");
 }
 
 static void test_list_directory() {
@@ -2342,6 +2388,7 @@ int main() {
     test_grep_robustness();
     test_token_usage();
     test_trust_grants();
+    test_compound_grant_safety();
     test_plan_mode();
     test_ask_continue();
     test_deny_with_note();
