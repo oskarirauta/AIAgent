@@ -85,6 +85,27 @@ turn by itself so the model picks its results up immediately — bounded to two
 consecutive auto-turns per real user message, so a model that launches workflows
 from an auto-turn can never run away on its own.
 
+### Skills
+
+Skills are reusable, named instruction sets beyond `AGENTS.md` — a markdown file
+per skill with optional frontmatter:
+
+```markdown
+---
+name: code-review
+description: a thorough, security-aware review pass
+---
+When reviewing, check for … (the instructions)
+```
+
+Put them in `~/.local/share/ai-agent/skills/` (user, all projects) or
+`./.agent/skills/` (project-local, overrides a user skill of the same name).
+`/skills` lists them; `/skill <name>` activates one for the session (its
+instructions are injected into the system prompt, so they survive `/compact`),
+and `/skill off <name>` removes it. When tools are enabled the model can also
+load one itself via the `use_skill` tool — its description lists the available
+skills, so the model picks the one that fits the task.
+
 ### Prompt shortcuts
 
 - **`@path`** in a message expands the file inline — `look at @src/main.cpp and

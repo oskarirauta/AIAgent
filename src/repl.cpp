@@ -25,6 +25,8 @@
 #include "agent/tools/fetch_url.hpp"
 #include "agent/tools/mcp_tool.hpp"
 #include "agent/tools/tasks_tool.hpp"
+#include "agent/tools/skill_tool.hpp"
+#include "agent/skills.hpp"
 #include "agent/tools/run_command.hpp"
 
 namespace agent {
@@ -69,6 +71,8 @@ Repl::Repl(const Config& config)
     sync_advisor_tool();
     sync_workflow_tool();
     sync_web_search_tool();
+    reload_skills();      // discover skills on disk
+    sync_skill_tool();    // expose use_skill when any exist
     connect_mcp();
 
     // Snapshot files before write_file overwrites them, for /changes + revert.
@@ -618,7 +622,104 @@ std::string Repl::base_system_prompt() const {
         for ( const auto& p : _pins )
             system += "- " + p + "\n";
     }
+
+    // Active skills: their full instructions, so they persist across compaction.
+    for ( const auto& s : _skills ) {
+        if ( !_active_skills.count(s.name))
+            continue;
+        system += "\n\n## Skill: " + s.name;
+        if ( !s.description.empty())
+            system += " — " + s.description;
+        system += "\n\n" + s.content + "\n";
+    }
     return system;
+}
+
+void Repl::reload_skills() {
+    std::string cwd;
+    try { cwd = std::filesystem::current_path().string(); } catch ( ... ) { cwd = "."; }
+    _skills = load_skills(_config.home_dir, cwd);
+    // Drop active names that no longer exist on disk.
+    for ( auto it = _active_skills.begin(); it != _active_skills.end(); ) {
+        bool found = false;
+        for ( const auto& s : _skills ) if ( s.name == *it ) { found = true; break; }
+        it = found ? std::next(it) : _active_skills.erase(it);
+    }
+}
+
+std::string Repl::skills_command() const {
+    if ( _skills.empty())
+        return "no skills found — add markdown files to " + _config.home_dir +
+               "/skills/ or ./.agent/skills/ (optional frontmatter: name, description)";
+    std::string s = "skills:\n";
+    for ( const auto& sk : _skills ) {
+        bool on = _active_skills.count(sk.name) > 0;
+        s += "\n  " + std::string(on ? "●" : "○") + " " + sk.name +
+             " [" + sk.source + "]";
+        if ( !sk.description.empty())
+            s += " — " + sk.description;
+    }
+    s += "\n\n/skill <name> to activate, /skill off <name> to deactivate";
+    return s;
+}
+
+std::string Repl::activate_skill(const std::string& name) {
+    for ( const auto& sk : _skills ) {
+        if ( sk.name != name )
+            continue;
+        _active_skills.insert(name);
+        _conversation.set_system(base_system_prompt()); // take effect immediately
+        return "skill '" + name + "' activated:\n\n" + sk.content;
+    }
+    // Not found: give the model/user the available names.
+    std::string names;
+    for ( const auto& sk : _skills )
+        names += ( names.empty() ? "" : ", " ) + sk.name;
+    return "error: no skill named '" + name + "'" +
+           ( names.empty() ? "" : " (available: " + names + ")" );
+}
+
+std::string Repl::skill_command(const std::string& args) {
+    std::string a = common::trim_ws(args);
+    if ( a.empty())
+        return "usage: /skill <name>   |   /skill off <name>";
+    std::istringstream iss(a);
+    std::string first; iss >> first;
+    if ( common::to_lower(first) == "off" ) {
+        std::string name; { std::string r; std::getline(iss, r); name = common::trim_ws(r); }
+        if ( name.empty())
+            return "usage: /skill off <name>";
+        if ( !_active_skills.erase(name))
+            return "skill '" + name + "' was not active";
+        _conversation.set_system(base_system_prompt());
+        return "skill '" + name + "' deactivated";
+    }
+    std::string res = activate_skill(a);
+    // For the user, a short confirmation is enough (the instructions are now in
+    // context); the full body is only useful to the model via use_skill.
+    if ( res.rfind("skill '", 0) == 0 )
+        return "activated skill '" + a + "' (its instructions are now in context; /skill off " + a + " to remove)";
+    return res;
+}
+
+std::string Repl::skill_tool_description() const {
+    std::string d = "Load a skill: a reusable, named instruction set for a kind of task. "
+                    "Call this when one of the available skills fits what the user asked, "
+                    "then follow its instructions. Available skills:";
+    for ( const auto& sk : _skills )
+        d += "\n- " + sk.name + ( sk.description.empty() ? "" : ": " + sk.description );
+    return d;
+}
+
+void Repl::sync_skill_tool() {
+    bool want = _config.tools_enabled && !_skills.empty();
+    if ( want && !_registry.has("use_skill")) {
+        _registry.add(std::make_unique<tools::SkillTool>(
+            [this]() { return skill_tool_description(); },
+            [this](const std::string& name) { return activate_skill(name); }));
+    } else if ( !want && _registry.has("use_skill")) {
+        _registry.remove("use_skill");
+    }
 }
 
 std::string Repl::pin_command(const std::string& args) {
@@ -1181,6 +1282,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  !<command>              run a shell command yourself (recorded for the model)\n"
                "  /queue [drop <n|all>]    messages queued behind the running turn\n"
                "  /trust [drop <n|all>]    review/revoke this session's tool grants\n"
+               "  /skills                  list skills; /skill <name> activates one (/skill off <name>)\n"
                "  /pin [text]              keep a note in context through /compact (/pins, /unpin <n|all>)\n"
                "  /changes [diff|revert <path|all>]   files the agent changed this session\n"
                "  /export [file]           write the conversation to a Markdown file\n"
@@ -1359,6 +1461,18 @@ std::string Repl::handle_command(const std::string& line) {
             s += "\n\n  /trust drop <n|all> to revoke";
         }
         return s;
+    }
+
+    if ( cmd == "/skills" ) {
+        reload_skills();
+        sync_skill_tool();
+        return skills_command();
+    }
+    if ( cmd == "/skill" ) {
+        reload_skills();
+        std::string r = skill_command(args);
+        sync_skill_tool();
+        return r;
     }
 
     if ( cmd == "/pin" ) {

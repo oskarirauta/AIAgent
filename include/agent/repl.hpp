@@ -3,6 +3,9 @@
 #include <string>
 #include <memory>
 #include <atomic>
+#include <set>
+#include <map>
+#include <vector>
 #include "agent/config.hpp"
 #include "agent/api/client.hpp"
 #include "agent/conversation.hpp"
@@ -11,6 +14,7 @@
 #include "agent/token_stats.hpp"
 #include "agent/workflow.hpp"
 #include "agent/mcp/client.hpp"
+#include "agent/skills.hpp"
 
 namespace agent {
 
@@ -47,6 +51,17 @@ private:
     std::string pin_command(const std::string& args);   // /pin
     std::string pins_command() const;                    // /pins
     std::string unpin_command(const std::string& args);  // /unpin
+
+    // Skills: named instruction sets from skills/ dirs. Active ones are injected
+    // into the system prompt (like pins), so they survive compaction.
+    std::vector<Skill> _skills;               // available (discovered on disk)
+    std::set<std::string> _active_skills;     // currently active names
+    void reload_skills();                     // rescan disk
+    std::string skills_command() const;       // /skills
+    std::string skill_command(const std::string& args); // /skill <name> | off <name>
+    std::string activate_skill(const std::string& name); // shared by /skill and use_skill
+    std::string skill_tool_description() const;          // enumerates skills for the model
+    void sync_skill_tool();
 
     // Agent todo list (model-maintained via the update_tasks tool; /tasks shows it).
     struct Task { std::string title; std::string status; };

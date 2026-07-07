@@ -27,6 +27,8 @@
 #include "agent/providers/claude.hpp"
 #include "agent/auth/claude_oauth.hpp"
 #include "agent/tools/registry.hpp"
+#include "agent/skills.hpp"
+#include "agent/tools/skill_tool.hpp"
 #include "agent/tools/list_directory.hpp"
 #include "agent/tools/find_symbol.hpp"
 #include "agent/tools/find_references.hpp"
@@ -712,6 +714,42 @@ static void test_find_symbol() {
     check(r5.rfind("error:", 0) == 0, "rejects a non-identifier name");
 
     std::filesystem::remove_all(dir);
+}
+
+static void test_skills() {
+    std::cout << "skills (load + frontmatter + override + tool)" << std::endl;
+    std::string home = "/tmp/ai_skills_home";
+    std::string proj = "/tmp/ai_skills_proj";
+    std::filesystem::remove_all(home); std::filesystem::remove_all(proj);
+    std::filesystem::create_directories(home + "/skills");
+    std::filesystem::create_directories(proj + "/.agent/skills");
+
+    { std::ofstream o(home + "/skills/review.md");
+      o << "---\nname: code-review\ndescription: careful review\n---\nDo a careful review.\n"; }
+    { std::ofstream o(home + "/skills/plain.md");
+      o << "Just some plain instructions.\n"; }
+    { std::ofstream o(proj + "/.agent/skills/review.md");
+      o << "---\nname: code-review\ndescription: project review\n---\nProject-specific review.\n"; }
+
+    auto skills = agent::load_skills(home, proj);
+    check(skills.size() == 2, "two distinct skills loaded (project override merged by name)");
+    const agent::Skill* cr = nullptr; const agent::Skill* pl = nullptr;
+    for ( const auto& s : skills ) { if ( s.name == "code-review" ) cr = &s; if ( s.name == "plain" ) pl = &s; }
+    check(cr && cr->description == "project review", "project skill overrides user by name");
+    check(cr && cr->source == "project", "override marked as project source");
+    check(cr && cr->content.find("Project-specific review") != std::string::npos, "frontmatter stripped, body kept");
+    check(pl && pl->name == "plain" && pl->description.empty(), "no-frontmatter skill named from filename");
+    check(pl && pl->content.find("plain instructions") != std::string::npos, "plain body loaded");
+
+    std::string got;
+    agent::tools::SkillTool tool([]() { return std::string("desc"); },
+                                 [&](const std::string& n) { got = n; return std::string("loaded " + n); });
+    check(tool.name() == "use_skill", "tool name");
+    check(tool.execute(JSON::Object{ { "name", "code-review" } }) == "loaded code-review", "tool loads by name");
+    check(got == "code-review", "loader received the name");
+    check(tool.execute(JSON::Object{}).rfind("error:", 0) == 0, "missing name errors");
+
+    std::filesystem::remove_all(home); std::filesystem::remove_all(proj);
 }
 
 static void test_tasks_tool() {
@@ -1994,6 +2032,7 @@ int main() {
     test_html_to_text();
     test_web_search_parse();
     test_find_symbol();
+    test_skills();
     test_tasks_tool();
     test_file_mentions();
     test_ultra_keyword();

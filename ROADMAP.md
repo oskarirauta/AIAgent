@@ -105,6 +105,13 @@ each list is roughly the current priority order.
   prompt, which carries the pins). `/pins` lists them, `/unpin <n|all>` removes.
   Session-scoped. For "don't forget this decision / constraint" that must outlast
   summarisation.
+- **Skills**: reusable, named instruction sets — a markdown file per skill (with
+  optional name/description frontmatter) in `<home>/skills/` (user) or
+  `./.agent/skills/` (project, overrides same-named user skill). `/skills` lists,
+  `/skill <name>` activates one for the session (injected into the system prompt,
+  so it survives compaction), `/skill off <name>` removes it; and a model-
+  invocable `use_skill` tool whose description enumerates the available skills so
+  the model can load the fitting one itself.
 - **Word-boundary wrapping in multi-line input**: the multi-line prompt now wraps
   at spaces (like the transcript) instead of hard-breaking mid-word at the column
   limit; a single over-long word (URL/token) still hard-breaks. Byte ranges stay
@@ -214,8 +221,6 @@ Batch 4 — remaining:
 - **`outline_file` tool**: symbols of one file with line numbers (find_symbol
   logic on a single file).
 - **`.gitignore`-aware traversal** (90% semantics) for the search tools.
-- **skills**: named instruction sets in `skills/` dirs; `/skills` lists,
-  `/skill <name>` loads for the session, plus a model-invocable load tool.
 - **UI polish**: settable paste thresholds in `/settings`, `/paste <n>` to
   expand a collapsed paste block.
 - **Attention cues**: bell when a confirm blocks an unattended turn; one-line
