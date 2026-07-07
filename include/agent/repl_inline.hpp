@@ -235,6 +235,11 @@ private:
     std::queue<std::string> _pending;      // prompts queued while a turn is running
     std::queue<std::string> _notices;      // async notices (guarded by _mx)
     void drain_notices();                  // print queued notices above the live block
+
+    // While true, draw_live() is a no-op: the main loop is feeding a burst of
+    // buffered input (an unbracketed paste) and will redraw once at the end —
+    // otherwise every pasted byte re-wraps and redraws the whole input block.
+    bool _defer_draw = false;
     int _spin = 0;
     int _budget_notified = 0; // highest budget threshold already warned (0 / 80 / 100)
     std::chrono::steady_clock::time_point _turn_start;

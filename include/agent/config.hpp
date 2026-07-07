@@ -72,7 +72,7 @@ public:
     size_t paste_threshold_lines = 10;         // line breaks for multi-line paste
     size_t paste_single_line_chars = 350;      // characters for single-line paste
     size_t paste_threshold_ms      = 100;      // max milliseconds between pasted characters
-    size_t paste_preview           = 0;        // echo only the first N lines of a paste (0 = all)
+    size_t paste_preview           = 8;        // echo only the first N lines of a paste (0 = all)
 
     // Provider-specific options, keyed by provider name. Loaded from config keys
     // like provider.<name>.<key>.
@@ -109,7 +109,7 @@ public:
         bool auto_compact = false;
         bool advisor = false;
         std::string advisor_model;
-        size_t paste_preview = 0;
+        size_t paste_preview = 8;
     };
     static LastUsed load_last_used(const std::string& home_dir);
     static void save_last_used(const std::string& home_dir, const std::string& provider, const std::string& model);

@@ -801,6 +801,8 @@ bool InlineRepl::multiline_vertical(int dir) {
 }
 
 void InlineRepl::draw_live() {
+    if ( _defer_draw )
+        return; // a burst is being fed; the main loop draws once at the end
     int cols = term_cols();
     const int prefix_w = 2;
 
@@ -1284,8 +1286,32 @@ void InlineRepl::run() {
                 handle_confirm_key(c);
             else if ( _in_settings )
                 handle_settings_key(c);
-            else
-                handle_byte(c);
+            else {
+                // If a lot of input is already buffered (an unbracketed paste),
+                // feed it all with redraws deferred and draw once at the end —
+                // per-byte redraws make a large paste quadratically slow.
+                int avail = 0;
+                if ( ioctl(STDIN_FILENO, FIONREAD, &avail) != 0 )
+                    avail = 0;
+                if ( avail > 64 ) {
+                    _defer_draw = true;
+                    handle_byte(c);
+                    long budget = 1 << 20; // hard cap per loop iteration
+                    while ( budget-- > 0 && !_confirming && !_in_settings ) {
+                        int rem = 0;
+                        if ( ioctl(STDIN_FILENO, FIONREAD, &rem) != 0 || rem <= 0 )
+                            break;
+                        int b = read_byte();
+                        if ( b < 0 )
+                            break;
+                        handle_byte(b);
+                    }
+                    _defer_draw = false;
+                    draw_live();
+                } else {
+                    handle_byte(c);
+                }
+            }
         } else if ( r < 0 && errno != EINTR ) {
             break;
         } else if ( _turn_running && !_confirming && !_in_settings ) {
