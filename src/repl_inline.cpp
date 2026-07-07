@@ -2178,39 +2178,83 @@ void InlineRepl::open_settings_menu() {
     if ( th.empty() || th[0] == '(' ) th = "default";
 
     _settings_rows.clear();
-    _settings_rows.push_back({ "model", "model", cur.count("model") ? cur["model"] : _config.model, {} });
-    _settings_rows.push_back({ "theme", "theme", _theme.name, { "dark", "light", "warm" } });
-    _settings_rows.push_back({ "tools", "tools", first_word(cur["tools"]), { "confirm", "auto", "insecure" } });
-    _settings_rows.push_back({ "strict", "strict",
-        cur["tools"].find("(strict)") != std::string::npos ? "on" : "off", { "off", "on" } });
-    _settings_rows.push_back({ "thinking", "thinking", th,
-        { "off", "on", "low", "medium", "high", "xhigh", "max" } });
-    _settings_rows.push_back({ "thinking_stream", "stream",
-        ( !_config.thinking_stream ? "off" : ( _config.thinking_collapse ? "collapse" : "on" )),
-        { "off", "on", "collapse" } });
-    _settings_rows.push_back({ "context", "context",
-        first_word(cur.count("context") ? cur["context"] : "unlimited"), {} });
-    _settings_rows.push_back({ "auto_compact", "compact", _config.auto_compact ? "on" : "off", { "off", "on" } });
-    _settings_rows.push_back({ "autoresume", "autoresume", _config.workflow_autoresume ? "on" : "off", { "off", "on" } });
+    auto add = [&](std::string key, std::string label, std::string value, std::string group,
+                   std::string desc, std::vector<std::string> opts = {}, bool number = false,
+                   long lo = 0, long hi = 0, long step = 1, std::string unit = "", std::string zero = "") {
+        SettingRow r;
+        r.key = std::move(key); r.label = std::move(label); r.value = std::move(value);
+        r.group = std::move(group); r.desc = std::move(desc); r.options = std::move(opts);
+        r.is_number = number; r.num_min = lo; r.num_max = hi; r.num_step = step;
+        r.unit = std::move(unit); r.zero_label = std::move(zero);
+        _settings_rows.push_back(std::move(r));
+    };
+    const std::string PROV = "Model & provider", TOOLS = "Tools & safety",
+                      CTX = "Context", UI = "Interface";
+
+    add("model", "model", cur.count("model") ? cur["model"] : _config.model, PROV,
+        "the model this provider talks to");
+    add("thinking", "reasoning", th, PROV,
+        "how much the model thinks before answering",
+        { "off", "on", "low", "medium", "high", "xhigh", "max" });
+    add("thinking_stream", "show reasoning",
+        ( !_config.thinking_stream ? "off" : ( _config.thinking_collapse ? "collapse" : "on" )), PROV,
+        "stream the reasoning live (collapse hides it once the answer is done)",
+        { "off", "on", "collapse" });
+
+    add("tools", "tools", first_word(cur["tools"]), TOOLS,
+        "confirm: ask before edits/commands · auto: run freely · insecure: never ask",
+        { "confirm", "auto", "insecure" });
+    add("strict", "strict",
+        cur["tools"].find("(strict)") != std::string::npos ? "on" : "off", TOOLS,
+        "in confirm mode, also confirm safe read-only shell commands", { "off", "on" });
+    add("tool_call_limit", "tool budget",
+        std::to_string(_config.tool_call_limit), TOOLS,
+        "pause to ask after this many tool calls in one turn", {}, true,
+        0, 500, 10, "per turn", "unlimited");
     if ( _config.provider == "claude" )
-        _settings_rows.push_back({ "advisor", "advisor", _config.advisor ? "on" : "off", { "off", "on" } });
-    _settings_rows.push_back({ "multiline", "multiline", _config.multiline ? "on" : "off", { "off", "on" } });
-    _settings_rows.push_back({ "paste_preview", "preview",
-        _config.paste_preview == 0 ? "all" : std::to_string(_config.paste_preview), {} });
-    _settings_rows.push_back({ "max_tokens", "max_tokens", std::to_string(_config.max_tokens), {} });
-    _settings_rows.push_back({ "tool_call_limit", "tool budget",
-        _config.tool_call_limit == 0 ? "off" : std::to_string(_config.tool_call_limit), {} });
+        add("advisor", "advisor", _config.advisor ? "on" : "off", TOOLS,
+            "let the model consult a stronger advisor model", { "off", "on" });
+
+    add("context", "context",
+        first_word(cur.count("context") ? cur["context"] : "unlimited"), CTX,
+        "token budget before older turns are trimmed (auto / a number / 0)");
+    add("auto_compact", "auto-compact", _config.auto_compact ? "on" : "off", CTX,
+        "summarise older history automatically as it nears the budget", { "off", "on" });
+    add("max_tokens", "max reply", std::to_string(_config.max_tokens), CTX,
+        "cap on a single reply's output tokens", {}, true, 256, 200000, 1024, "tokens");
+    add("autoresume", "autoresume", _config.workflow_autoresume ? "on" : "off", CTX,
+        "a finished workflow resumes the conversation by itself (bounded)", { "off", "on" });
+
+    add("theme", "theme", _theme.name, UI,
+        "colour theme (never sets the terminal background)", { "dark", "light", "warm" });
+    add("multiline", "multiline", _config.multiline ? "on" : "off", UI,
+        "Enter inserts a newline; Alt+Enter sends the message", { "off", "on" });
+    add("paste_preview", "paste preview",
+        std::to_string(_config.paste_preview), UI,
+        "lines of a large paste to echo in the transcript", {}, true, 0, 200, 1, "lines", "all");
 
     erase_live();
     tcflush(STDIN_FILENO, TCIFLUSH); // ignore anything typed before the menu opened
     wr("\033[?25l");                 // hide the cursor while the menu is up
-    wr("\n" + _theme.command + "⚙ settings" + Theme::reset + "\n\n");
-    wr(_theme.dim + "↑/↓ select · ←/→ change · Enter edit text · Esc close" + Theme::reset + "\n");
+    wr("\n" + _theme.command + "⚙ Settings" + Theme::reset + "   " +
+       _theme.dim + "↑↓ move · ←→ change · ⏎ edit · esc close" + Theme::reset + "\n");
     _in_settings = true;
     _settings_editing = false;
     _settings_selection = 0;
     _settings_menu_lines = 0;
     draw_settings_menu(false);
+}
+
+std::string InlineRepl::setting_display_value(const SettingRow& row) const {
+    if ( !row.is_number )
+        return row.value;
+    long v = 0;
+    try { v = std::stol(row.value); } catch ( ... ) { v = row.num_min; }
+    if ( v == 0 && !row.zero_label.empty())
+        return row.zero_label;
+    std::string s = std::to_string(v);
+    if ( !row.unit.empty()) s += " " + row.unit;
+    return s;
 }
 
 void InlineRepl::draw_settings_menu(bool redraw) {
@@ -2219,25 +2263,62 @@ void InlineRepl::draw_settings_menu(bool redraw) {
     if ( redraw && _settings_menu_lines > 0 )
         out += "\r\033[" + std::to_string(_settings_menu_lines) + "A";
     out += "\033[J";
+
+    int lines = 0;
+    std::string group;
+    constexpr size_t LW = 16; // label column width (fits the longest label + a gap)
     for ( int i = 0; i < n; ++i ) {
         const SettingRow& row = _settings_rows[i];
+        if ( row.group != group ) {           // section header
+            group = row.group;
+            out += ( lines ? "\r\n" : "" ) + _theme.dim + "  " + group + Theme::reset + "\r\n";
+            lines += lines ? 2 : 1;
+        }
         std::string label = row.label;
-        while ( label.size() < 10 ) label += ' '; // keep a gap even for the longest label ("multiline")
+        while ( label.size() < LW ) label += ' ';
         bool selected = ( i == _settings_selection );
+        std::string val = setting_display_value(row);
+
         if ( selected && _settings_editing ) {
-            // Free-text edit in place: show the buffer with a cursor bar.
             out += "\033[1;7m ❯ " + label + _settings_edit_buf + "▏ \033[0m"
-                 + _theme.dim + "  (Enter apply · Esc cancel)" + Theme::reset;
+                 + _theme.dim + "  (⏎ apply · esc cancel)" + Theme::reset;
         } else if ( selected ) {
-            std::string hint = row.options.empty() ? "  (Enter to edit)" : "  (←/→)";
-            out += "\033[1;7m ❯ " + label + row.value + hint + " \033[0m";
+            // Changeable with ←/→ (enum or number) gets angle brackets; free text
+            // is just shown (Enter edits it).
+            std::string shown = ( row.options.empty() && !row.is_number ) ? val : "‹ " + val + " ›";
+            out += "\033[1;7m ❯ " + label + shown + " \033[0m";
         } else {
-            out += _theme.dim + "   " + label + row.value + Theme::reset;
+            out += _theme.dim + "   " + label + val + Theme::reset;
         }
         out += "\r\n";
+        lines++;
+
+        // One-line help under the selected row.
+        if ( selected && !_settings_editing && !row.desc.empty()) {
+            std::string help = row.desc;
+            if ( row.is_number && !row.zero_label.empty())
+                help += "  ·  0 = " + row.zero_label;
+            out += _theme.dim + "     └ " + help + Theme::reset + "\r\n";
+            lines++;
+        }
     }
     wr(out);
-    _settings_menu_lines = n;
+    _settings_menu_lines = lines;
+}
+
+void InlineRepl::adjust_number_row(int dir) {
+    SettingRow& row = _settings_rows[_settings_selection];
+    if ( !row.is_number )
+        return;
+    long v = 0;
+    try { v = std::stol(row.value); } catch ( ... ) { v = row.num_min; }
+    v += dir * row.num_step;
+    if ( v < row.num_min ) v = row.num_min;
+    if ( v > row.num_max ) v = row.num_max;
+    row.value = std::to_string(v);
+    if ( _command_cb )
+        _command_cb("/settings " + row.key + " " + row.value);
+    draw_settings_menu(true);
 }
 
 void InlineRepl::cycle_settings_row(int dir) {
@@ -2344,10 +2425,14 @@ void InlineRepl::handle_settings_key(int c) {
             int b1 = read_byte();
             if ( b1 == '[' || b1 == 'O' ) {
                 int b2 = read_byte();
+                auto change = [&](int dir) {
+                    if ( _settings_rows[_settings_selection].is_number ) adjust_number_row(dir);
+                    else cycle_settings_row(dir);
+                };
                 if ( b2 == 'A' )      { _settings_selection = (_settings_selection - 1 + n) % n; draw_settings_menu(true); }
                 else if ( b2 == 'B' ) { _settings_selection = (_settings_selection + 1) % n; draw_settings_menu(true); }
-                else if ( b2 == 'C' ) cycle_settings_row(+1); // right
-                else if ( b2 == 'D' ) cycle_settings_row(-1); // left
+                else if ( b2 == 'C' ) change(+1); // right
+                else if ( b2 == 'D' ) change(-1); // left
             }
             return;
         }

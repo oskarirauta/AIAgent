@@ -134,8 +134,16 @@ private:
         std::string key;                  // command key (theme, tools, model, …)
         std::string label;                // display label
         std::string value;                // current value
-        std::vector<std::string> options; // cyclable values; empty = free text
+        std::vector<std::string> options; // cyclable enum values; empty = free text / number
+        std::string group;                // section header this row sits under
+        std::string desc;                 // one-line help shown under the selected row
+        std::string unit;                 // suffix for a numeric value ("tokens", "lines")
+        bool is_number = false;           // adjustable with ←/→ (and editable with Enter)
+        long num_min = 0, num_max = 0, num_step = 1;
+        std::string zero_label;           // shown instead of "0" (e.g. "all", "unlimited")
     };
+    std::string setting_display_value(const SettingRow& row) const; // value as shown
+    void adjust_number_row(int dir);      // ←/→ on a numeric row
     void run_command_line(const std::string& trimmed); // execute a slash command (called when idle)
     void drain_pending();                               // run queued commands/messages after a turn
     void render_context();                              // visual /context usage breakdown
