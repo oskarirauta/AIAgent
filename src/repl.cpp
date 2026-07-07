@@ -1230,6 +1230,55 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             }
             return "";
         };
+        // A short summary of what a tool call produced, shown in its ⚙ notice:
+        // grep "12 matches", read_file "340 lines", edit_file "+5/-2 lines", … so
+        // the transcript shows the shape of each result without opening it.
+        auto result_hint = [](const std::string& name, const JSON& args,
+                              const std::string& result) -> std::string {
+            if ( result.rfind("error:", 0) == 0 )
+                return ""; // the error is already appended to the notice
+            auto line_count = [](const std::string& s) -> size_t {
+                if ( s.empty()) return 0;
+                size_t n = static_cast<size_t>(std::count(s.begin(), s.end(), '\n'));
+                return s.back() == '\n' ? n : n + 1;
+            };
+            // These tools already lead with a count summary ("12 matches", …).
+            if ( name == "grep" || name == "find_symbol" ||
+                 name == "find_references" || name == "outline_file" ) {
+                std::string first = result.substr(0, result.find('\n'));
+                if ( !first.empty() && std::isdigit(static_cast<unsigned char>(first[0]))) {
+                    if ( first.back() == ':' ) first.pop_back();
+                    return first.size() > 40 ? first.substr(0, 40) + "…" : first;
+                }
+                return "";
+            }
+            if ( name == "read_file" )
+                return std::to_string(line_count(result)) + " lines";
+            if ( name == "list_directory" )
+                return std::to_string(line_count(result)) + " entries";
+            if ( name == "write_file" ) {
+                std::string tail = result.rfind("ok: ", 0) == 0 ? result.substr(4) : result;
+                size_t nl = tail.find('\n');
+                return nl == std::string::npos ? tail : tail.substr(0, nl);
+            }
+            if ( name == "edit_file" ) {
+                size_t added = 0, removed = 0;
+                auto tally = [&](const JSON& e) {
+                    if ( e.contains("old_string") && e["old_string"] == JSON::TYPE::STRING )
+                        removed += line_count(e["old_string"].to_string());
+                    if ( e.contains("new_string") && e["new_string"] == JSON::TYPE::STRING )
+                        added += line_count(e["new_string"].to_string());
+                };
+                if ( args.contains("edits") && args["edits"] == JSON::TYPE::ARRAY ) {
+                    const JSON& es = args["edits"];
+                    for ( size_t k = 0; k < es.size(); ++k ) tally(es[k]);
+                } else {
+                    tally(args);
+                }
+                return "+" + std::to_string(added) + "/-" + std::to_string(removed) + " lines";
+            }
+            return "";
+        };
         auto run_one = [&](size_t i) {
             auto t0 = std::chrono::steady_clock::now();
             try {
@@ -1243,8 +1292,11 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                 char dur[24];
                 std::snprintf(dur, sizeof(dur), "%.1fs", ms / 1000.0);
                 std::string hint = arg_hint(resp.tool_calls[i].arguments);
+                std::string rhint = result_hint(resp.tool_calls[i].name,
+                                                 resp.tool_calls[i].arguments, results[i]);
                 std::string line = "⚙ " + resp.tool_calls[i].name +
-                                   ( hint.empty() ? "" : " " + hint ) + " · " + dur;
+                                   ( hint.empty() ? "" : " " + hint ) +
+                                   ( rhint.empty() ? "" : " · " + rhint ) + " · " + dur;
                 if ( results[i].rfind("error:", 0) == 0 ) {
                     std::string err = results[i].substr(0, 80);
                     size_t nl = err.find('\n');
