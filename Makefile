@@ -22,6 +22,7 @@ OBJS:= \
 	objs/repl_inline.o \
 	objs/workflow.o \
 	objs/skills.o \
+	objs/gitignore.o \
 	objs/mcp_client.o \
 	objs/syntax_highlighter.o \
 	objs/text_utils.o \
@@ -121,6 +122,8 @@ objs/claude_provider.o: src/providers/claude.cpp
 objs/workflow.o: src/workflow.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/skills.o: src/skills.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/gitignore.o: src/gitignore.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/mcp_client.o: src/mcp/client.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;

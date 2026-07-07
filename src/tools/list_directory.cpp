@@ -5,6 +5,7 @@
 #include <vector>
 #include <algorithm>
 #include "common.hpp"
+#include "agent/gitignore.hpp"
 
 namespace agent::tools {
 
@@ -35,6 +36,12 @@ std::string ListDirectory::execute(const JSON& args) {
     if ( !fs::is_directory(path, ec))
         return std::string("error: not a directory: ") + path;
 
+    // A directory listing shows everything (unlike the recursive search tools),
+    // but marks git-ignored entries so the model knows what's tracked vs not
+    // without them silently disappearing.
+    agent::GitIgnore gi;
+    gi.load(path);
+
     // Collect (is_dir, name), then sort dirs-first and alphabetically — the other
     // tools all give bounded, ordered output; match that here.
     std::vector<std::pair<bool, std::string>> entries;
@@ -54,7 +61,8 @@ std::string ListDirectory::execute(const JSON& args) {
             ss << "… (" << ( entries.size() - MAX_ENTRIES ) << " more entries; narrow the path)\n";
             break;
         }
-        ss << ( e.first ? "[dir]  " : "[file] " ) << e.second << "\n";
+        ss << ( e.first ? "[dir]  " : "[file] " ) << e.second
+           << ( gi.ignored(e.second, e.first) ? "  (gitignored)" : "" ) << "\n";
     }
 
     return ss.str();

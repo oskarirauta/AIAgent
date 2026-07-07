@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <regex>
 #include "common.hpp"
+#include "agent/gitignore.hpp"
 #include "json.hpp"
 
 namespace agent::tools {
@@ -224,13 +225,17 @@ std::string ProjectMap::execute(const JSON& args) {
     size_t scanned = 0;
     bool capped = false;
 
+    agent::GitIgnore gi;
+    gi.load(root);
+
     for ( const auto& e : fs::directory_iterator(root, fs::directory_options::skip_permission_denied, ec)) {
         std::string name = e.path().filename().string();
         std::error_code de;
         if ( e.is_directory(de)) {
-            if ( name[0] == '.' || ignored_dir(name)) continue;
+            if ( name[0] == '.' || ignored_dir(name) || gi.ignored(name, true)) continue;
             top_dirs.push_back(name);
         } else if ( e.is_regular_file(de)) {
+            if ( gi.ignored(name, false)) continue;
             top_files.push_back(name);
         }
     }
@@ -252,12 +257,15 @@ std::string ProjectMap::execute(const JSON& args) {
         for ( ; it != end; it.increment(ec)) {
             if ( ec || scanned >= MAX_FILES_SCANNED ) { capped = true; break; }
             std::error_code fe;
+            std::string rel = fs::relative(it->path(), root, fe).generic_string();
             if ( it->is_directory(fe)) {
-                if ( ignored_dir(it->path().filename().string()))
+                if ( ignored_dir(it->path().filename().string()) || gi.ignored(rel, true))
                     it.disable_recursion_pending();
                 continue;
             }
             if ( it->is_regular_file(fe)) {
+                if ( gi.ignored(rel, false))
+                    continue;
                 ++count; ++scanned;
                 ext_counts[ext_of(it->path())]++;
             }

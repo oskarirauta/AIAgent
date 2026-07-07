@@ -85,6 +85,15 @@ turn by itself so the model picks its results up immediately — bounded to two
 consecutive auto-turns per real user message, so a model that launches workflows
 from an auto-turn can never run away on its own.
 
+### .gitignore-aware search
+
+The tree-walking tools (`find_symbol`, `find_references`, `project_map`) honour
+the project's `.gitignore` (root file + `.git/info/exclude`) on top of a built-in
+skip list, so generated/vendored files don't add noise or cost — supporting the
+common patterns (`*.log`, `build/`, `/dist`, `node_modules`, `**/tmp`, and `!`
+negation). `list_directory` doesn't hide anything but marks ignored entries
+`(gitignored)`, and `grep` is unaffected (it searches a single file you name).
+
 ### Skills
 
 Skills are reusable, named instruction sets beyond `AGENTS.md` — a markdown file

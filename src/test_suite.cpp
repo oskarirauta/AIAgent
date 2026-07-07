@@ -28,6 +28,7 @@
 #include "agent/auth/claude_oauth.hpp"
 #include "agent/tools/registry.hpp"
 #include "agent/skills.hpp"
+#include "agent/gitignore.hpp"
 #include "agent/tools/skill_tool.hpp"
 #include "agent/tools/list_directory.hpp"
 #include "agent/tools/find_symbol.hpp"
@@ -847,6 +848,88 @@ static void test_outline_file() {
     check(r.find("void draw();") == std::string::npos, "prototype (;) excluded");
     check(ol.execute(JSON::Object{ { "path", "/no/such/file" } }).rfind("error:", 0) == 0, "missing file errors");
     std::filesystem::remove(p);
+}
+
+static void test_gitignore() {
+    std::cout << "gitignore matcher" << std::endl;
+    std::string dir = "/tmp/ai_gi_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    { std::ofstream o(dir + "/.gitignore");
+      o << "# a comment\n"
+        << "\n"
+        << "*.log\n"           // basename glob at any depth
+        << "build/\n"          // directory-only
+        << "/dist\n"           // root-anchored
+        << "node_modules\n"    // name at any depth
+        << "src/generated\n"   // anchored path
+        << "**/tmp\n"          // basename at any depth
+        << "!keep.log\n"; }    // negation
+    agent::GitIgnore gi;
+    gi.load(dir);
+
+    check(gi.ignored("app.log", false), "*.log matches a root log");
+    check(gi.ignored("sub/deep/x.log", false), "*.log matches at depth");
+    check(!gi.ignored("app.txt", false), "non-matching file kept");
+    check(gi.ignored("build", true), "build/ matches a directory");
+    check(!gi.ignored("build", false), "build/ does not match a file named build");
+    check(gi.ignored("dist", true), "/dist matches root dist");
+    check(!gi.ignored("sub/dist", true), "/dist does not match a nested dist");
+    check(gi.ignored("node_modules", true), "node_modules matches at root");
+    check(gi.ignored("a/b/node_modules", true), "node_modules matches at depth");
+    check(gi.ignored("src/generated", true), "anchored path matches");
+    check(!gi.ignored("other/src/generated", true), "anchored path does not match elsewhere");
+    check(gi.ignored("x/y/tmp", true), "**/tmp matches at depth");
+    check(gi.ignored("tmp", true), "**/tmp matches at root");
+    check(!gi.ignored("keep.log", false), "negation re-includes keep.log");
+    check(gi.ignored(".git", true), ".git always ignored");
+
+    // No .gitignore -> empty matcher, nothing ignored.
+    std::filesystem::remove(dir + "/.gitignore");
+    agent::GitIgnore gi2;
+    gi2.load(dir);
+    check(gi2.ignored("app.log", false) == false, "no .gitignore -> nothing ignored (except .git)");
+    check(gi2.ignored(".git", true), ".git still ignored with no gitignore");
+
+    std::filesystem::remove_all(dir);
+}
+
+static void test_gitignore_integration() {
+    std::cout << "gitignore-aware search tools" << std::endl;
+    std::string root = "/tmp/ai_gi_int";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root + "/src");
+    std::filesystem::create_directories(root + "/skipdir");
+    { std::ofstream o(root + "/.gitignore"); o << "skipdir/\n*.gen.cpp\n"; }
+    { std::ofstream o(root + "/src/keep.cpp"); o << "void keepfunc() {}\nint uses() { keepfunc(); return 0; }\n"; }
+    { std::ofstream o(root + "/skipdir/skip.cpp"); o << "void skipfunc() {}\n"; }
+    { std::ofstream o(root + "/src/thing.gen.cpp"); o << "void genfunc() {}\n"; }
+
+    { agent::tools::FindSymbol fs;
+      std::string keep = fs.execute(JSON::Object{ { "name", "keepfunc" }, { "path", root } });
+      check(keep.find("keep.cpp") != std::string::npos, "find_symbol finds a tracked symbol");
+      std::string skip = fs.execute(JSON::Object{ { "name", "skipfunc" }, { "path", root } });
+      check(skip.find("no definition") != std::string::npos, "find_symbol skips a gitignored dir");
+      std::string gen = fs.execute(JSON::Object{ { "name", "genfunc" }, { "path", root } });
+      check(gen.find("no definition") != std::string::npos, "find_symbol skips a gitignored file glob"); }
+
+    { agent::tools::FindReferences fr;
+      std::string keep = fr.execute(JSON::Object{ { "name", "keepfunc" }, { "path", root } });
+      check(keep.find("keep.cpp") != std::string::npos, "find_references finds tracked usages");
+      std::string skip = fr.execute(JSON::Object{ { "name", "skipfunc" }, { "path", root } });
+      check(skip.find("no references") != std::string::npos, "find_references skips a gitignored dir"); }
+
+    { agent::tools::ProjectMap pm;
+      std::string map = pm.execute(JSON::Object{ { "path", root } });
+      check(map.find("src/") != std::string::npos, "project_map lists tracked dirs");
+      check(map.find("skipdir") == std::string::npos, "project_map omits a gitignored dir"); }
+
+    { agent::tools::ListDirectory ld;
+      std::string ls = ld.execute(JSON::Object{ { "path", root } });
+      check(ls.find("skipdir") != std::string::npos, "list_directory still shows a gitignored dir");
+      check(ls.find("gitignored") != std::string::npos, "list_directory marks it gitignored"); }
+
+    std::filesystem::remove_all(root);
 }
 
 static void test_project_map() {
@@ -2094,6 +2177,8 @@ int main() {
     test_ultra_keyword();
     test_block_diff();
     test_outline_file();
+    test_gitignore();
+    test_gitignore_integration();
     test_project_map();
     test_find_references();
     test_pricing_and_cost();

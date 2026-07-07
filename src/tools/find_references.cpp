@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include "common.hpp"
+#include "agent/gitignore.hpp"
 
 namespace agent::tools {
 
@@ -156,19 +157,25 @@ std::string FindReferences::execute(const JSON& args) {
     if ( std::filesystem::is_regular_file(root, ec)) {
         scan_file(root);
     } else {
+        agent::GitIgnore gi;
+        gi.load(root);
         std::filesystem::recursive_directory_iterator it(
             root, std::filesystem::directory_options::skip_permission_denied, ec), end;
         for ( ; it != end && !capped; it.increment(ec)) {
             if ( ec ) break;
             const auto& entry = *it;
             std::error_code dec;
+            std::string rel = std::filesystem::relative(entry.path(), root, dec).generic_string();
             if ( entry.is_directory(dec)) {
-                if ( ignored_dir(entry.path().filename().string()))
+                if ( ignored_dir(entry.path().filename().string()) || gi.ignored(rel, true))
                     it.disable_recursion_pending();
                 continue;
             }
-            if ( entry.is_regular_file(dec))
+            if ( entry.is_regular_file(dec)) {
+                if ( gi.ignored(rel, false))
+                    continue;
                 scan_file(entry.path());
+            }
         }
     }
 

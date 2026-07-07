@@ -239,7 +239,9 @@ Batch 4 — remaining:
 - **`.gitignore`-aware traversal** (90% semantics) for the search tools.
 - **UI polish**: settable paste thresholds in `/settings`, `/paste <n>` to
   expand a collapsed paste block.
-- **more providers** (enough, not every one).
+- **more providers** (enough, not every one) — the one open-ended item; the
+  current set (OpenAI, Ollama, Anthropic, Moonshot, OpenRouter, Kimi, Claude)
+  covers real use.
 
 ## Considered / dropped
 
