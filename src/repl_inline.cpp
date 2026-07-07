@@ -187,6 +187,13 @@ int InlineRepl::term_cols() const {
     return 80;
 }
 
+int InlineRepl::term_rows() const {
+    struct winsize ws;
+    if ( ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0 )
+        return ws.ws_row;
+    return 24;
+}
+
 // ── UTF-8 helpers ───────────────────────────────────────────────────────
 
 size_t InlineRepl::prev_char(size_t pos) const {
@@ -1363,12 +1370,12 @@ void InlineRepl::run() {
 
         // Async notices (workflow completions etc.) print above the live block;
         // held back while a dialog owns the screen.
-        if ( !_confirming && !_in_settings )
+        if ( !_confirming && !_in_settings && !_in_list )
             drain_notices();
 
         // Idle + something queued (e.g. a workflow auto-resume prompt enqueued
         // from a background thread): run it through the normal turn machinery.
-        if ( !_turn_running && !_confirming && !_in_settings ) {
+        if ( !_turn_running && !_confirming && !_in_settings && !_in_list ) {
             bool has;
             {
                 std::lock_guard<std::mutex> lk(_mx);
@@ -1380,7 +1387,9 @@ void InlineRepl::run() {
 
         // Terminal was resized: redraw the active view at the new width.
         if ( agent::winch_pending.exchange(false, std::memory_order_relaxed)) {
-            if ( _in_settings )
+            if ( _in_list )
+                draw_list_menu(false);
+            else if ( _in_settings )
                 draw_settings_menu(false);
             else if ( !_confirming )
                 draw_live();
@@ -1401,6 +1410,8 @@ void InlineRepl::run() {
             }
             if ( _confirming )
                 handle_confirm_key(c);
+            else if ( _in_list )
+                handle_list_key(c);
             else if ( _in_settings )
                 handle_settings_key(c);
             else {
@@ -1414,7 +1425,7 @@ void InlineRepl::run() {
                     _defer_draw = true;
                     handle_byte(c);
                     long budget = 1 << 20; // hard cap per loop iteration
-                    while ( budget-- > 0 && !_confirming && !_in_settings ) {
+                    while ( budget-- > 0 && !_confirming && !_in_settings && !_in_list ) {
                         int rem = 0;
                         if ( ioctl(STDIN_FILENO, FIONREAD, &rem) != 0 || rem <= 0 )
                             break;
@@ -1431,7 +1442,7 @@ void InlineRepl::run() {
             }
         } else if ( r < 0 && errno != EINTR ) {
             break;
-        } else if ( _turn_running && !_confirming && !_in_settings ) {
+        } else if ( _turn_running && !_confirming && !_in_settings && !_in_list ) {
             // Idle tick while working: advance the spinner.
             ++_spin;
             draw_live();
@@ -1657,7 +1668,7 @@ void InlineRepl::poll_worker() {
         return;
     // A modal menu (opened mid-turn) owns the screen — don't let streamed output
     // draw over it. The chunks stay buffered and flush when the menu closes.
-    if ( _in_settings )
+    if ( _in_settings || _in_list )
         return;
 
     std::vector<std::string> chunks;
@@ -2058,6 +2069,29 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         start_async_command(trimmed, "compacting");
         return;
     }
+    // Reader commands open a scrollable, dismissable list menu instead of dumping
+    // a long block into the transcript (a big /workflows or /history used to flood
+    // it). Works for the bare list and the detail form (e.g. /workflows 3).
+    {
+        std::string base = trimmed;
+        size_t sp = base.find_first_of(" \t");
+        if ( sp != std::string::npos ) base = base.substr(0, sp);
+        static const std::set<std::string> readers = {
+            "/workflows", "/history", "/memories", "/tasks", "/skills"
+        };
+        if ( readers.count(base)) {
+            std::string text = _command_cb ? _command_cb(trimmed) : "";
+            ListMenu m;
+            m.title = base.substr(1); // drop the leading '/'
+            std::istringstream is(text);
+            std::string ln;
+            while ( std::getline(is, ln))
+                m.rows.push_back(ln);
+            open_list_menu(std::move(m));
+            return;
+        }
+    }
+
     std::string result;
     if ( trimmed == "/theme" || trimmed.rfind("/theme ", 0) == 0 )
         result = apply_theme_command(trimmed); // UI-local: only touches this renderer
@@ -2373,13 +2407,186 @@ void InlineRepl::close_settings_menu() {
     _settings_menu_lines = 0;
     _in_settings = false;
     _settings_editing = false;
-    // Anything queued behind the menu (while a turn ran) resumes now.
+    // Anything queued while the menu was up resumes now — but ONLY if no turn is
+    // in flight. If the menu was opened mid-turn, draining here would start a
+    // second turn on top of the running one (reassigning the live worker thread →
+    // crash); poll_worker resumes and finishes/drains the turn after the menu closes.
     bool has_pending;
     {
         std::lock_guard<std::mutex> lk(_mx);
         has_pending = !_pending.empty();
     }
-    if ( has_pending )
+    if ( has_pending && !_turn_running )
+        drain_pending();
+    else
+        draw_live();
+}
+
+// ── shared scrollable list / reader menu ─────────────────────────────────
+
+namespace {
+// Strip control chars and clip a line to `cols` display cells for the menu.
+std::string clip_cells(const std::string& s, int cols) {
+    std::string t = sanitize_display(s);
+    auto cells = split_cells(t);
+    if ( static_cast<int>(cells.size()) <= cols )
+        return t;
+    std::string out;
+    for ( int i = 0; i < cols - 1 && i < static_cast<int>(cells.size()); ++i )
+        out += cells[i];
+    return out + "…";
+}
+} // namespace
+
+void InlineRepl::open_list_menu(ListMenu menu) {
+    erase_live();
+    tcflush(STDIN_FILENO, TCIFLUSH); // no type-ahead into a just-opened menu
+    wr("\033[?25l");                 // hide the cursor
+    _list = std::move(menu);
+    _in_list = true;
+    _list_detail = false;
+    _list_sel = 0;
+    _list_top = 0;
+    _list_lines = 0;
+    draw_list_menu(false);
+}
+
+void InlineRepl::draw_list_menu(bool redraw) {
+    std::string out;
+    if ( redraw && _list_lines > 0 )
+        out += "\r\033[" + std::to_string(_list_lines) + "A";
+    out += "\033[J";
+    int lines = 0;
+    int cols = term_cols() - 3;
+    if ( cols < 8 ) cols = 8;
+    int vh = term_rows() - 3; // reserve title + a little breathing room
+    if ( vh < 3 ) vh = 3;
+
+    if ( _list_detail ) {
+        out += _theme.command + "  " + _list.title + Theme::reset + "   " +
+               _theme.dim + "↑↓ scroll · esc back" + Theme::reset + "\r\n";
+        lines++;
+        int total = static_cast<int>(_list_detail_rows.size());
+        if ( _list_detail_top > std::max(0, total - vh)) _list_detail_top = std::max(0, total - vh);
+        if ( _list_detail_top < 0 ) _list_detail_top = 0;
+        for ( int i = _list_detail_top; i < total && i < _list_detail_top + vh; ++i ) {
+            out += "  " + clip_cells(_list_detail_rows[i], cols) + "\r\n";
+            lines++;
+        }
+        if ( total > vh ) {
+            out += _theme.dim + "  " + std::to_string(_list_detail_top + 1) + "–" +
+                   std::to_string(std::min(total, _list_detail_top + vh)) + " / " +
+                   std::to_string(total) + Theme::reset + "\r\n";
+            lines++;
+        }
+    } else {
+        std::string hint = "↑↓ move · esc close";
+        if ( !_list.drill_cmd.empty()) hint += " · ⏎ open";
+        if ( _list.action_key )
+            hint += std::string(" · ") + _list.action_key + " " + _list.action_label;
+        out += _theme.command + "  " + _list.title + Theme::reset + "   " +
+               _theme.dim + hint + Theme::reset + "\r\n";
+        lines++;
+
+        int total = static_cast<int>(_list.rows.size());
+        if ( total == 0 ) {
+            out += _theme.dim + "  (empty)" + Theme::reset + "\r\n";
+            lines++;
+        }
+        if ( _list_sel < _list_top ) _list_top = _list_sel;
+        if ( _list_sel >= _list_top + vh ) _list_top = _list_sel - vh + 1;
+        if ( _list_top < 0 ) _list_top = 0;
+        for ( int i = _list_top; i < total && i < _list_top + vh; ++i ) {
+            if ( i == _list_sel )
+                out += "\033[1;7m ❯ " + clip_cells(_list.rows[i], cols) + " \033[0m\r\n";
+            else
+                out += _theme.dim + "   " + clip_cells(_list.rows[i], cols) + Theme::reset + "\r\n";
+            lines++;
+        }
+        if ( total > vh ) {
+            out += _theme.dim + "  " + std::to_string(_list_sel + 1) + " / " +
+                   std::to_string(total) + Theme::reset + "\r\n";
+            lines++;
+        }
+    }
+    wr(out);
+    _list_lines = lines;
+}
+
+void InlineRepl::handle_list_key(int c) {
+    int n = static_cast<int>(_list.rows.size());
+    int vh = term_rows() - 3;
+    if ( vh < 3 ) vh = 3;
+
+    if ( c == 0x1b ) {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(STDIN_FILENO, &fds);
+        struct timeval tv { 0, 40 * 1000 };
+        if ( select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0 ) {
+            int b1 = read_byte();
+            if ( b1 == '[' || b1 == 'O' ) {
+                int b2 = read_byte();
+                if ( b2 == '5' || b2 == '6' ) read_byte(); // consume '~' of PgUp/PgDn
+                if ( _list_detail ) {
+                    if ( b2 == 'A' ) { _list_detail_top--; draw_list_menu(true); }
+                    else if ( b2 == 'B' ) { _list_detail_top++; draw_list_menu(true); }
+                    else if ( b2 == '5' ) { _list_detail_top -= vh; draw_list_menu(true); }
+                    else if ( b2 == '6' ) { _list_detail_top += vh; draw_list_menu(true); }
+                } else if ( n > 0 ) {
+                    if ( b2 == 'A' ) { _list_sel = std::max(0, _list_sel - 1); draw_list_menu(true); }
+                    else if ( b2 == 'B' ) { _list_sel = std::min(n - 1, _list_sel + 1); draw_list_menu(true); }
+                    else if ( b2 == '5' ) { _list_sel = std::max(0, _list_sel - vh); draw_list_menu(true); }
+                    else if ( b2 == '6' ) { _list_sel = std::min(n - 1, _list_sel + vh); draw_list_menu(true); }
+                }
+            }
+            return;
+        }
+        // bare Esc: leave a detail view back to the list, or close the menu.
+        if ( _list_detail ) { _list_detail = false; draw_list_menu(true); }
+        else close_list_menu();
+        return;
+    }
+
+    if ( _list_detail )
+        return; // only scroll / esc in detail view
+
+    if (( c == '\r' || c == '\n' ) && !_list.drill_cmd.empty() &&
+        _list_sel < static_cast<int>(_list.keys.size()) && !_list.keys[_list_sel].empty()) {
+        std::string detail = _command_cb ? _command_cb(_list.drill_cmd + _list.keys[_list_sel]) : "";
+        _list_detail_rows.clear();
+        std::istringstream ds(detail);
+        std::string dl;
+        while ( std::getline(ds, dl))
+            _list_detail_rows.push_back(dl);
+        _list_detail = true;
+        _list_detail_top = 0;
+        draw_list_menu(true);
+        return;
+    }
+
+    if ( _list.action_key && c == _list.action_key &&
+         _list_sel < static_cast<int>(_list.keys.size()) && !_list.keys[_list_sel].empty()) {
+        if ( _command_cb )
+            _command_cb(_list.action_cmd + _list.keys[_list_sel]);
+        close_list_menu(); // reopen to see the updated list
+        return;
+    }
+}
+
+void InlineRepl::close_list_menu() {
+    if ( _list_lines > 0 )
+        wr("\r\033[" + std::to_string(_list_lines) + "A\033[J");
+    wr("\033[?25h"); // restore the cursor
+    _list_lines = 0;
+    _in_list = false;
+    _list_detail = false;
+    bool has_pending;
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        has_pending = !_pending.empty();
+    }
+    if ( has_pending && !_turn_running )
         drain_pending();
     else
         draw_live();

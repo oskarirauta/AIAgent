@@ -93,6 +93,27 @@ private:
     // Terminal / raw mode.
     void setup();
     int  term_cols() const;
+    int  term_rows() const;
+
+    // ── Shared scrollable list/reader menu ───────────────────────────────
+    // Used by /workflows, /history, /memories, /tasks, /skills, /queue: a
+    // dismissable, scrolling list instead of dumping a long block into the
+    // transcript. Enter drills into a selected row (runs `drill_cmd + key`), and
+    // an optional action key runs `action_cmd + key` (e.g. /queue drop <n>).
+    struct ListMenu {
+        std::string title;
+        std::vector<std::string> rows;   // one display line per entry
+        std::vector<std::string> keys;   // per-row drill/action key (parallel; may be empty)
+        std::string drill_cmd;           // Enter runs this + keys[sel] and shows the result
+        std::string action_cmd;          // action_key runs this + keys[sel]
+        char action_key = 0;             // e.g. 'd' for drop; 0 = none
+        std::string action_label;        // footer hint for the action
+    };
+    void open_list_menu(ListMenu menu);
+    void draw_list_menu(bool redraw);
+    void handle_list_key(int c);
+    void close_list_menu();
+    bool in_list_menu() const { return _in_list; }
 
     // Live block (input + status) at the bottom of the screen.
     void draw_live();
@@ -265,6 +286,15 @@ private:
     int _confirm_menu_lines = 0;  // option lines currently drawn (for in-place redraw)
     bool _confirm_note_mode = false; // typing a deny reason instead of picking an option
     std::string _confirm_note_buf;   // the reason being typed
+
+    bool _in_list = false;             // a scrollable list/reader menu is open
+    ListMenu _list;
+    int _list_sel = 0;                 // selected row
+    int _list_top = 0;                 // first visible row (scroll offset)
+    int _list_lines = 0;              // lines the menu occupies (for redraw backup)
+    bool _list_detail = false;         // showing a drilled-in row's detail
+    std::vector<std::string> _list_detail_rows;
+    int _list_detail_top = 0;
 
     bool _in_settings = false;
     bool _settings_editing = false;    // typing a free-text value into the selected row
