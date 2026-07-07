@@ -2235,6 +2235,18 @@ static void test_danger_list() {
     check(!Registry::classify_danger("make & rm -rf /tmp/x").empty(), "backgrounded prefix + rm -rf flagged");
     check(Registry::classify_danger("cd /tmp && ls -la").empty(), "cd && ls still not flagged");
     check(Registry::classify_danger("cd a && git log | grep x").empty(), "benign compound not flagged");
+
+    // Wrapper option-VALUES must not hide the real command (the value is not a
+    // program): timeout -s KILL 5 rm -rf / used to be classified as "KILL".
+    check(!Registry::classify_danger("timeout -s KILL 5 rm -rf /").empty(), "timeout -s KILL 5 rm -rf flagged");
+    check(!Registry::classify_danger("ionice -c best-effort rm -rf /tmp/x").empty(), "ionice -c value + rm flagged");
+    // Command substitutions run their own commands.
+    check(!Registry::classify_danger("echo $(rm -rf /)").empty(), "rm inside $() flagged");
+    check(!Registry::classify_danger("x=`dd if=/dev/zero of=/dev/sda`").empty(), "dd inside backticks flagged");
+    check(Registry::classify_danger("echo $(date)").empty(), "benign $() not flagged");
+    // Quoting/escaping the program name must not bypass the classifier.
+    check(!Registry::classify_danger("\"rm\" -rf /").empty(), "quoted rm flagged");
+    check(!Registry::classify_danger("\\rm -rf /").empty(), "backslash-escaped rm flagged");
 }
 
 static void test_redact_secrets() {

@@ -225,60 +225,87 @@ static std::vector<std::string> split_shell_segments(const std::string& command)
     return parts;
 }
 
-// Danger classification for a SINGLE stage (no connectors). classify_danger below
-// runs this over every stage of a compound command.
-static std::string classify_danger_segment(const std::string& command) {
-    std::vector<std::string> tokens = tokenize(command);
-    if ( tokens.empty())
-        return "";
-
-    // Skip leading wrapper programs so `env FOO=bar rm -rf ~`, `timeout 5 rm -rf`,
-    // `xargs rm`, `sudo rm` … are classified by the REAL command, not the wrapper
-    // (which alone looks harmless). Best-effort: step over the wrapper and its own
-    // leading args (VAR=val assignments, -flags, numeric durations).
-    // Note: sudo/doas are deliberately NOT here — they are dangerous in their own
-    // right (privilege escalation) and stay flagged by the rules below.
-    static const std::set<std::string> wrappers = {
+// Programs whose job is to run ANOTHER command — the real command follows them
+// (possibly past their own options), so they must not shadow the danger scan.
+static const std::set<std::string>& wrapper_programs() {
+    static const std::set<std::string> w = {
         "env", "nice", "ionice", "nohup", "time", "timeout", "stdbuf", "xargs", "setsid"
     };
-    // An env assignment is `NAME=value` where NAME is an identifier — the value
-    // may contain anything (incl. '/'), so `env PATH=/opt/bin rm -rf ~` must not
-    // stop the skip at the assignment and mistake the value's basename for the
-    // program, letting the real `rm -rf` slip past the danger rules.
+    return w;
+}
+
+// Strip a single leading backslash escape and one layer of matching surrounding
+// quotes, so `\rm` / `"rm"` / `'rm'` are seen as the program rm.
+static std::string unquote_token(const std::string& t) {
+    std::string s = t;
+    if ( s.size() >= 2 && s[0] == '\\' )
+        s = s.substr(1);
+    if ( s.size() >= 2 && ( s.front() == '"' || s.front() == '\'' ) && s.back() == s.front())
+        s = s.substr(1, s.size() - 2);
+    return s;
+}
+
+// Index of the first REAL command token past leading wrapper programs and their
+// own args (VAR=val, -flags, numeric durations). cd is handled by the caller at
+// the segment level (a bare `cd DIR` has no command).
+static size_t skip_leading_wrappers(const std::vector<std::string>& tokens) {
     auto is_assign = [](const std::string& t) {
         size_t eq = t.find('=');
-        if ( eq == 0 || eq == std::string::npos )
-            return false;
-        for ( size_t i = 0; i < eq; ++i ) {
-            char ch = t[i];
-            if ( !( std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' ))
-                return false;
-        }
+        if ( eq == 0 || eq == std::string::npos ) return false;
+        for ( size_t i = 0; i < eq; ++i )
+            if ( !( std::isalnum(static_cast<unsigned char>(t[i])) || t[i] == '_' )) return false;
         return true;
     };
     size_t first = 0;
-    while ( first < tokens.size() && wrappers.count(basename_of(tokens[first]))) {
+    while ( first < tokens.size() && wrapper_programs().count(basename_of(unquote_token(tokens[first])))) {
         ++first;
         while ( first < tokens.size()) {
             const std::string& t = tokens[first];
             bool flag = !t.empty() && t[0] == '-';
-            // A numeric duration must contain a digit — otherwise program names
-            // made only of [smhd] (sh, ssh) are wrongly skipped as durations.
             bool num = !t.empty() &&
                        t.find_first_of("0123456789") != std::string::npos &&
                        t.find_first_not_of("0123456789.smhd") == std::string::npos;
             if ( is_assign(t) || flag || num ) ++first; else break;
         }
     }
-    if ( first >= tokens.size())
-        first = 0;
-    // Re-base so the danger-rule scan below sees the real program and its args.
-    if ( first > 0 )
-        tokens.erase(tokens.begin(), tokens.begin() + first);
+    return first >= tokens.size() ? 0 : first;
+}
 
-    std::string program = basename_of(tokens[0]);
+// Extract the contents of $(...) and `...` command substitutions, so the commands
+// they run can be classified too (the shell executes them).
+static std::vector<std::string> extract_substitutions(const std::string& cmd) {
+    std::vector<std::string> out;
+    for ( size_t i = 0; i + 1 < cmd.size(); ) {
+        if ( cmd[i] == '$' && cmd[i + 1] == '(' ) {
+            int depth = 1; size_t j = i + 2;
+            for ( ; j < cmd.size() && depth; ++j ) {
+                if ( cmd[j] == '(' ) ++depth;
+                else if ( cmd[j] == ')' ) --depth;
+            }
+            out.push_back(cmd.substr(i + 2, ( j - 1 ) - ( i + 2 )));
+            i = j;
+        } else { ++i; }
+    }
+    size_t start = std::string::npos;
+    for ( size_t i = 0; i < cmd.size(); ++i )
+        if ( cmd[i] == '`' ) {
+            if ( start == std::string::npos ) start = i + 1;
+            else { out.push_back(cmd.substr(start, i - start)); start = std::string::npos; }
+        }
+    return out;
+}
 
-    // Sensitive system files / block devices, referenced by any command.
+// Danger classification for a SINGLE stage (no connectors). classify_danger below
+// runs this over every stage of a compound command.
+static std::string classify_danger_segment(const std::string& command) {
+    std::vector<std::string> tokens = tokenize(command);
+    if ( tokens.empty())
+        return "";
+    // Unwrap simple quoting/escaping so `"rm"` / `\rm` compare as the program.
+    for ( auto& t : tokens )
+        t = unquote_token(t);
+
+    // Sensitive system files / block devices, referenced by any token.
     static const std::vector<std::string> sensitive_exact = {
         "/etc/passwd", "/etc/shadow", "/etc/gshadow", "/etc/group",
         "/etc/sudoers", "/etc/fstab", "/etc/hosts"
@@ -287,36 +314,42 @@ static std::string classify_danger_segment(const std::string& command) {
         "/dev/sd", "/dev/nvme", "/dev/hd", "/dev/mapper/", "/dev/disk/",
         "/etc/sudoers.d/", "/boot/"
     };
-    for ( size_t i = 1; i < tokens.size(); ++i ) {
+    for ( const auto& t : tokens ) {
         for ( const auto& p : sensitive_exact )
-            if ( tokens[i] == p )
+            if ( t == p )
                 return "touches a sensitive system file (" + p + ")";
         for ( const auto& p : sensitive_prefix )
-            if ( tokens[i].rfind(p, 0) == 0 )
+            if ( t.rfind(p, 0) == 0 )
                 return "touches a sensitive system path (" + p + "…)";
     }
 
-    // User-config danger additions (tools_danger) — checked on the REAL program,
-    // i.e. after leading wrappers were stepped over above.
+    // User-config danger additions (tools_danger), matched anywhere.
     for ( const auto& c : extra_danger_list())
-        if ( program == basename_of(c))
-            return "flagged as dangerous in your config (tools_danger)";
+        for ( const auto& t : tokens )
+            if ( basename_of(t) == basename_of(c))
+                return "flagged as dangerous in your config (tools_danger)";
 
+    // Built-in danger rules: check EVERY token as a candidate program, so a command
+    // hidden behind a wrapper's option-value (`timeout -s KILL 5 rm -rf /`) or extra
+    // leading tokens is still caught — not only tokens[0]. This deliberately errs
+    // toward over-confirmation (a benign mention of a flagged word may prompt); for a
+    // safety gate a false alarm is cheap and a miss is not.
     for ( const auto& rule : danger_rules()) {
-        if ( rule.program != program )
-            continue;
-        if ( rule.any_flags.empty())
-            return rule.reason;
-        for ( const auto& flag : rule.any_flags ) {
-            // Option flags (-r, -rf, …) substring-match so clusters like -rfv hit;
-            // everything else (/, *, 777) must be its own token, so a path like
-            // /tmp/x or a name like file777 is not mistaken for the criterion.
-            bool is_option = !flag.empty() && flag[0] == '-';
-            for ( size_t i = 1; i < tokens.size(); ++i ) {
-                bool hit = is_option ? ( tokens[i].find(flag) != std::string::npos )
-                                     : ( tokens[i] == flag );
-                if ( hit )
-                    return rule.reason;
+        for ( size_t p = 0; p < tokens.size(); ++p ) {
+            if ( basename_of(tokens[p]) != rule.program )
+                continue;
+            if ( rule.any_flags.empty())
+                return rule.reason;
+            for ( const auto& flag : rule.any_flags ) {
+                // Option flags (-r, -rf, …) substring-match so clusters like -rfv hit;
+                // everything else (/, *, 777) must be its own token following the program.
+                bool is_option = !flag.empty() && flag[0] == '-';
+                for ( size_t i = p + 1; i < tokens.size(); ++i ) {
+                    bool hit = is_option ? ( tokens[i].find(flag) != std::string::npos )
+                                         : ( tokens[i] == flag );
+                    if ( hit )
+                        return rule.reason;
+                }
             }
         }
     }
@@ -334,6 +367,14 @@ std::string Registry::classify_danger(const std::string& command) {
     }
     if ( command.find(":(){") != std::string::npos )
         return "looks like a fork bomb";
+
+    // Command substitutions run their own commands — classify their contents too,
+    // so `echo $(rm -rf /)` / `` `dd if=… of=/dev/sda` `` don't hide behind echo.
+    for ( const auto& inner : extract_substitutions(command)) {
+        std::string r = classify_danger(inner);
+        if ( !r.empty())
+            return r;
+    }
 
     // Every stage is judged on its own, so a dangerous command after a benign
     // prefix (`cd /tmp && rm -rf /`) is still flagged.
@@ -357,14 +398,17 @@ static std::string primary_program(const std::string& command) {
         std::vector<std::string> toks = tokenize(s);
         if ( toks.empty())
             continue;
-        std::string prog = basename_of(toks[0]);
+        std::string prog = basename_of(unquote_token(toks[0]));
         if ( prog == "cd" || prog == "pushd" || prog == "popd" )
-            continue; // keep looking for the command that actually does something
-        return prog;
+            continue; // a bare cd segment — keep looking for the real command
+        // Step over wrapper programs (timeout/env/…) to the command they run, so
+        // the grant keys on the real program, matching the danger classifier.
+        size_t idx = skip_leading_wrappers(toks);
+        return basename_of(unquote_token(toks[idx]));
     }
     // All stages were cd/empty — key on cd then (it really is just a cd).
     std::vector<std::string> toks = tokenize(common::trim_ws(command));
-    return toks.empty() ? command : basename_of(toks[0]);
+    return toks.empty() ? command : basename_of(unquote_token(toks[0]));
 }
 
 std::string Registry::classify_path_danger(const std::string& path) {
