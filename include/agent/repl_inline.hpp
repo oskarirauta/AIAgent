@@ -112,6 +112,7 @@ private:
         std::string reopen_cmd;          // re-run to refresh the list after an action
     };
     void open_list_menu(ListMenu menu);
+    void open_list_detail(const std::string& title, const std::string& text);
     void draw_list_menu(bool redraw);
     void handle_list_key(int c);
     void close_list_menu();

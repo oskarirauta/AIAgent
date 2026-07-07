@@ -1389,7 +1389,7 @@ void InlineRepl::run() {
         // Terminal was resized: redraw the active view at the new width.
         if ( agent::winch_pending.exchange(false, std::memory_order_relaxed)) {
             if ( _in_list )
-                draw_list_menu(false);
+                draw_list_menu(true); // back up over the old render, don't stack it
             else if ( _in_settings )
                 draw_settings_menu(false);
             else if ( !_confirming )
@@ -2113,9 +2113,8 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         return;
     }
 
-    // Bare /effort (or /thinking) opens a picker menu; with an argument it applies
-    // directly. Selecting applies immediately (a setting — the running turn is
-    // unaffected, it takes effect on the next request).
+    // Bare enum/toggle settings open a small picker; with an argument they apply
+    // directly. Selecting applies via the setting command.
     if ( trimmed == "/effort" || trimmed == "/thinking" ) {
         ListMenu m;
         m.title = "reasoning effort";
@@ -2123,6 +2122,30 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         m.keys = m.rows;
         m.select_cmd = "/thinking ";
         m.current = _config.thinking.empty() ? "off" : _config.thinking;
+        open_list_menu(std::move(m));
+        return;
+    }
+    if ( trimmed == "/tools" || trimmed == "/stream" || trimmed == "/strict" || trimmed == "/plan" ) {
+        ListMenu m;
+        if ( trimmed == "/tools" ) {
+            m.title = "tool confirmation";
+            m.rows = { "confirm", "auto", "insecure" };
+            m.current = _config.confirm_tools ? "confirm" : "auto";
+        } else if ( trimmed == "/stream" ) {
+            m.title = "live reasoning";
+            m.rows = { "off", "on", "collapse" };
+            m.current = !_config.thinking_stream ? "off" : ( _config.thinking_collapse ? "collapse" : "on" );
+        } else if ( trimmed == "/strict" ) {
+            m.title = "strict (confirm safe commands)";
+            m.rows = { "off", "on" };
+            m.current = _config.strict ? "on" : "off";
+        } else { // /plan
+            m.title = "plan mode (read-only)";
+            m.rows = { "off", "on" };
+            m.current = _config.plan_mode ? "on" : "off";
+        }
+        m.keys = m.rows;
+        m.select_cmd = trimmed + " ";
         open_list_menu(std::move(m));
         return;
     }
@@ -2139,6 +2162,12 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         };
         if ( readers.count(base)) {
             std::string text = _command_cb ? _command_cb(trimmed) : "";
+            // The detail form (an argument: /workflows 3, /memories foo) is prose —
+            // show it word-wrapped and scrollable so nothing is cut off.
+            if ( trimmed != base ) {
+                open_list_detail(trimmed.substr(1), text);
+                return;
+            }
             std::vector<std::string> all;
             std::istringstream is(text);
             std::string ln;
@@ -2515,6 +2544,22 @@ void InlineRepl::close_settings_menu() {
 // ── shared scrollable list / reader menu ─────────────────────────────────
 
 namespace {
+// Word-wrap a block of text into display rows of at most `width` cells, so long
+// prose (workflow results, memory bodies) is fully readable by scrolling rather
+// than truncated at the right edge.
+std::vector<std::string> wrap_to_rows(const std::string& text, int width) {
+    std::vector<std::string> rows;
+    std::istringstream is(text);
+    std::string line;
+    while ( std::getline(is, line)) {
+        std::string clean = sanitize_display(line);
+        if ( clean.empty()) { rows.push_back(""); continue; }
+        for ( auto& seg : word_wrap(clean, width))
+            rows.push_back(seg);
+    }
+    return rows;
+}
+
 // Strip control chars and clip a line to `cols` display cells for the menu.
 std::string clip_cells(const std::string& s, int cols) {
     std::string t = sanitize_display(s);
@@ -2542,6 +2587,22 @@ void InlineRepl::open_list_menu(ListMenu menu) {
     if ( !_list.current.empty())
         for ( size_t i = 0; i < _list.keys.size(); ++i )
             if ( _list.keys[i] == _list.current ) { _list_sel = static_cast<int>(i); break; }
+    draw_list_menu(false);
+}
+
+// Open the menu straight into a scroll-only, word-wrapped detail view — for the
+// prose that reader commands with an argument return (e.g. /workflows <id>).
+void InlineRepl::open_list_detail(const std::string& title, const std::string& text) {
+    erase_live();
+    tcflush(STDIN_FILENO, TCIFLUSH);
+    wr("\033[?25l");
+    _list = ListMenu{};
+    _list.title = title;
+    _in_list = true;
+    _list_detail = true;
+    _list_detail_rows = wrap_to_rows(text, term_cols() - 4);
+    _list_detail_top = 0;
+    _list_lines = 0;
     draw_list_menu(false);
 }
 
@@ -2659,11 +2720,7 @@ void InlineRepl::handle_list_key(int c) {
     if (( c == '\r' || c == '\n' ) && !_list.drill_cmd.empty() &&
         _list_sel < static_cast<int>(_list.keys.size()) && !_list.keys[_list_sel].empty()) {
         std::string detail = _command_cb ? _command_cb(_list.drill_cmd + _list.keys[_list_sel]) : "";
-        _list_detail_rows.clear();
-        std::istringstream ds(detail);
-        std::string dl;
-        while ( std::getline(ds, dl))
-            _list_detail_rows.push_back(dl);
+        _list_detail_rows = wrap_to_rows(detail, term_cols() - 4);
         _list_detail = true;
         _list_detail_top = 0;
         draw_list_menu(true);
