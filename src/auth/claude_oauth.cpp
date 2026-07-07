@@ -1,4 +1,5 @@
 #include "agent/auth/claude_oauth.hpp"
+#include "agent/auth/secure_file.hpp"
 
 #include <curl/curl.h>
 #include <random>
@@ -331,6 +332,7 @@ std::optional<ClaudeToken> load_claude_token(const std::string& home_dir) {
     std::string path = token_path(home_dir);
     if ( !std::filesystem::exists(path))
         return std::nullopt;
+    ensure_owner_only(path, "claude"); // tighten perms before trusting the file
 
     std::ifstream ifd(path, std::ios::in);
     if ( !ifd.is_open()) {

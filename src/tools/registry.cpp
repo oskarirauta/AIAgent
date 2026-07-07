@@ -82,6 +82,18 @@ std::string mark_lines(const std::string& text, const char* mark, size_t cap = 4
     return out;
 }
 
+// Keep a preview from filling the confirm dialog: show at most `cap` lines and
+// note how many were hidden (the full content is still written either way).
+std::string cap_preview(const std::string& text, size_t cap = 60) {
+    size_t nl = 0, cut = std::string::npos;
+    for ( size_t i = 0; i < text.size(); ++i )
+        if ( text[i] == '\n' && ++nl == cap ) { cut = i + 1; break; }
+    if ( cut == std::string::npos )
+        return text; // fewer than cap lines
+    size_t more = static_cast<size_t>(std::count(text.begin() + cut, text.end(), '\n'));
+    return text.substr(0, cut) + "… (" + std::to_string(more) + " more lines; full diff not shown)\n";
+}
+
 // A human-readable preview of what a write_file / edit_file call would change,
 // shown in the confirmation dialog. Empty for other tools.
 std::string change_preview(const std::string& name, const JSON& args) {
@@ -95,7 +107,7 @@ std::string change_preview(const std::string& name, const JSON& args) {
         }
         std::ifstream ifd(path, std::ios::binary);
         std::stringstream ss; ss << ifd.rdbuf();
-        return agent::block_diff(ss.str(), newc, "current", "new");
+        return cap_preview(agent::block_diff(ss.str(), newc, "current", "new"));
     }
     if ( name == "edit_file" && args.contains("path")) {
         auto one = [](const JSON& e) {

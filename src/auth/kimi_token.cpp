@@ -1,4 +1,5 @@
 #include "agent/auth/kimi_token.hpp"
+#include "agent/auth/secure_file.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -35,6 +36,7 @@ std::optional<KimiToken> load_token(const std::string& home_dir) {
     std::string path = token_path(home_dir);
     if ( !std::filesystem::exists(path))
         return std::nullopt;
+    ensure_owner_only(path, "kimi"); // tighten perms before trusting the file
 
     std::ifstream ifd(path, std::ios::in);
     if ( !ifd.is_open()) {

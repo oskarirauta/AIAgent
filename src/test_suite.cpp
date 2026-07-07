@@ -29,6 +29,8 @@
 #include "agent/tools/registry.hpp"
 #include "agent/skills.hpp"
 #include "agent/gitignore.hpp"
+#include "agent/auth/secure_file.hpp"
+#include <sys/stat.h>
 #include "agent/commands.hpp"
 #include "agent/tools/skill_tool.hpp"
 #include "agent/tools/list_directory.hpp"
@@ -848,6 +850,46 @@ static void test_outline_file() {
     check(r.find("return a + b") == std::string::npos, "body lines excluded");
     check(r.find("void draw();") == std::string::npos, "prototype (;) excluded");
     check(ol.execute(JSON::Object{ { "path", "/no/such/file" } }).rfind("error:", 0) == 0, "missing file errors");
+    std::filesystem::remove(p);
+}
+
+static void test_write_preview_cap() {
+    std::cout << "write_file confirm preview is line-capped" << std::endl;
+    using namespace agent::tools;
+    std::string f = "/tmp/ai_bigwrite.txt";
+    { std::ofstream o(f); for ( int i = 0; i < 200; ++i ) o << "old line " << i << "\n"; }
+    std::string newc;
+    for ( int i = 0; i < 200; ++i ) newc += "new line " + std::to_string(i) + "\n";
+
+    Registry reg;
+    reg.register_defaults();
+    std::string captured;
+    reg.set_confirm_callback([&](const ConfirmRequest& req, std::string&) {
+        captured = req.preview;
+        return Decision::deny; // don't actually overwrite
+    });
+    reg.execute("write_file", JSON::Object{ { "path", f }, { "content", newc } });
+
+    size_t lines = static_cast<size_t>(std::count(captured.begin(), captured.end(), '\n'));
+    check(lines <= 65, "preview capped to ~60 lines, not the whole 400-line diff");
+    check(captured.find("more lines; full diff not shown") != std::string::npos,
+          "preview notes the hidden lines");
+    std::filesystem::remove(f);
+}
+
+static void test_credential_perms() {
+    std::cout << "credential file perms (ensure_owner_only)" << std::endl;
+    std::string p = "/tmp/ai_tok_perm.json";
+    { std::ofstream o(p); o << "{}"; }
+    ::chmod(p.c_str(), 0644); // group/other-readable
+    agent::auth::ensure_owner_only(p, "test");
+    struct stat st{};
+    ::stat(p.c_str(), &st);
+    check((st.st_mode & 0777) == 0600, "loose creds tightened to 0600 on read");
+    ::chmod(p.c_str(), 0600);
+    agent::auth::ensure_owner_only(p, "test");
+    ::stat(p.c_str(), &st);
+    check((st.st_mode & 0777) == 0600, "already-0600 file unchanged");
     std::filesystem::remove(p);
 }
 
@@ -2213,6 +2255,8 @@ int main() {
     test_ultra_keyword();
     test_block_diff();
     test_outline_file();
+    test_write_preview_cap();
+    test_credential_perms();
     test_fetch_url_ssrf();
     test_commands_catalog();
     test_gitignore();
