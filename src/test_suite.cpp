@@ -1511,6 +1511,37 @@ static void test_token_usage() {
     check(stats.session_total() == 1200 + 34 + 1500 + 40, "session total accumulates");
 }
 
+static void test_trust_grants() {
+    std::cout << "trust: standing grants + revoke" << std::endl;
+    using namespace agent::tools;
+    Registry reg;
+    reg.register_defaults();
+    reg.set_mode(ConfirmMode::confirm);
+    reg.set_strict(true);
+    Decision give = Decision::session;
+    reg.set_confirm_callback([&](const ConfirmRequest&) { return give; });
+
+    reg.execute("run_command", JSON::Object{ { "command", "echo one" } }); // grant session for "echo one"
+    give = Decision::similar;
+    reg.execute("run_command", JSON::Object{ { "command", "ls -a" } });    // grant similar for "ls"
+
+    auto g = reg.grants();
+    check(g.size() == 2, "two standing grants recorded");
+    // The session grant auto-approves a repeat and bumps its use counter.
+    reg.execute("run_command", JSON::Object{ { "command", "echo one" } });
+    bool counted = false;
+    for ( const auto& x : reg.grants())
+        if ( x.kind == "session" && x.uses == 1 ) counted = true;
+    check(counted, "grant use counter increments on auto-approval");
+
+    // Revoke one, then all.
+    std::string key = reg.grants()[0].key;
+    check(reg.revoke_grant(key) == 1, "revoke_grant removes one");
+    check(reg.grants().size() == 1, "one grant left");
+    check(reg.revoke_all_grants() == 1, "revoke_all clears the rest");
+    check(reg.grants().empty(), "no grants after revoke all");
+}
+
 static void test_turn_scoped_grant() {
     std::cout << "allow-for-the-rest-of-this-turn grant" << std::endl;
     using namespace agent::tools;
@@ -1742,6 +1773,7 @@ int main() {
     test_edit_file();
     test_grep_robustness();
     test_token_usage();
+    test_trust_grants();
     test_turn_scoped_grant();
     test_danger_list();
     test_list_directory();

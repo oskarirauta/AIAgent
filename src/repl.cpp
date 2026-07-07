@@ -1100,6 +1100,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /tasks                   show the agent's current todo list\n"
                "  !<command>              run a shell command yourself (recorded for the model)\n"
                "  /queue [drop <n|all>]    messages queued behind the running turn\n"
+               "  /trust [drop <n|all>]    review/revoke this session's tool grants\n"
                "  /pin [text]              keep a note in context through /compact (/pins, /unpin <n|all>)\n"
                "  /changes [diff|revert <path|all>]   files the agent changed this session\n"
                "  /export [file]           write the conversation to a Markdown file\n"
@@ -1234,6 +1235,46 @@ std::string Repl::handle_command(const std::string& line) {
 
     if ( cmd == "/tasks" ) {
         return tasks_command();
+    }
+
+    if ( cmd == "/trust" ) {
+        std::istringstream iss(args);
+        std::string sub, rest;
+        iss >> sub; { std::string r; std::getline(iss, r); rest = common::trim_ws(r); }
+        auto grants = _registry.grants();
+        if ( common::to_lower(sub) == "drop" ) {
+            if ( rest.empty())
+                return "usage: /trust drop <n|all>";
+            if ( common::to_lower(rest) == "all" )
+                return "revoked " + std::to_string(_registry.revoke_all_grants()) + " grant(s)";
+            int n = 0;
+            try { n = std::stoi(rest); } catch ( ... ) { return "usage: /trust drop <n|all>"; }
+            if ( n < 1 || n > static_cast<int>(grants.size()))
+                return grants.empty() ? "no standing grants" : "no grant #" + rest + " (see /trust)";
+            std::string key = grants[n - 1].key;
+            _registry.revoke_grant(key);
+            return "revoked #" + rest + ": " + key;
+        }
+        // Overview.
+        std::string mode = _config.insecure ? "insecure (no confirmation)"
+                         : ( _config.confirm_tools ? "confirm" : "auto" );
+        std::string s = "trust:\n\n  mode: " + mode + ( _config.strict ? " (strict)" : "" );
+        if ( _registry.turn_grant_active())
+            s += "\n  turn grant: active (allowed for the rest of this turn)";
+        if ( !_config.tools_safe.empty())
+            s += "\n  config safe: " + common::join_vector(_config.tools_safe, ", ");
+        if ( !_config.tools_danger.empty())
+            s += "\n  config danger: " + common::join_vector(_config.tools_danger, ", ");
+        if ( grants.empty()) {
+            s += "\n\n  no standing grants this session";
+        } else {
+            s += "\n\n  standing grants (allow session / similar):";
+            for ( size_t i = 0; i < grants.size(); ++i )
+                s += "\n    " + std::to_string(i + 1) + ". [" + grants[i].kind + "] " +
+                     grants[i].key + "  (used " + std::to_string(grants[i].uses) + "x)";
+            s += "\n\n  /trust drop <n|all> to revoke";
+        }
+        return s;
     }
 
     if ( cmd == "/pin" ) {

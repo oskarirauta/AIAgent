@@ -51,6 +51,17 @@ public:
     void set_mode(ConfirmMode mode) { _mode = mode; }
     void set_strict(bool strict) { _strict = strict; } // ignore the safe-command list when true
 
+    // Visible session state for /trust: the standing grants (exact + similar)
+    // with a use counter, whether a turn grant is active, and the mode/strict.
+    struct Grant { std::string kind; std::string key; size_t uses = 0; }; // kind: "session"|"similar"
+    std::vector<Grant> grants() const;
+    bool turn_grant_active() const { return _turn_grant; }
+    ConfirmMode mode() const { return _mode; }
+    bool strict() const { return _strict; }
+    // Revoke one grant (exact or similar key) or every grant; returns count removed.
+    size_t revoke_grant(const std::string& key);
+    size_t revoke_all_grants();
+
     JSON schema() const;
     std::string execute(const std::string& name, const JSON& args);
     bool has(const std::string& name) const;
@@ -87,6 +98,7 @@ private:
     // Session-scoped approvals granted via "allow session" / "allow similar".
     std::set<std::string> _allow_exact;   // full command / action strings
     std::set<std::string> _allow_similar; // program names / tool names
+    std::map<std::string, size_t> _grant_uses; // key -> times it auto-approved a call
 
     // Turn-scoped grant: "allow for the rest of this turn". Reset by begin_turn()
     // at each new user turn, so autonomy never leaks past the task just reviewed.

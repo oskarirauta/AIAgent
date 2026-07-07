@@ -1021,7 +1021,7 @@ const std::vector<std::string>& slash_commands() {
         "/help", "/about", "/settings", "/provider", "/model", "/btw", "/note",
         "/tools", "/strict", "/thinking", "/effort", "/theme", "/stream",
         "/memories", "/context", "/cost", "/history", "/retry", "/undo", "/tasks",
-        "/pin", "/pins", "/unpin", "/queue",
+        "/pin", "/pins", "/unpin", "/queue", "/trust",
         "/changes", "/export", "/compact", "/clear", "/reset", "/mcp", "/advisor",
         "/workflows", "/exit", "/quit"
     };

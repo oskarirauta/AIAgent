@@ -547,8 +547,8 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
         return run();
 
     // Previously granted this session?
-    if ( _allow_exact.count(exact_key) || _allow_similar.count(similar_key))
-        return run();
+    if ( _allow_exact.count(exact_key)) { ++_grant_uses[exact_key]; return run(); }
+    if ( _allow_similar.count(similar_key)) { ++_grant_uses[similar_key]; return run(); }
 
     // Fail safe: if confirmation is required but no UI is available to ask, deny.
     if ( !_confirm_cb ) {
@@ -587,6 +587,34 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
 
 bool Registry::has(const std::string& name) const {
     return _tools.find(name) != _tools.end();
+}
+
+std::vector<Registry::Grant> Registry::grants() const {
+    std::vector<Grant> g;
+    for ( const auto& k : _allow_exact ) {
+        auto it = _grant_uses.find(k);
+        g.push_back({ "session", k, it == _grant_uses.end() ? 0 : it->second });
+    }
+    for ( const auto& k : _allow_similar ) {
+        auto it = _grant_uses.find(k);
+        g.push_back({ "similar", k, it == _grant_uses.end() ? 0 : it->second });
+    }
+    return g;
+}
+
+size_t Registry::revoke_grant(const std::string& key) {
+    size_t n = _allow_exact.erase(key) + _allow_similar.erase(key);
+    _grant_uses.erase(key);
+    return n;
+}
+
+size_t Registry::revoke_all_grants() {
+    size_t n = _allow_exact.size() + _allow_similar.size();
+    _allow_exact.clear();
+    _allow_similar.clear();
+    _grant_uses.clear();
+    _turn_grant = false;
+    return n;
 }
 
 } // namespace agent::tools
