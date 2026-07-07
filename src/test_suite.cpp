@@ -28,6 +28,7 @@
 #include "agent/tools/registry.hpp"
 #include "agent/tools/find_symbol.hpp"
 #include "agent/tools/find_references.hpp"
+#include "agent/tools/project_map.hpp"
 #include "agent/tools/web_search.hpp"
 #include "agent/tools/fetch_url.hpp"
 #include "agent/tools/mcp_tool.hpp"
@@ -523,6 +524,30 @@ static void test_block_diff() {
     check(d.find("--- a") != std::string::npos && d.find("+++ b") != std::string::npos, "diff has labelled headers");
     check(d.find("- two") != std::string::npos && d.find("+ TWO") != std::string::npos, "diff shows the changed line");
     check(d.find("- one") == std::string::npos && d.find("- three") == std::string::npos, "unchanged edges are not shown as removed");
+}
+
+static void test_project_map() {
+    std::cout << "project_map" << std::endl;
+    std::string dir = "/tmp/ai_pm_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir + "/src");
+    std::filesystem::create_directories(dir + "/node_modules/pkg");
+    { std::ofstream o(dir + "/package.json"); o << "{\"name\":\"demo\",\"scripts\":{\"build\":\"x\",\"test\":\"y\"},\"dependencies\":{\"a\":\"1\",\"b\":\"2\"}}"; }
+    { std::ofstream o(dir + "/Makefile"); o << "all: build\nbuild:\n\tcc x\nobjs/x.o: x.c\n\tcc -c x\n.PHONY: all\n"; }
+    { std::ofstream o(dir + "/src/main.cpp"); o << "int main(){}\n"; }
+    { std::ofstream o(dir + "/src/util.cpp"); o << "\n"; }
+    { std::ofstream o(dir + "/node_modules/pkg/index.js"); o << "// vendored\n"; }
+
+    agent::tools::ProjectMap pm;
+    std::string r = pm.execute(JSON::Object{ { "path", dir } });
+    check(r.find("package.json") != std::string::npos && r.find("name \"demo\"") != std::string::npos, "parses package.json name");
+    check(r.find("scripts: build, test") != std::string::npos && r.find("2 deps") != std::string::npos, "package.json scripts + deps");
+    check(r.find("Makefile targets: all, build") != std::string::npos, "Makefile targets (object/phony filtered)");
+    check(r.find("src/  (2 files)") != std::string::npos, "counts files per top-level dir");
+    check(r.find("node_modules") == std::string::npos, "ignores vendored dirs");
+    check(r.find("2 .cpp") != std::string::npos, "language histogram");
+
+    std::filesystem::remove_all(dir);
 }
 
 static void test_find_references() {
@@ -1272,6 +1297,7 @@ int main() {
     test_find_symbol();
     test_tasks_tool();
     test_block_diff();
+    test_project_map();
     test_find_references();
     test_pricing_and_cost();
     test_project_instructions();

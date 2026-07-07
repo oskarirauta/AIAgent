@@ -69,6 +69,11 @@ each list is roughly the current priority order.
   long-term memories), so a project can pin coding style, testing conventions and
   constraints without repeating them each session. Read fresh from the cwd (size-
   capped); `/about` shows which file is loaded.
+- **`project_map` tool**: a high-level project overview on demand — build/manifest
+  files parsed (package.json name/scripts/deps, Cargo/pyproject name+deps, go.mod
+  module, Makefile targets [object/phony filtered], CMake project), the top-level
+  directory layout with per-dir file counts, and a source-language histogram.
+  Skips build/vendor dirs; cheaper than exploring with many list/read calls.
 - **OpenRouter provider**: OpenAI-compatible gateway to many models
   (`vendor/model`, incl. `:free` variants). A thin `OpenAI` subclass — default
   endpoint `https://openrouter.ai/api/v1`, Bearer auth, plus OpenRouter's optional
@@ -174,10 +179,6 @@ Roughly in priority order for real coding use. Kept only what is genuinely usefu
 
 - **Config-extensible danger/safe command lists**: let a project add its own
   safe/danger rules instead of the hard-coded lists only.
-- **Project map**: parse the build/manifest files present (`Makefile`,
-  `CMakeLists.txt`, `package.json`, `Cargo.toml`, `pyproject.toml`, `go.mod`, …)
-  into a short overview of modules / entry points, fed to the model on demand.
-  Medium; reduces "which files matter?" exploration.
 - **Context pin**: keep flagged messages (key decisions, code facts) verbatim
   through `/compact` and auto-compact instead of summarising everything. Medium.
 - **`/workflows` enhancements**: parallel steps, push notifications on completion,

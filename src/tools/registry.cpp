@@ -17,6 +17,7 @@
 #include "agent/tools/grep.hpp"
 #include "agent/tools/find_symbol.hpp"
 #include "agent/tools/find_references.hpp"
+#include "agent/tools/project_map.hpp"
 
 namespace agent::tools {
 
@@ -29,6 +30,7 @@ void Registry::register_defaults() {
     add(std::make_unique<Grep>());
     add(std::make_unique<FindSymbol>());
     add(std::make_unique<FindReferences>());
+    add(std::make_unique<ProjectMap>());
 }
 
 void Registry::add(std::unique_ptr<Tool> tool) {
