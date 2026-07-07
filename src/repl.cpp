@@ -1846,6 +1846,21 @@ std::string Repl::handle_command(const std::string& line) {
     if ( cmd == "/model" ) {
         if ( args.empty())
             return "model: " + _config.model;
+        // The picker asks for the available models: fetch them live from the
+        // provider (Ollama's local models, an OpenAI/Anthropic /models listing);
+        // the active model is always first, and there's a curated fallback.
+        if ( args == "--list" ) {
+            std::vector<std::string> models;
+            models.push_back(_config.model);
+            std::vector<std::string> live = _provider ? _provider->list_models(_client)
+                                                      : std::vector<std::string>{};
+            for ( const auto& mdl : live )
+                if ( mdl != _config.model ) models.push_back(mdl);
+            std::string out;
+            for ( const auto& mdl : models )
+                out += mdl + "\n";
+            return out;
+        }
         _config.model = args;
         if ( _provider )
             _provider->set_model(args);

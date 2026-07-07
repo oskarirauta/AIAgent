@@ -288,4 +288,22 @@ Response OpenAI::stream_result() {
     return r;
 }
 
+std::vector<std::string> OpenAI::list_models(api::Client& client) {
+    std::vector<std::string> out;
+    try {
+        std::vector<std::pair<std::string, std::string>> h;
+        std::string av = auth_value();
+        if ( !av.empty()) h.push_back({ auth_header(), av });
+        for ( auto& e : extra_headers()) h.push_back(e);
+        JSON j = JSON::parse(client.get(build_endpoint("/models"), h, nullptr, false, 0, 8));
+        if ( j.contains("data") && j["data"] == JSON::TYPE::ARRAY )
+            for ( size_t i = 0; i < j["data"].size(); ++i ) {
+                JSON m = j["data"][i];
+                if ( m.contains("id") && m["id"] == JSON::TYPE::STRING )
+                    out.push_back(m["id"].to_string());
+            }
+    } catch ( ... ) {}
+    return out;
+}
+
 } // namespace agent::providers

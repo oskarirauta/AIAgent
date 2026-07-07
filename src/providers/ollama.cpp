@@ -160,4 +160,19 @@ Response Ollama::stream_result() {
     return r;
 }
 
+std::vector<std::string> Ollama::list_models(api::Client& client) {
+    std::vector<std::string> out;
+    try {
+        // Ollama lists the models installed on the local server at /api/tags.
+        JSON j = JSON::parse(client.get(build_endpoint("/api/tags"), {}, nullptr, false, 0, 8));
+        if ( j.contains("models") && j["models"] == JSON::TYPE::ARRAY )
+            for ( size_t i = 0; i < j["models"].size(); ++i ) {
+                JSON m = j["models"][i];
+                if ( m.contains("name") && m["name"] == JSON::TYPE::STRING )
+                    out.push_back(m["name"].to_string());
+            }
+    } catch ( ... ) {}
+    return out;
+}
+
 } // namespace agent::providers

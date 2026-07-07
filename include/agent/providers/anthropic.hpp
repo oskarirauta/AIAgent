@@ -11,6 +11,7 @@ public:
 
     std::string name() const override { return "anthropic"; }
     std::string endpoint() const override { return build_endpoint("/v1/messages"); }
+    std::vector<std::string> list_models(api::Client& client) override;
     std::string auth_header() const override { return "x-api-key"; }
     std::string auth_value() const override { return _config.api_key; }
     bool supports_streaming() const override { return true; }

@@ -51,6 +51,11 @@ public:
 
     virtual std::string name() const = 0;
     virtual std::string endpoint() const = 0;
+
+    // Best-effort list of models the provider offers, for the /model picker.
+    // Empty on failure or when the provider has no listing endpoint.
+    virtual std::vector<std::string> list_models(api::Client& client) { (void)client; return {}; }
+
     virtual std::string auth_header() const { return "Authorization"; }
     virtual std::string auth_value() const { return _config.api_key.empty() ? "" : "Bearer " + _config.api_key; }
     virtual void prepare_request(api::Client& client) { (void)client; }

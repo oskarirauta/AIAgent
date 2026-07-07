@@ -277,7 +277,8 @@ std::string Client::get(const std::string& url,
                         const std::vector<std::pair<std::string, std::string>>& extra_headers,
                         std::atomic<bool>* abort_flag,
                         bool ssrf_guard,
-                        size_t max_bytes) {
+                        size_t max_bytes,
+                        long timeout_s) {
     CURL* c = static_cast<CURL*>(curl);
     std::string response;
     CappedSink sink { &response, max_bytes };
@@ -309,7 +310,7 @@ std::string Client::get(const std::string& url,
     if ( ssrf_guard )
         curl_easy_setopt(c, CURLOPT_OPENSOCKETFUNCTION, guarded_opensocket);
     curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
-    curl_easy_setopt(c, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, timeout_s);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
 

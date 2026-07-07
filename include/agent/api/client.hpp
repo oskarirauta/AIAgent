@@ -30,7 +30,8 @@ public:
                     const std::vector<std::pair<std::string, std::string>>& extra_headers = {},
                     std::atomic<bool>* abort_flag = nullptr,
                     bool ssrf_guard = false,
-                    size_t max_bytes = 0);
+                    size_t max_bytes = 0,
+                    long timeout_s = 30);
 
     std::string post_form(const std::string& url, const std::string& body, std::atomic<bool>* abort_flag = nullptr);
     std::string post_form(const std::string& url,

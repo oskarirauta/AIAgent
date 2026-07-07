@@ -10,6 +10,7 @@ public:
 
     std::string name() const override { return "ollama"; }
     std::string endpoint() const override { return build_endpoint("/api/chat"); }
+    std::vector<std::string> list_models(api::Client& client) override;
     bool supports_streaming() const override { return true; }
 
     void stream_reset() override;

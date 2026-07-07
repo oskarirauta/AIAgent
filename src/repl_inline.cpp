@@ -2115,21 +2115,31 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
     // directly. Curated rather than fetched: no per-provider /models endpoint
     // derivation, and typing still reaches anything not listed.
     if ( trimmed == "/model" ) {
+        // Fetch the provider's available models (Ollama's local models, an
+        // OpenAI/Anthropic /models listing) — the active model first, deduped.
+        std::string listed = _command_cb ? _command_cb("/model --list") : "";
+        std::vector<std::string> models;
+        std::set<std::string> seen;
+        std::istringstream is(listed);
+        std::string ln;
+        while ( std::getline(is, ln)) {
+            ln = common::trim_ws(ln);
+            if ( !ln.empty() && seen.insert(ln).second ) models.push_back(ln);
+        }
+        // Fall back to a curated shortlist when the provider offers no listing.
         static const std::map<std::string, std::vector<std::string>> curated = {
-            { "openai",     { "gpt-4o", "gpt-4o-mini", "o3-mini", "o1" }},
             { "claude",     { "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-fable-5" }},
             { "anthropic",  { "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-fable-5" }},
-            { "moonshot",   { "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k" }},
             { "openrouter", { "openrouter/auto", "openrouter/free" }},
         };
-        std::vector<std::string> models;
-        models.push_back(_config.model); // the active model is always offered
-        auto it = curated.find(_config.provider);
-        if ( it != curated.end())
-            for ( const auto& mdl : it->second )
-                if ( mdl != _config.model ) models.push_back(mdl);
+        if ( models.size() <= 1 ) {
+            auto it = curated.find(_config.provider);
+            if ( it != curated.end())
+                for ( const auto& mdl : it->second )
+                    if ( seen.insert(mdl).second ) models.push_back(mdl);
+        }
         ListMenu m;
-        m.title = "model · " + _config.provider;
+        m.title = "model · " + _config.provider + ( models.size() > 1 ? "" : "  (type /model <name>)" );
         m.rows = models;
         m.keys = models;
         m.select_cmd = "/model ";
