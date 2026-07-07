@@ -168,33 +168,42 @@ std::vector<Message> Conversation::within_token_budget(size_t max_tokens) const 
     if ( _trim_start < first ) _trim_start = first;
     if ( _trim_start > _messages.size()) _trim_start = _messages.size();
 
-    // Hysteresis: only move the cut when it is actually necessary.
+    // Hysteresis: only move the cut when it is actually necessary. The pinned
+    // region is kept within a [40%, 100%]-of-budget band so the cut (and thus
+    // the request prefix) stays stable across many turns for prompt-cache hits.
     //  - If the WHOLE history fits, un-pin (include everything).
-    //  - If the pinned region has grown past the budget, re-cut to ~70% of the
-    //    budget and re-pin — leaving headroom so the cut (and thus the request
-    //    prefix) stays stable for many turns, giving prompt-cache hits.
-    //  - Otherwise reuse the pinned cut unchanged.
+    //  - Otherwise re-cut to ~70% of budget when the pinned region left the band:
+    //    it grew past budget (new turns), OR shrank well under target because
+    //    undo/compact removed messages under the pin (a stale, too-high pin would
+    //    otherwise drop even the most recent turns, degrading to system-only).
     if ( region_size(first) <= budget ) {
         _trim_start = first;
-    } else if ( region_size(_trim_start) > budget ) {
-        size_t target = budget * 7 / 10;
-        size_t used = 0;
-        size_t newstart = _messages.size();
-        for ( size_t i = _messages.size(); i-- > first; ) {
-            size_t s = est(_messages[i]);
-            if ( used + s > target && newstart < _messages.size())
-                break; // keep at least the most recent message
-            used += s;
-            newstart = i;
+    } else {
+        size_t pinned = region_size(_trim_start);
+        if ( pinned > budget || pinned < budget * 4 / 10 ) {
+            size_t target = budget * 7 / 10;
+            size_t used = 0;
+            size_t newstart = _messages.size();
+            for ( size_t i = _messages.size(); i-- > first; ) {
+                size_t s = est(_messages[i]);
+                if ( used + s > target && newstart < _messages.size())
+                    break; // keep at least the most recent message
+                used += s;
+                newstart = i;
+            }
+            _trim_start = newstart;
         }
-        _trim_start = newstart;
     }
 
-    std::vector<Message> tail(_messages.begin() + _trim_start, _messages.end());
+    // Snap the cut back to a USER turn: the first non-system message must be a
+    // user message (Anthropic rejects a leading assistant/tool), and a tool_result
+    // must never be separated from the assistant tool_call that produced it. This
+    // subsumes the old "strip leading orphaned tool results" step.
+    while ( _trim_start > first && _trim_start < _messages.size() &&
+            _messages[_trim_start].role != Role::USER )
+        --_trim_start;
 
-    // A tool result whose assistant tool_call was trimmed away would be orphaned.
-    while ( !tail.empty() && tail.front().role == Role::TOOL )
-        tail.erase(tail.begin());
+    std::vector<Message> tail(_messages.begin() + _trim_start, _messages.end());
 
     std::vector<Message> out = std::move(head);
     out.insert(out.end(), tail.begin(), tail.end());

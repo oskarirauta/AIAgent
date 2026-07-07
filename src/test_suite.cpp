@@ -1495,6 +1495,31 @@ static void test_context_budget() {
     check(tiny.size() >= 2 && tiny.front().role == agent::Role::SYSTEM, "tiny budget keeps system + latest");
 }
 
+static void test_trim_role_invariants() {
+    std::cout << "trim keeps a valid user-first, non-degrading suffix" << std::endl;
+    using agent::Role;
+    agent::Conversation c;
+    c.set_system(std::string(400, 's'));
+    // Alternating user/assistant history that overflows the budget.
+    for ( int i = 0; i < 30; ++i ) {
+        c.add_user(std::string(400, 'u'));
+        c.add_assistant(std::string(400, 'a'));
+    }
+    auto t = c.within_token_budget(2000);
+    check(t.front().role == Role::SYSTEM, "system first");
+    check(t.size() >= 2 && t[1].role == Role::USER, "first non-system message is a USER turn (Anthropic-valid)");
+    check(t.size() < c.messages().size(), "history was actually trimmed");
+
+    // Shrink under the pin (undo removes recent turns) must not degrade the next
+    // request to system-only — the newest message must survive.
+    for ( int i = 0; i < 25; ++i )
+        c.undo_last();
+    auto s = c.within_token_budget(2000);
+    check(s.size() >= 2, "after a big shrink the request is not just the system message");
+    check(s.back().role == Role::USER || s.back().role == Role::ASSISTANT, "newest message survives the shrink");
+    check(s[1].role == Role::USER, "first non-system message is still a USER turn after shrink");
+}
+
 static void test_tool_supersession() {
     std::cout << "tool-result supersession" << std::endl;
     using agent::Message; using agent::Role; using agent::ToolCall;
@@ -2221,6 +2246,7 @@ int main() {
     test_conversation_save_load();
     test_conversation_undo();
     test_context_budget();
+    test_trim_role_invariants();
     test_tool_supersession();
     test_trim_hysteresis();
     test_settings_persistence();
