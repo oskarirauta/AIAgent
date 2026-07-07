@@ -238,6 +238,14 @@ std::string EditFile::execute(const JSON& args) {
     if ( !std::filesystem::is_regular_file(path, ec))
         return "error: file does not exist: " + path + " (use write_file to create it)";
 
+    // Lost-update guard: if the file changed on disk since the model read it, the
+    // old_string may match a stale region — refuse and ask for a fresh read.
+    if ( _tracker ) {
+        std::string stale = _tracker->stale_reason(path);
+        if ( !stale.empty())
+            return "error: " + stale;
+    }
+
     std::string content;
     {
         std::ifstream ifd(path, std::ios::in | std::ios::binary);
@@ -294,6 +302,9 @@ std::string EditFile::execute(const JSON& args) {
     ofd.close();
     if ( !ofd.good())
         return "error: failed to write file: " + path;
+
+    if ( _tracker )
+        _tracker->note(path); // stamp the edited version for the next lost-update check
 
     std::string summary = edit_count > 1
         ? "ok: edited " + path + " (" + std::to_string(edit_count) + " edits, " +

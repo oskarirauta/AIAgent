@@ -286,12 +286,15 @@ Working toward a long-lived "actually finished" release; going through each:
   partial output in context instead of undoing the exchange.
 - ✅ **`/raw`** — inspect the exact last request/response (JSON).
 - ✅ **`/limits`** — the provider's rate-limit / quota headers from the last call.
-- ☐ **Background commands** (`run_in_background` + `/jobs`) — run a dev server /
-  `tail -f` without blocking the turn. **Next up.**
-- ☐ **Secret redaction** — mask credentials (API keys, tokens) in tool output
-  before it's sent to the provider.
+- ✅ **Background commands** (`run_command background:true` + `/jobs` + check_job)
+  — run a dev server / `tail -f` without blocking the turn.
+- ✅ **Secret redaction** — credentials in tool output are masked before being
+  sent to the provider (`redact_secrets`, on by default).
+- ✅ **Compound-command safety** (raised mid-review) — the danger classifier and
+  the allow-similar key now inspect every stage, so `cd /tmp && rm -rf /` can't
+  slip through as "cd".
 - ☐ **Stale-read guard** for edits — refuse a silent clobber if a file changed
-  on disk since the model last read it.
+  on disk since the model last read it. **Next up.**
 - ☐ **Cross-provider failover** — on repeated 429/5xx, fall back to another
   configured provider.
 - ☐ **`--output-format json`** — a scriptable headless mode.

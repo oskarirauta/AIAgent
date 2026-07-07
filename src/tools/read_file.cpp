@@ -151,6 +151,8 @@ std::string ReadFile::execute(const JSON& args) {
             std::string section = read_file_section(p, 1, static_cast<long>(DEFAULT_LINES), remaining);
             if ( !out.empty()) out += "\n\n";
             out += "===== " + p + " =====\n" + section;
+            if ( _tracker && section.rfind("error:", 0) != 0 )
+                _tracker->note(p);
             ++shown;
         }
         if ( shown == 0 )
@@ -165,7 +167,10 @@ std::string ReadFile::execute(const JSON& args) {
     long offset = args.contains("offset") ? json_long(args["offset"], 1) : 1;
     long limit  = args.contains("limit")  ? json_long(args["limit"], DEFAULT_LINES)
                                           : static_cast<long>(DEFAULT_LINES);
-    return read_file_section(path, offset, limit, MAX_TOTAL_BYTES);
+    std::string out = read_file_section(path, offset, limit, MAX_TOTAL_BYTES);
+    if ( _tracker && out.rfind("error:", 0) != 0 )
+        _tracker->note(path);
+    return out;
 }
 
 } // namespace agent::tools

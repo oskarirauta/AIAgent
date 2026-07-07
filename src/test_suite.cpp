@@ -2245,6 +2245,43 @@ static void test_redact_secrets() {
     check(n == 0, "a plain command is untouched");
 }
 
+static void test_stale_read_guard() {
+    std::cout << "stale-read guard (no silent clobber of a changed file)" << std::endl;
+    using namespace agent::tools;
+    Registry reg;
+    reg.register_defaults();
+    reg.set_mode(ConfirmMode::insecure); // isolate the guard from confirmation
+    std::string path = "/tmp/ai_stale_guard.txt";
+    { std::ofstream o(path); o << "original contents\n"; }
+
+    // A blind write to a never-read file is allowed (creating/replacing knowingly).
+    std::string neww = "/tmp/ai_stale_new.txt";
+    std::filesystem::remove(neww);
+    check(reg.execute("write_file", JSON::Object{ { "path", neww }, { "content", "x" } }).rfind("ok:", 0) == 0,
+          "write to a never-read file is allowed");
+
+    // Read the file (stamps it), then change it on disk behind the model's back.
+    reg.execute("read_file", JSON::Object{ { "path", path } });
+    { std::ofstream o(path); o << "changed on disk by someone else, more bytes\n"; }
+
+    std::string r = reg.execute("write_file", JSON::Object{ { "path", path }, { "content", "clobber" } });
+    check(r.find("changed on disk") != std::string::npos, "write refused after external change");
+    std::string e = reg.execute("edit_file",
+        JSON::Object{ { "path", path }, { "old_string", "changed" }, { "new_string", "z" } });
+    check(e.find("changed on disk") != std::string::npos, "edit refused after external change");
+
+    // The file is untouched by the refused write.
+    { std::ifstream i(path); std::string s((std::istreambuf_iterator<char>(i)), {});
+      check(s.find("changed on disk by someone else") != std::string::npos, "refused write left the file intact"); }
+
+    // Re-reading re-stamps it; the write then goes through.
+    reg.execute("read_file", JSON::Object{ { "path", path } });
+    check(reg.execute("write_file", JSON::Object{ { "path", path }, { "content", "ok now" } }).rfind("ok:", 0) == 0,
+          "write succeeds after a fresh read");
+    std::filesystem::remove(path);
+    std::filesystem::remove(neww);
+}
+
 static void test_list_directory() {
     std::cout << "list_directory (sorted, dirs first, error_code)" << std::endl;
     std::string d = "/tmp/ai_ld_test";
@@ -2429,6 +2466,7 @@ int main() {
     test_turn_scoped_grant();
     test_danger_list();
     test_redact_secrets();
+    test_stale_read_guard();
     test_list_directory();
     test_config_booleans();
     test_extra_command_lists();

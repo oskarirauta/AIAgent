@@ -26,9 +26,12 @@
 namespace agent::tools {
 
 void Registry::register_defaults() {
-    add(std::make_unique<ReadFile>());
-    add(std::make_unique<WriteFile>());
-    add(std::make_unique<EditFile>());
+    // Shared read/write stamp registry so a write can tell it would clobber a file
+    // that changed on disk since the model read it.
+    auto tracker = std::make_shared<FileTracker>();
+    add(std::make_unique<ReadFile>(tracker));
+    add(std::make_unique<WriteFile>(tracker));
+    add(std::make_unique<EditFile>(tracker));
     add(std::make_unique<RunCommand>());
     add(std::make_unique<ListDirectory>());
     add(std::make_unique<Grep>());

@@ -1,6 +1,9 @@
 #pragma once
 
+#include <memory>
+#include <utility>
 #include "agent/tools/tool.hpp"
+#include "agent/tools/file_tracker.hpp"
 
 namespace agent::tools {
 
@@ -8,6 +11,7 @@ namespace agent::tools {
 // rewriting the whole thing (cheaper, safer, and it plays with /changes).
 class EditFile : public Tool {
 public:
+    explicit EditFile(std::shared_ptr<FileTracker> tracker = nullptr) : _tracker(std::move(tracker)) {}
     std::string name() const override { return "edit_file"; }
     bool mutates() const override { return true; }
     std::string description() const override {
@@ -23,6 +27,9 @@ public:
     JSON parameters() const override;
     bool requires_confirmation() const override { return true; }
     std::string execute(const JSON& args) override;
+
+private:
+    std::shared_ptr<FileTracker> _tracker;
 };
 
 } // namespace agent::tools
