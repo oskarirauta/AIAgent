@@ -9,6 +9,11 @@ namespace agent {
 // Useful for models and terminals that have trouble with non-ASCII characters.
 std::string normalize_text(std::string s);
 
+// Like normalize_text but records the source-byte index each output byte came
+// from (index_map has out.size()+1 entries, last = s.size()). Lets a caller match
+// against the normalized view yet edit the original bytes. See edit_file.
+std::string normalize_text_mapped(const std::string& s, std::vector<size_t>& index_map);
+
 // A compact line-based diff: trims the common leading/trailing lines and shows
 // the changed middle as -old / +new with a little surrounding context. Capped.
 std::string block_diff(const std::string& old_text, const std::string& new_text,

@@ -1,6 +1,7 @@
 #include "agent/tools/write_file.hpp"
 
 #include <fstream>
+#include <filesystem>
 #include "common.hpp"
 
 namespace agent::tools {
@@ -34,15 +35,31 @@ std::string WriteFile::execute(const JSON& args) {
             return "error: " + stale;
     }
 
-    std::ofstream ofd(path, std::ios::out | std::ios::trunc);
-    if ( !ofd.is_open())
-        return std::string("error: cannot open file for writing: ") + path;
-
-    ofd << content;
-    ofd.close();
-
-    if ( !ofd.good())
-        return std::string("error: failed to write file: ") + path;
+    // Atomic overwrite: write to a temp file in the same directory, then rename it
+    // over the target. A partial write (disk full, crash, killed) then leaves the
+    // original intact instead of a truncated/empty file.
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path target(path);
+    fs::path tmp = target;
+    tmp += ".aiagent-tmp";
+    {
+        std::ofstream ofd(tmp, std::ios::out | std::ios::trunc | std::ios::binary);
+        if ( !ofd.is_open())
+            return std::string("error: cannot open file for writing: ") + path;
+        ofd << content;
+        ofd.close();
+        if ( !ofd.good()) {
+            fs::remove(tmp, ec);
+            return std::string("error: failed to write file: ") + path;
+        }
+    }
+    fs::rename(tmp, target, ec);
+    if ( ec ) {
+        std::error_code ig;
+        fs::remove(tmp, ig);
+        return std::string("error: failed to commit file: ") + path + " (" + ec.message() + ")";
+    }
 
     if ( _tracker )
         _tracker->note(path); // stamp the new version so the next write compares to it

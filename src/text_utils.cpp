@@ -218,11 +218,12 @@ std::string block_diff(const std::string& old_text, const std::string& new_text,
 }
 
 
-std::string normalize_text(std::string s) {
-    struct Replacement {
-        const char* utf8;
-        const char* ascii;
-    };
+namespace {
+struct Replacement {
+    const char* utf8;
+    const char* ascii;
+};
+const Replacement* normalize_reps(size_t& count) {
     static const Replacement reps[] = {
         { "\xe2\x80\x94", "--" },   // em dash
         { "\xe2\x80\x93", "-" },    // en dash
@@ -266,7 +267,16 @@ std::string normalize_text(std::string s) {
         { "\xc2\xad", "" },         // soft hyphen
         { "\xef\xbb\xbf", "" },      // zero width no-break space (BOM)
     };
-    for ( const auto& r : reps ) {
+    count = sizeof(reps) / sizeof(reps[0]);
+    return reps;
+}
+} // namespace
+
+std::string normalize_text(std::string s) {
+    size_t count = 0;
+    const Replacement* reps = normalize_reps(count);
+    for ( size_t ri = 0; ri < count; ++ri ) {
+        const Replacement& r = reps[ri];
         size_t pos = 0;
         while ((pos = s.find(r.utf8, pos)) != std::string::npos) {
             s.replace(pos, std::strlen(r.utf8), r.ascii);
@@ -274,6 +284,32 @@ std::string normalize_text(std::string s) {
         }
     }
     return s;
+}
+
+// Single left-to-right pass equivalent to normalize_text (the replacements emit
+// only ASCII, so pass order is irrelevant), additionally recording for each output
+// byte the source index it came from. `index_map` ends with a sentinel = s.size(),
+// so a match at output [a,b) maps to raw [index_map[a], index_map[b]).
+std::string normalize_text_mapped(const std::string& s, std::vector<size_t>& index_map) {
+    size_t count = 0;
+    const Replacement* reps = normalize_reps(count);
+    std::string out;
+    index_map.clear();
+    out.reserve(s.size());
+    index_map.reserve(s.size() + 1);
+    for ( size_t i = 0; i < s.size(); ) {
+        const Replacement* hit = nullptr;
+        for ( size_t ri = 0; ri < count; ++ri )
+            if ( s.compare(i, std::strlen(reps[ri].utf8), reps[ri].utf8) == 0 ) { hit = &reps[ri]; break; }
+        if ( hit ) {
+            for ( size_t k = 0; hit->ascii[k]; ++k ) { out += hit->ascii[k]; index_map.push_back(i); }
+            i += std::strlen(hit->utf8);
+        } else {
+            out += s[i]; index_map.push_back(i); ++i;
+        }
+    }
+    index_map.push_back(s.size());
+    return out;
 }
 
 } // namespace agent

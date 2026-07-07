@@ -6,6 +6,7 @@
 #include <cctype>
 #include <vector>
 #include "common.hpp"
+#include "agent/text_utils.hpp"
 
 namespace agent::tools {
 
@@ -153,6 +154,33 @@ EditResult apply_one(const std::string& content, const std::string& old_s,
     size_t count = 0, scan = 0;
     while (( scan = content.find(old_s, scan)) != std::string::npos ) { ++count; scan += old_s.size(); }
     if ( count == 0 ) {
+        // read_file shows the model a NORMALISED view (smart quotes/em-dashes/BOM ->
+        // ASCII), so an old_string built from it won't match the raw bytes. Match
+        // against the normalised content and edit the corresponding RAW span.
+        std::vector<size_t> nmap;
+        std::string norm = agent::normalize_text_mapped(content, nmap);
+        std::string norm_old = agent::normalize_text(old_s);
+        std::vector<size_t> hits;
+        for ( size_t ns = 0; !norm_old.empty() && ( ns = norm.find(norm_old, ns)) != std::string::npos; ns += norm_old.size())
+            hits.push_back(ns);
+        if ( hits.size() > 1 && !replace_all )
+            return { false, "old_string appears " + std::to_string(hits.size()) +
+                            " times; add surrounding context to make it unique, or set replace_all=true", {}, 0 };
+        if ( !hits.empty()) {
+            std::string result;
+            size_t rawpos = 0, first_hit = std::string::npos, reps = 0;
+            for ( size_t h : hits ) {
+                size_t rs = nmap[h], re = nmap[h + norm_old.size()];
+                result += content.substr(rawpos, rs - rawpos);
+                if ( first_hit == std::string::npos ) first_hit = result.size();
+                result += new_s;
+                rawpos = re;
+                ++reps;
+                if ( !replace_all ) break;
+            }
+            result += content.substr(rawpos);
+            return { true, "", result, reps, first_hit == std::string::npos ? 0 : first_hit, new_s.size() };
+        }
         std::string err = "old_string not found (it must match exactly, including whitespace)";
         std::string hint = near_miss_hint(content, old_s);
         if ( !hint.empty())
@@ -295,13 +323,28 @@ std::string EditFile::execute(const JSON& args) {
         verify = region_snippet(result, r.hit, r.hit_len);
     }
 
-    std::ofstream ofd(path, std::ios::out | std::ios::trunc | std::ios::binary);
-    if ( !ofd.is_open())
-        return "error: cannot open file for writing: " + path;
-    ofd << result;
-    ofd.close();
-    if ( !ofd.good())
-        return "error: failed to write file: " + path;
+    // Atomic commit: temp file in the same directory, then rename over the target,
+    // so the "atomic — file left unchanged on failure" guarantee holds on disk too.
+    std::error_code wec;
+    std::filesystem::path tmp(path);
+    tmp += ".aiagent-tmp";
+    {
+        std::ofstream ofd(tmp, std::ios::out | std::ios::trunc | std::ios::binary);
+        if ( !ofd.is_open())
+            return "error: cannot open file for writing: " + path;
+        ofd << result;
+        ofd.close();
+        if ( !ofd.good()) {
+            std::filesystem::remove(tmp, wec);
+            return "error: failed to write file: " + path;
+        }
+    }
+    std::filesystem::rename(tmp, std::filesystem::path(path), wec);
+    if ( wec ) {
+        std::error_code ig;
+        std::filesystem::remove(tmp, ig);
+        return "error: failed to commit file: " + path + " (" + wec.message() + ")";
+    }
 
     if ( _tracker )
         _tracker->note(path); // stamp the edited version for the next lost-update check

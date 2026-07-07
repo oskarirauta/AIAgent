@@ -1893,6 +1893,15 @@ static void test_edit_file() {
     std::string nf = ef.execute(JSON::Object{{ "path", path }, { "old_string", "zzz" }, { "new_string", "q" }});
     check(nf.find("not found") != std::string::npos, "missing old_string reported");
 
+    // read_file normalises UTF-8 punctuation, so old_string is built in ASCII; the
+    // edit must still match the raw bytes (via the normalised-mapping fallback) and
+    // must NOT rewrite the untouched bytes (e.g. a BOM / smart quote elsewhere).
+    write("\xef\xbb\xbf" "title \xe2\x80\x94 x\nkeep \xe2\x80\x9cq\xe2\x80\x9d\n"); // BOM + em dash + smart quotes
+    std::string uni = ef.execute(JSON::Object{{ "path", path }, { "old_string", "title -- x" }, { "new_string", "title -- y" }});
+    check(uni.rfind("ok:", 0) == 0, "edit matches normalised old_string against raw UTF-8");
+    check(read() == "\xef\xbb\xbf" "title -- y\nkeep \xe2\x80\x9cq\xe2\x80\x9d\n",
+          "raw BOM and untouched smart quotes preserved; only the target line changed");
+
     // Identical old/new.
     std::string id = ef.execute(JSON::Object{{ "path", path }, { "old_string", "y" }, { "new_string", "y" }, { "replace_all", true }});
     check(id.find("identical") != std::string::npos, "identical old/new refused");
