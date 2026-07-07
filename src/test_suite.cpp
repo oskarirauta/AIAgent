@@ -1825,7 +1825,14 @@ static void test_run_command_options() {
         { "command", "echo $AI_TEST_VAR" },
         { "env", JSON::Object{ { "AI_TEST_VAR", "hello123" } } } });
     check(ev.find("hello123") != std::string::npos, "env var is visible to the command");
-    check(std::getenv("AI_TEST_VAR") == nullptr, "env var is restored (unset) after the command");
+    check(std::getenv("AI_TEST_VAR") == nullptr, "env var never touches the global environment");
+
+    // A value with shell metacharacters is passed literally (quoted, not injected).
+    std::string evq = rc.execute(JSON::Object{
+        { "command", "printf '%s' \"$AI_TEST_Q\"" },
+        { "env", JSON::Object{ { "AI_TEST_Q", "a b; echo PWNED" } } } });
+    check(evq.find("a b; echo PWNED") != std::string::npos && evq.find("\nPWNED") == std::string::npos,
+          "env value with metacharacters is quoted, not executed");
 
     std::string to = rc.execute(JSON::Object{ { "command", "sleep 5" }, { "timeout", 1 } });
     check(to.find("timed out") != std::string::npos, "timeout kills a long-running command");

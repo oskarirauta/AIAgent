@@ -100,14 +100,25 @@ std::string RunCommand::execute(const JSON& args) {
             shell_cmd = "cd " + shell_quote(cwd) + " && ( " + cmd + " )";
     }
 
-    // Optional per-call environment: set now, restored when execute() returns
-    // (env_scope from env_cpp). The child inherits the parent's environment.
-    env_scope scope;
+    // Optional per-call environment. Inject `export NAME=value` into the child
+    // shell rather than mutating the global process environment with setenv:
+    // setenv is not thread-safe, and run_command executes on the worker thread
+    // while background workflow threads may be forking/reading the environment.
     if ( args.contains("env") && args["env"] == JSON::TYPE::OBJECT ) {
-        args["env"].for_each([&scope](JSON::fe_iterator& it, const JSON& v) {
-            if ( it.is_object())
-                scope.set(it.name(), v.to_string());
+        auto valid_name = [](const std::string& n) {
+            if ( n.empty() || std::isdigit(static_cast<unsigned char>(n[0]))) return false;
+            for ( char ch : n )
+                if ( !( std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' ))
+                    return false;
+            return true;
+        };
+        std::string exports;
+        args["env"].for_each([&](JSON::fe_iterator& it, const JSON& v) {
+            if ( it.is_object() && valid_name(it.name()))
+                exports += "export " + it.name() + "=" + shell_quote(v.to_string()) + "; ";
         });
+        if ( !exports.empty())
+            shell_cmd = exports + shell_cmd;
     }
 
     try {
