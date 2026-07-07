@@ -38,9 +38,15 @@ static bool command_runs_immediately(const std::string& trimmed) {
     size_t sp = cmd.find_first_of(" \t");
     if ( sp != std::string::npos ) cmd = cmd.substr(0, sp);
     static const std::set<std::string> immediate = {
+        // read-only displays / menus
         "/about", "/info", "/help", "/theme", "/settings", "/workflows",
         "/trust", "/history", "/memories", "/tasks", "/skills", "/pins",
-        "/context", "/cost", "/changes", "/mcp"
+        "/context", "/cost", "/changes", "/mcp",
+        // settings that only affect the NEXT request — running them mid-turn just
+        // updates local state (last value wins: /effort medium then /effort max
+        // leaves only max, a natural dedup), applied before the next prompt. They
+        // don't change the running turn's tool gating or rebuild the conversation.
+        "/effort", "/thinking", "/stream", "/model"
     };
     return immediate.count(cmd) > 0;
 }
