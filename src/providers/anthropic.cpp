@@ -173,9 +173,10 @@ JSON Anthropic::build_request(const Conversation& conv, const JSON& tools_schema
         }
     }
 
+    long max_out = _config.max_tokens > 0 ? static_cast<long>(_config.max_tokens) : 8192;
     JSON req = JSON::Object{
         { "model", _config.model },
-        { "max_tokens", 4096 },
+        { "max_tokens", static_cast<long long>(max_out) },
         { "messages", messages }
     };
 
@@ -188,7 +189,7 @@ JSON Anthropic::build_request(const Conversation& conv, const JSON& tools_schema
             { "type", "enabled" },
             { "budget_tokens", static_cast<long long>(budget) }
         };
-        req["max_tokens"] = static_cast<long long>(budget + 8192);
+        req["max_tokens"] = static_cast<long long>(budget + max_out);
     }
 
     if ( !system.empty())
@@ -269,6 +270,9 @@ Response Anthropic::parse_response(const JSON& response) {
         }
     }
 
+    if ( response.contains("stop_reason") && response["stop_reason"].to_string() == "max_tokens" )
+        r.truncated = true;
+
     if ( response.contains("usage") && response["usage"] == JSON::TYPE::OBJECT ) {
         JSON u = response["usage"];
         if ( u.contains("input_tokens")) r.input_tokens = json_long(u["input_tokens"]);
@@ -297,6 +301,7 @@ void Anthropic::stream_reset() {
     _s_blocks.clear();
     _s_input_tokens = 0;
     _s_output_tokens = 0;
+    _s_truncated = false;
 }
 
 StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
@@ -356,9 +361,14 @@ StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffe
                 } else if ( dt == "input_json_delta" && d.contains("partial_json")) {
                     _s_blocks[idx].json += d["partial_json"].to_string();
                 }
-            } else if ( type == "message_delta" && j.contains("usage")) {
-                JSON u = j["usage"];
-                if ( u.contains("output_tokens")) _s_output_tokens = json_long(u["output_tokens"]);
+            } else if ( type == "message_delta" ) {
+                if ( j.contains("usage")) {
+                    JSON u = j["usage"];
+                    if ( u.contains("output_tokens")) _s_output_tokens = json_long(u["output_tokens"]);
+                }
+                if ( j.contains("delta") && j["delta"].contains("stop_reason") &&
+                     j["delta"]["stop_reason"].to_string() == "max_tokens" )
+                    _s_truncated = true;
             }
         } catch ( const std::exception& e ) {
             // ignore malformed chunks
@@ -373,6 +383,7 @@ Response Anthropic::stream_result() {
     r.thinking = _s_reasoning;
     r.input_tokens = _s_input_tokens;
     r.output_tokens = _s_output_tokens;
+    r.truncated = _s_truncated;
     // Reassemble thinking blocks in index order for verbatim replay.
     for ( const auto& [idx, blk] : _s_blocks ) {
         if ( blk.type == "thinking" && !blk.signature.empty())

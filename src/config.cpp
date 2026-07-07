@@ -235,6 +235,7 @@ void Config::load(const std::string& path) {
         else if ( key == "workflow_autoresume" ) workflow_autoresume = parse_bool(value);
         else if ( key == "tools_safe" ) tools_safe = parse_list(value);
         else if ( key == "tools_danger" ) tools_danger = parse_list(value);
+        else if ( key == "max_tokens" ) max_tokens = parse_size(value, max_tokens, key);
         else if ( key == "advisor" ) advisor = parse_bool(value);
         else if ( key == "advisor_model" ) advisor_model = value;
         else if ( key == "budget_tokens" ) budget_tokens = parse_size(value, budget_tokens, key);

@@ -187,6 +187,49 @@ static void test_anthropic_request() {
     check(req["messages"][0]["role"].to_string() == "user", "user role");
 }
 
+static void test_max_tokens_and_truncation() {
+    std::cout << "max_tokens config + truncation guard" << std::endl;
+    {
+        agent::Config cfg; cfg.provider = "anthropic"; cfg.model = "claude-opus-4-8";
+        agent::providers::Anthropic p(cfg);
+        agent::Conversation c; c.set_system("s"); c.add_user("hi");
+        JSON req = p.build_request(c, JSON::Array{});
+        check(static_cast<long long>(req["max_tokens"]) == 8192, "default max_tokens is 8192");
+        cfg.max_tokens = 2000;
+        agent::providers::Anthropic p2(cfg);
+        JSON req2 = p2.build_request(c, JSON::Array{});
+        check(static_cast<long long>(req2["max_tokens"]) == 2000, "config max_tokens applied");
+    }
+    {
+        agent::Config cfg; cfg.provider = "anthropic"; cfg.model = "claude-opus-4-8";
+        agent::providers::Anthropic p(cfg);
+        p.stream_reset();
+        std::string buf; bool done = false;
+        auto feed = [&](const std::string& d) { p.parse_stream("data: " + d + "\n\n", buf, done); };
+        feed("{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}");
+        feed("{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":9}}");
+        check(p.stream_result().truncated, "anthropic stop_reason max_tokens flags truncated");
+    }
+    {
+        agent::Config cfg; cfg.provider = "anthropic";
+        agent::providers::Anthropic p(cfg);
+        JSON resp = JSON::Object{
+            { "content", JSON::Array{ JSON::Object{ { "type", "text" }, { "text", "hi" } } } },
+            { "stop_reason", "end_turn" } };
+        check(!p.parse_response(resp).truncated, "end_turn is not truncated");
+        resp["stop_reason"] = "max_tokens";
+        check(p.parse_response(resp).truncated, "max_tokens stop_reason is truncated");
+    }
+    {
+        agent::Config cfg; cfg.provider = "openai";
+        agent::providers::OpenAI p(cfg);
+        p.stream_reset();
+        std::string buf; bool done = false;
+        p.parse_stream("data: {\"choices\":[{\"delta\":{\"content\":\"x\"},\"finish_reason\":\"length\"}]}\n\n", buf, done);
+        check(p.stream_result().truncated, "openai finish_reason length flags truncated");
+    }
+}
+
 static void test_thinking_block_replay() {
     std::cout << "anthropic thinking blocks (capture + replay)" << std::endl;
     agent::Config cfg; cfg.provider = "anthropic"; cfg.model = "claude-opus-4-8";
@@ -1759,6 +1802,7 @@ int main() {
     test_openrouter_provider();
     test_ollama_request();
     test_anthropic_request();
+    test_max_tokens_and_truncation();
     test_thinking_block_replay();
     test_prompt_caching();
     test_anthropic_role_merge();

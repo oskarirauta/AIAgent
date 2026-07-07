@@ -200,25 +200,10 @@ each list is roughly the current priority order.
 Roughly in priority order for real coding use. Kept only what is genuinely useful
 *and* buildable well; the rest is dropped below.
 
-Batch 1 — the edit-build-test loop:
-- **`@path` file mentions**: `@src/foo.cpp` in a prompt expands the file inline
-  (read_file's caps), only when the token starts with `@` and the path exists.
-- **`edit_file` near-miss diagnosis**: on a failed match, return the closest
-  on-disk region (line span + snippet) instead of a bare "not found".
-- **`run_command` head+tail truncation**: keep the END of over-long output —
-  that's where make errors and test summaries live.
-- **Post-edit verification snippet**: edit_file/write_file return the changed
-  region with context lines, killing the verification re-read.
-- **`!command` passthrough**: run a shell command directly (no model turn); the
-  output echoes locally AND is recorded so the model sees it next turn.
-
-Batch 2 — trust & flow:
-- **MCP tool annotations → confirm policy**: readOnlyHint runs free, others
-  confirm, destructiveHint always warns (today MCP tools bypass confirms).
-- **"Allow for the rest of this turn"** confirm option (turn-scoped autonomy).
-- **Deny with a note**: a declined tool returns the user's one-line reason so
-  the model course-corrects mid-turn.
-- **`/trust`**: list + revoke session grants (allow-session/similar, counters).
+Batches 1 (edit-build-test loop: @path mentions, edit_file near-miss + verify
+snippet, run_command head+tail, !command passthrough) and 2 (trust & flow: MCP
+annotation gating, allow-for-this-turn, /trust, deny-with-note) are **done** —
+see the Done section above.
 
 Batch 3 — context & provider economy:
 - **max_tokens 8192 default + configurable; stop_reason/finish_reason guard**:

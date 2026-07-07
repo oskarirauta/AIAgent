@@ -81,6 +81,9 @@ Response OpenAI::parse_response(const JSON& response) {
 
     JSON choices = response["choices"];
     if ( choices == JSON::TYPE::ARRAY && choices.size() > 0 ) {
+        if ( choices[0].contains("finish_reason") &&
+             choices[0]["finish_reason"].to_string() == "length" )
+            r.truncated = true;
         JSON msg = choices[0]["message"];
         if ( msg.contains("content") && msg["content"] != nullptr )
             r.message = msg["content"].to_string();
@@ -143,6 +146,7 @@ void OpenAI::stream_reset() {
     _s_tools.clear();
     _s_input_tokens = 0;
     _s_output_tokens = 0;
+    _s_truncated = false;
 }
 
 StreamChunk OpenAI::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
@@ -181,6 +185,9 @@ StreamChunk OpenAI::parse_stream(const std::string& chunk, std::string& buffer, 
             if ( !( j.contains("choices") && j["choices"] == JSON::TYPE::ARRAY && j["choices"].size() > 0 ))
                 continue;
             if ( j["choices"][0].contains("usage")) capture_usage(j["choices"][0]["usage"]);
+            if ( j["choices"][0].contains("finish_reason") &&
+                 j["choices"][0]["finish_reason"].to_string() == "length" )
+                _s_truncated = true;
             JSON delta = j["choices"][0]["delta"];
 
             if ( delta.contains("content") && delta["content"] == JSON::TYPE::STRING ) {
@@ -228,6 +235,7 @@ Response OpenAI::stream_result() {
     r.thinking = _s_reasoning;
     r.input_tokens = _s_input_tokens;
     r.output_tokens = _s_output_tokens;
+    r.truncated = _s_truncated;
     for ( const auto& [idx, p] : _s_tools ) {
         if ( p.name.empty())
             continue;

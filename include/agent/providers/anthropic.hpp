@@ -46,6 +46,7 @@ protected:
     std::map<int, StreamBlock> _s_blocks; // by content-block index
     long _s_input_tokens = 0;
     long _s_output_tokens = 0;
+    bool _s_truncated = false;
 
     // Add cache_control breakpoints to the stable prefix (tools/system/last
     // message) of a built request. No-op fields are left untouched.

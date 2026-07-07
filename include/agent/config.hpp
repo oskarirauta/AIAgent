@@ -37,6 +37,7 @@ public:
     bool strict = false;        // in confirm mode, ignore the safe-command allowlist
     size_t context_limit = 0;   // approx token budget for history sent to the model (0 = unlimited)
     bool context_auto = false;  // derive the budget from the model's known context window
+    size_t max_tokens = 8192;   // cap on a single reply's output tokens (config: max_tokens)
     bool auto_compact = false;  // summarise history automatically when it nears the context budget
     size_t auto_compact_pct = 80; // trigger threshold as a percentage of context_budget()
     bool workflow_autoresume = false; // a finished workflow starts a turn by itself (bounded; see repl)

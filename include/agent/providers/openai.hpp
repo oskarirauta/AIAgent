@@ -31,6 +31,7 @@ private:
     std::map<int, PartialToolCall> _s_tools; // keyed by the delta's tool_call index
     long _s_input_tokens = 0;
     long _s_output_tokens = 0;
+    bool _s_truncated = false;
 };
 
 } // namespace agent::providers

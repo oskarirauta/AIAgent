@@ -2118,6 +2118,7 @@ void InlineRepl::open_settings_menu() {
     _settings_rows.push_back({ "multiline", "multiline", _config.multiline ? "on" : "off", { "off", "on" } });
     _settings_rows.push_back({ "paste_preview", "preview",
         _config.paste_preview == 0 ? "all" : std::to_string(_config.paste_preview), {} });
+    _settings_rows.push_back({ "max_tokens", "max_tokens", std::to_string(_config.max_tokens), {} });
 
     erase_live();
     tcflush(STDIN_FILENO, TCIFLUSH); // ignore anything typed before the menu opened

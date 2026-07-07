@@ -967,12 +967,24 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             _conversation.add_assistant(normalized, assistant_calls, resp.thinking_blocks);
 
         if ( resp.tool_calls.empty()) {
+            // Warn when the reply was cut off by the output-token cap (rather than
+            // finishing) — otherwise a truncated file/answer looks complete.
+            std::string trunc;
+            if ( resp.truncated )
+                trunc = "\n\n⚠ reply truncated at the output-token cap (max_tokens=" +
+                        std::to_string(_config.max_tokens ? _config.max_tokens : 8192) +
+                        "). Raise it with `/settings max_tokens <n>` or ask me to continue.";
             // In the streaming path the reasoning and answer already went to the
             // live callback. Only the non-streaming fallback prepends the reasoning
             // block here (display only — the saved message keeps just the answer).
-            if ( !can_stream && !resp.thinking.empty())
-                return "💭 " + agent::normalize_text(resp.thinking) + "\n\n" + normalized;
-            return normalized;
+            if ( can_stream ) {
+                if ( !trunc.empty() && stream_cb )
+                    stream_cb(trunc);
+                return normalized;
+            }
+            if ( !resp.thinking.empty())
+                return "💭 " + agent::normalize_text(resp.thinking) + "\n\n" + normalized + trunc;
+            return normalized + trunc;
         }
 
         // Run the tool calls. When the model batches several read-only tools
@@ -1427,6 +1439,13 @@ std::string Repl::handle_command(const std::string& line) {
                 else if ( v == "off" || v == "false" || v == "0" || v == "no" ) _config.multiline = false;
                 else return "usage: /settings multiline <on|off>";
                 return std::string("multiline: ") + ( _config.multiline ? "on" : "off" );
+            }
+            if ( key == "max_tokens" ) {
+                if ( val.empty())
+                    return "max_tokens: " + std::to_string(_config.max_tokens);
+                _config.max_tokens = Config::parse_size_suffixed(val, _config.max_tokens);
+                if ( _config.max_tokens < 256 ) _config.max_tokens = 256;
+                return "max_tokens: " + std::to_string(_config.max_tokens);
             }
             if ( key == "autoresume" || key == "workflow_autoresume" ) {
                 std::string v = common::to_lower(val);

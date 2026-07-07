@@ -28,6 +28,10 @@ struct Response {
     // Raw Anthropic thinking/redacted_thinking blocks (with signatures), verbatim.
     // Replayed with the assistant turn when extended thinking + tool use.
     JSON thinking_blocks = JSON::Array{};
+
+    // The reply was cut off by the output-token cap (Anthropic stop_reason
+    // "max_tokens" / OpenAI finish_reason "length"), not finished naturally.
+    bool truncated = false;
 };
 
 // Visible deltas produced by one streamed chunk. Content and reasoning are
