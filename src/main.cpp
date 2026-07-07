@@ -7,6 +7,7 @@
 
 #include "usage.hpp"
 #include "logger.hpp"
+#include "env.hpp"
 #include "agent/config.hpp"
 #include "agent/repl.hpp"
 #include "agent/signal_handler.hpp"
@@ -149,9 +150,35 @@ int main(int argc, char **argv) {
         config.system_prompt = agent::Config::default_system_prompt_for(config.provider);
     }
 
+    // API-key providers: if no key was given (-k / config), fall back to the
+    // conventional environment variables, then a generic one. (Kimi/Claude use
+    // OAuth and Ollama needs none.)
     if ( config.api_key.empty() && config.provider != "ollama" &&
          config.provider != "kimi" && config.provider != "claude" ) {
-        logger::warning << "no api-key configured for " << config.provider << " provider" << std::endl;
+        const char* provider_var =
+            config.provider == "openrouter" ? "OPENROUTER_API_KEY" :
+            config.provider == "moonshot"  ? "MOONSHOT_API_KEY" :
+            config.provider == "anthropic" ? "ANTHROPIC_API_KEY" :
+            config.provider == "openai"    ? "OPENAI_API_KEY" : nullptr;
+        if ( provider_var && env[provider_var] )
+            config.api_key = env[provider_var].str();
+        else if ( env["AI_AGENT_API_KEY"] )
+            config.api_key = env["AI_AGENT_API_KEY"].str();
+
+        if ( !config.api_key.empty())
+            logger::info["agent"] << "using api key from " << ( provider_var ? provider_var : "AI_AGENT_API_KEY" ) << std::endl;
+    }
+
+    if ( config.api_key.empty() && config.provider != "ollama" &&
+         config.provider != "kimi" && config.provider != "claude" ) {
+        std::string var =
+            config.provider == "openrouter" ? "OPENROUTER_API_KEY" :
+            config.provider == "moonshot"  ? "MOONSHOT_API_KEY" :
+            config.provider == "anthropic" ? "ANTHROPIC_API_KEY" :
+            config.provider == "openai"    ? "OPENAI_API_KEY" : "AI_AGENT_API_KEY";
+        logger::warning << "no api-key for " << config.provider
+                        << " — pass -k <key>, set `api_key:` in the config, or export "
+                        << var << std::endl;
     }
 
     std::string prompt;
