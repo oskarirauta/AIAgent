@@ -55,7 +55,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
         // read-only displays / menus
         "/about", "/info", "/help", "/theme", "/settings", "/workflows",
         "/trust", "/history", "/memories", "/tasks", "/skills", "/pins",
-        "/context", "/cost", "/changes", "/mcp", "/paste", "/raw", "/limits",
+        "/context", "/cost", "/changes", "/mcp", "/paste", "/raw", "/limits", "/jobs",
         // settings that only affect the NEXT request — running them mid-turn just
         // updates local state (last value wins: /effort medium then /effort max
         // leaves only max, a natural dedup), applied before the next prompt. They
@@ -1099,7 +1099,7 @@ const std::vector<std::string>& slash_commands() {
         "/memories", "/context", "/cost", "/history", "/retry", "/undo", "/tasks",
         "/pin", "/pins", "/unpin", "/queue", "/trust", "/skills", "/skill", "/plan",
         "/changes", "/export", "/compact", "/clear", "/reset", "/mcp", "/advisor",
-        "/autoresume", "/paste", "/raw", "/limits", "/workflows", "/exit", "/quit"
+        "/autoresume", "/paste", "/raw", "/limits", "/jobs", "/workflows", "/exit", "/quit"
     };
     return cmds;
 }
@@ -2187,6 +2187,19 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         std::string text = _command_cb ? _command_cb(trimmed) : "";
         open_list_detail("raw", text);
         return;
+    }
+
+    // /jobs <id> shows a background job's output (potentially long) — detail view.
+    // Bare /jobs (the list) and /jobs stop … stay inline.
+    if ( trimmed.rfind("/jobs ", 0) == 0 ) {
+        std::string rest = common::trim_ws(trimmed.substr(6));
+        bool numeric = !rest.empty() && std::all_of(rest.begin(), rest.end(),
+                                                    [](unsigned char c) { return std::isdigit(c); });
+        if ( numeric ) {
+            std::string text = _command_cb ? _command_cb(trimmed) : "";
+            open_list_detail("job #" + rest, text);
+            return;
+        }
     }
 
     // /paste reviews the large pastes sent this session — bare opens a list

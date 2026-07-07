@@ -13,6 +13,7 @@
 #include "agent/tools/registry.hpp"
 #include "agent/token_stats.hpp"
 #include "agent/workflow.hpp"
+#include "agent/jobs.hpp"
 #include "agent/mcp/client.hpp"
 #include "agent/skills.hpp"
 
@@ -41,6 +42,10 @@ private:
 
     // Handle a slash command (e.g. /settings, /model). Returns text to display.
     std::string handle_command(const std::string& line);
+
+    // Format a background job (status + recent output), optionally stopping it.
+    // Shared by the check_job tool and the /jobs command.
+    std::string describe_job(int id, size_t tail_lines, bool do_stop);
 
     // Rebuild the system prompt (config + current date + memories).
     std::string base_system_prompt() const;
@@ -124,6 +129,7 @@ private:
     Conversation _conversation;
     TokenStats _stats;
     WorkflowManager _workflows;
+    BackgroundJobs _jobs;        // long-running commands started with background:true
     std::string _last_request;   // last provider request body (for /raw)
     std::string _last_response;  // last provider response (for /raw)
     // Thread-safe mirror of _config.workflow_autoresume: the workflow on_finish

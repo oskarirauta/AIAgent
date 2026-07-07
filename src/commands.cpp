@@ -132,6 +132,11 @@ const std::vector<CommandDoc>& command_catalog() {
       "attention: only a workflow finishing, a tool-permission prompt, or an answer that "
       "is a question. question: only when the answer is a question. never: silent. Bare "
       "/bell opens a picker; also the \"bell\" row in /settings." },
+    { "/jobs", "", "[id | stop <id|all>]", "Session & UI", "background commands the agent started",
+      "Lists background jobs started with run_command(background:true) — a dev server, "
+      "watcher, or tail -f — with running/exited status and runtime. `/jobs <id>` shows "
+      "a job's captured output (scrollable); `/jobs stop <id|all>` stops jobs. The model "
+      "inspects the same jobs via the check_job tool." },
     { "/limits", "", "", "Session & UI", "rate-limit / quota headers from the last response",
       "Shows the rate-limit and quota headers the provider returned on the last "
       "request (e.g. requests/tokens remaining and reset times). Providers vary; "

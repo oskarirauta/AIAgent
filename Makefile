@@ -21,6 +21,7 @@ OBJS:= \
 	objs/repl.o \
 	objs/repl_inline.o \
 	objs/workflow.o \
+	objs/jobs.o \
 	objs/skills.o \
 	objs/commands.o \
 	objs/gitignore.o \
@@ -121,6 +122,8 @@ objs/claude_oauth.o: src/auth/claude_oauth.cpp
 objs/claude_provider.o: src/providers/claude.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/workflow.o: src/workflow.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/jobs.o: src/jobs.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/skills.o: src/skills.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;

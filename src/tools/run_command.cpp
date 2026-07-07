@@ -58,6 +58,12 @@ JSON RunCommand::parameters() const {
             { "env", JSON::Object{
                 { "type", "object" },
                 { "description", "extra environment variables for this command only (name -> value)" }
+            }},
+            { "background", JSON::Object{
+                { "type", "boolean" },
+                { "description", "run detached in the background (a dev server, watcher, tail -f) "
+                                 "and return immediately with a job id instead of waiting; check it "
+                                 "later with check_job, the user sees it under /jobs" }
             }}
         }},
         { "required", JSON::Array{ "command" }}
@@ -119,6 +125,16 @@ std::string RunCommand::execute(const JSON& args) {
         });
         if ( !exports.empty())
             shell_cmd = exports + shell_cmd;
+    }
+
+    // Background: hand the fully-built shell command to the job manager and return
+    // right away, so a long-running server/watcher does not block the turn.
+    bool background = args.contains("background") && args["background"] == JSON::TYPE::BOOL &&
+                      static_cast<bool>(args["background"]);
+    if ( background ) {
+        if ( !_background )
+            return "background jobs are not available in this mode";
+        return _background(shell_cmd);
     }
 
     try {

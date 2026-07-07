@@ -25,6 +25,7 @@
 #include "agent/tools/fetch_url.hpp"
 #include "agent/tools/mcp_tool.hpp"
 #include "agent/tools/ask_user.hpp"
+#include "agent/tools/check_job.hpp"
 #include "agent/tools/tasks_tool.hpp"
 #include "agent/tools/skill_tool.hpp"
 #include "agent/skills.hpp"
@@ -1384,6 +1385,33 @@ tools::ConfirmMode Repl::tool_mode() const {
                                  : tools::ConfirmMode::automatic;
 }
 
+std::string Repl::describe_job(int id, size_t tail_lines, bool do_stop) {
+    if ( do_stop ) {
+        if ( !_jobs.stop(id))
+            return "no background job #" + std::to_string(id);
+    }
+    bool found = false;
+    std::string out = _jobs.output(id, tail_lines, found);
+    if ( !found )
+        return "no background job #" + std::to_string(id);
+    // Find its status line.
+    std::string status;
+    for ( const auto& j : _jobs.list()) {
+        if ( j.id != id ) continue;
+        status = "job #" + std::to_string(j.id) + " · " +
+                 ( j.running ? "running " + std::to_string(j.seconds) + "s"
+                             : ( j.killed ? "stopped" : "exited " + std::to_string(j.exit_code))) +
+                 " · " + j.command;
+        break;
+    }
+    if ( do_stop && status.find("running") == std::string::npos )
+        status += " (stop sent)";
+    std::string res = status;
+    if ( !out.empty()) res += "\n---\n" + out;
+    else res += "\n(no output yet)";
+    return res;
+}
+
 std::string Repl::handle_command(const std::string& line) {
     // !shell passthrough: the user runs a command directly — no model turn, no
     // confirmation (they typed it themselves) — but the output is recorded so
@@ -1712,6 +1740,35 @@ std::string Repl::handle_command(const std::string& line) {
             return _last_response.empty() ? "no response captured" : _last_response;
         return "── request (last sent to " + _config.provider + ") ──\n" + _last_request +
                "\n\n── response ──\n" + _last_response;
+    }
+
+    if ( cmd == "/jobs" ) {
+        std::string a = common::trim_ws(args);
+        if ( a.rfind("stop", 0) == 0 ) {
+            std::string rest = common::trim_ws(a.substr(4));
+            if ( rest == "all" ) {
+                int n = _jobs.stop_all();
+                return n ? "stopped " + std::to_string(n) + " job(s)" : "no running jobs";
+            }
+            try { return describe_job(std::stoi(rest), 40, /*do_stop=*/true); }
+            catch ( ... ) { return "usage: /jobs stop <id|all>"; }
+        }
+        if ( !a.empty()) {
+            try { return describe_job(std::stoi(a), 0, /*do_stop=*/false); }
+            catch ( ... ) { return "usage: /jobs [id | stop <id|all>]"; }
+        }
+        auto jobs = _jobs.list();
+        if ( jobs.empty())
+            return "no background jobs this session";
+        std::string out = "background jobs:\n";
+        for ( const auto& j : jobs ) {
+            out += "  #" + std::to_string(j.id) + "  " +
+                   ( j.running ? "● running " + std::to_string(j.seconds) + "s"
+                               : ( j.killed ? "○ stopped" : "○ exited " + std::to_string(j.exit_code))) +
+                   "  " + j.command.substr(0, 60) + "\n";
+        }
+        out += "\n/jobs <id> shows output · /jobs stop <id|all> stops";
+        return out;
     }
 
     if ( cmd == "/limits" ) {
@@ -2157,6 +2214,28 @@ void Repl::run_tty() {
             [&inline_repl](const std::string& q, const std::vector<std::string>& opts) {
                 return inline_repl.ask_user(q, opts);
             }));
+
+        // Background jobs: give run_command a way to launch detached, add check_job
+        // for the model to inspect/stop them, and announce exits as notices.
+        auto rc = std::make_unique<tools::RunCommand>();
+        rc->set_background([this](const std::string& shell_cmd) {
+            std::string err;
+            int id = _jobs.start(shell_cmd, "", {}, err);
+            return id < 0 ? std::string("failed to start background job: ") + err
+                          : "background job #" + std::to_string(id) +
+                            " started — check with check_job (id " + std::to_string(id) + ") or /jobs";
+        });
+        _registry.remove("run_command");
+        _registry.add(std::move(rc));
+
+        _registry.remove("check_job");
+        _registry.add(std::make_unique<tools::CheckJob>(
+            [this](int id, bool stop) { return describe_job(id, 40, stop); }));
+
+        _jobs.set_on_finish([&inline_repl](int id, const std::string& command, const std::string& status) {
+            inline_repl.notify("job #" + std::to_string(id) + " " + status + ": " +
+                               command.substr(0, 60));
+        });
     }
 
     // Workflow completion notice: printed above the live block with a bell, so a
@@ -2189,6 +2268,8 @@ void Repl::run_tty() {
     // inline_repl is about to go out of scope; synchronously detach the callbacks
     // so a run finishing right now cannot touch a dead object.
     _workflows.set_on_finish(nullptr);
+    _jobs.set_on_finish(nullptr); // its callback captured the now-dead inline_repl
+    _jobs.stop_all();             // don't leave detached children behind
     set_tool_notice_callback(nullptr);
     set_progress_callback(nullptr);
     _registry.remove("ask_user"); // its callback captured the now-dead inline_repl
