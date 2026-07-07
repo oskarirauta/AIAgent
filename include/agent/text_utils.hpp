@@ -19,6 +19,13 @@ std::string block_diff(const std::string& old_text, const std::string& new_text,
 // which raise the Anthropic thinking effort to max for a single turn.
 bool has_ultra_keyword(const std::string& s);
 
+// Replace credentials in tool output with [REDACTED] before it is sent to the
+// model provider — PEM private keys, known API-key/token formats (OpenAI,
+// Anthropic, GitHub, AWS, Google, Slack, GitLab, JWT), Bearer headers, and
+// `SECRET=…`-style assignments. `count` receives how many were redacted.
+// Conservative by design: it targets recognisable secrets, not any long string.
+std::string redact_secrets(const std::string& text, int& count);
+
 // One expanded @path file mention (see expand_file_mentions).
 struct FileMention {
     std::string path;

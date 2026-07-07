@@ -1343,11 +1343,21 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                 run_one(i);
         }
 
-        // Record the results in the model's original order.
+        // Record the results in the model's original order. Credentials in the
+        // output are masked first (unless disabled) so a secret the tool happened
+        // to read — a .env file, a token in a log — is never sent to the provider.
         for ( size_t i = 0; i < resp.tool_calls.size(); ++i ) {
             const auto& tc = resp.tool_calls[i];
-            logger::info["tool"] << tc.name << " -> " << results[i].substr(0, 200) << std::endl;
-            _conversation.add_tool_result(tc.id, tc.name, results[i]);
+            std::string result = results[i];
+            if ( _config.redact_secrets ) {
+                int n = 0;
+                result = agent::redact_secrets(result, n);
+                if ( n > 0 )
+                    result += "\n[" + std::to_string(n) + " secret" + ( n == 1 ? "" : "s" ) +
+                              " redacted before sending to the model]";
+            }
+            logger::info["tool"] << tc.name << " -> " << result.substr(0, 200) << std::endl;
+            _conversation.add_tool_result(tc.id, tc.name, result);
         }
 
         // Interrupted (e.g. Ctrl-C'd a long run_command)? Stop the turn but KEEP
@@ -1889,6 +1899,13 @@ std::string Repl::handle_command(const std::string& line) {
                 return _config.paste_preview == 0
                      ? std::string("paste preview: all lines")
                      : "paste preview: first " + std::to_string(_config.paste_preview) + " lines";
+            }
+            if ( key == "redact_secrets" || key == "redact" ) {
+                std::string v = common::to_lower(val);
+                if ( v == "on" || v == "true" || v == "1" || v == "yes" ) _config.redact_secrets = true;
+                else if ( v == "off" || v == "false" || v == "0" || v == "no" ) _config.redact_secrets = false;
+                else return "usage: /settings redact_secrets <on|off>";
+                return std::string("redact secrets: ") + ( _config.redact_secrets ? "on" : "off" );
             }
             if ( key == "auto_compact" || key == "autocompact" ) {
                 std::string v = common::to_lower(val);

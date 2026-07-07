@@ -2513,6 +2513,8 @@ void InlineRepl::open_settings_menu() {
         std::to_string(_config.tool_call_limit), TOOLS,
         "pause to ask after this many tool calls in one turn", {}, true,
         0, 500, 10, "per turn", "unlimited");
+    add("redact_secrets", "redact secrets", _config.redact_secrets ? "on" : "off", TOOLS,
+        "mask credentials in tool output before it is sent to the model", { "off", "on" });
     if ( _config.provider == "claude" )
         add("advisor", "advisor", _config.advisor ? "on" : "off", TOOLS,
             "let the model consult a stronger advisor model", { "off", "on" });

@@ -7,8 +7,80 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <regex>
+#include <utility>
 
 namespace agent {
+
+std::string redact_secrets(const std::string& text, int& count) {
+    count = 0;
+    if ( text.empty())
+        return text;
+    std::string out = text;
+
+    // Ordered fixed-format secret patterns. Each match becomes its replacement.
+    // sk-ant- must precede sk- (the hyphenated form would otherwise slip past).
+    static const std::vector<std::pair<std::regex, std::string>> rules = {
+        { std::regex(R"(-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----)"),
+          "[REDACTED PRIVATE KEY]" },
+        { std::regex(R"(sk-ant-[A-Za-z0-9_-]{20,})"), "[REDACTED]" },
+        { std::regex(R"(sk-[A-Za-z0-9]{20,})"), "[REDACTED]" },
+        { std::regex(R"(gh[posru]_[A-Za-z0-9]{20,})"), "[REDACTED]" },
+        { std::regex(R"(github_pat_[A-Za-z0-9_]{20,})"), "[REDACTED]" },
+        { std::regex(R"(xox[baprs]-[A-Za-z0-9-]{10,})"), "[REDACTED]" },
+        { std::regex(R"(AKIA[0-9A-Z]{16})"), "[REDACTED]" },
+        { std::regex(R"(AIza[0-9A-Za-z_-]{35})"), "[REDACTED]" },
+        { std::regex(R"(glpat-[A-Za-z0-9_-]{20})"), "[REDACTED]" },
+        { std::regex(R"(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})"), "[REDACTED JWT]" },
+        { std::regex(R"([Bb]earer\s+[A-Za-z0-9._~+/-]{16,}=*)"), "Bearer [REDACTED]" },
+    };
+    for ( const auto& [re, rep] : rules ) {
+        int n = static_cast<int>(std::distance(std::sregex_iterator(out.begin(), out.end(), re),
+                                               std::sregex_iterator()));
+        if ( n > 0 ) {
+            count += n;
+            out = std::regex_replace(out, re, rep);
+        }
+    }
+
+    // Labelled assignments: `SECRET=<value>`, `api_key: "<value>"`, etc. Redact the
+    // value, keeping the label. Skips obvious placeholders so template/.env.example
+    // files don't get noisily rewritten.
+    {
+        static const std::regex re(
+            R"((password|passwd|secret|api[_-]?key|apikey|access[_-]?key|secret[_-]?key|auth[_-]?token|token|private[_-]?key)("?\s*[:=]\s*"?)([^\s"']{8,}))",
+            std::regex::icase);
+        std::string res;
+        auto begin = std::sregex_iterator(out.begin(), out.end(), re);
+        auto end = std::sregex_iterator();
+        size_t last = 0;
+        for ( auto it = begin; it != end; ++it ) {
+            const std::smatch& m = *it;
+            std::string val = m[3].str();
+            std::string low = val;
+            std::transform(low.begin(), low.end(), low.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+            bool placeholder = low.find("your") != std::string::npos ||
+                               low.find("xxx") != std::string::npos ||
+                               low.find("example") != std::string::npos ||
+                               low.find("changeme") != std::string::npos ||
+                               low.find("redacted") != std::string::npos ||
+                               low.find("<") != std::string::npos;
+            res.append(out, last, static_cast<size_t>(m.position()) - last);
+            if ( placeholder ) {
+                res += m.str(); // leave it as-is
+            } else {
+                res += m[1].str() + m[2].str() + "[REDACTED]";
+                ++count;
+            }
+            last = static_cast<size_t>(m.position()) + static_cast<size_t>(m.length());
+        }
+        res.append(out, last, std::string::npos);
+        out = std::move(res);
+    }
+
+    return out;
+}
 
 namespace {
 

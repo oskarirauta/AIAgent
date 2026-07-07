@@ -2211,6 +2211,40 @@ static void test_danger_list() {
     check(Registry::classify_danger("cd a && git log | grep x").empty(), "benign compound not flagged");
 }
 
+static void test_redact_secrets() {
+    std::cout << "redact_secrets (mask credentials in tool output)" << std::endl;
+    using agent::redact_secrets;
+    int n = 0;
+
+    auto redacted = [&](const std::string& s) { n = 0; std::string r = redact_secrets(s, n); return r; };
+
+    check(redacted("key sk-abcdefghij0123456789ABCD").find("sk-abcdefg") == std::string::npos &&
+          n == 1, "OpenAI sk- key masked");
+    check(redacted("token=sk-ant-abcdefghij0123456789XYZ").find("sk-ant-abc") == std::string::npos,
+          "Anthropic sk-ant- key masked");
+    check(redacted("ghp_0123456789abcdefghijABCDEFGHIJ0123").find("ghp_0123") == std::string::npos,
+          "GitHub token masked");
+    check(redacted("AKIAIOSFODNN7EXAMPLE0").find("AKIAIOSF") == std::string::npos, "AWS key masked");
+    check(redacted("Authorization: Bearer abcdefghijklmnop0123456789")
+              .find("abcdefghijklmnop") == std::string::npos, "Bearer token masked");
+    check(redacted("-----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY-----")
+              == "[REDACTED PRIVATE KEY]", "PEM private key masked");
+    check(redacted("API_KEY=supersecretvalue123").find("supersecretvalue") == std::string::npos,
+          "labelled API_KEY= value masked");
+    check(redacted("password: hunter2hunter2").find("hunter2") == std::string::npos,
+          "labelled password: value masked");
+
+    // Must NOT over-redact ordinary output.
+    n = 0; redact_secrets("the quick brown fox jumps over the lazy dog", n);
+    check(n == 0, "prose untouched");
+    n = 0; redact_secrets("commit a1b2c3d4e5f6a7b8c9d0 fixed the bug", n);
+    check(n == 0, "a git hash is not treated as a secret");
+    n = 0; redact_secrets("API_KEY=your_key_here", n);
+    check(n == 0, "placeholder value left alone");
+    n = 0; redact_secrets("ls -la /home/user", n);
+    check(n == 0, "a plain command is untouched");
+}
+
 static void test_list_directory() {
     std::cout << "list_directory (sorted, dirs first, error_code)" << std::endl;
     std::string d = "/tmp/ai_ld_test";
@@ -2394,6 +2428,7 @@ int main() {
     test_deny_with_note();
     test_turn_scoped_grant();
     test_danger_list();
+    test_redact_secrets();
     test_list_directory();
     test_config_booleans();
     test_extra_command_lists();

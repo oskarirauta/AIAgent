@@ -45,6 +45,7 @@ public:
     bool workflow_autoresume = false; // a finished workflow starts a turn by itself (bounded; see repl)
     std::string bell = "attention"; // terminal bell policy: never|question|attention|always
     bool supersede_tools = true; // elide stale tool results (older read/run of the same target)
+    bool redact_secrets = true; // mask credentials in tool output before sending to the provider
 
     // Config-extensible command safety lists (config file only, never persisted
     // state and never project files): extra confirmation-free read-only commands,
