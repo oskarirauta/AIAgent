@@ -1397,6 +1397,9 @@ std::string Repl::handle_command(const std::string& line) {
         _config.model = args;
         if ( _provider )
             _provider->set_model(args);
+        // Remember this model for the current provider, so the next session on the
+        // same provider resumes it (state.json models[provider]).
+        Config::save_last_used(_config.home_dir, _config.provider, args);
         return "model set to " + args;
     }
 
