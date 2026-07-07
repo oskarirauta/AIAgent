@@ -85,6 +85,16 @@ turn by itself so the model picks its results up immediately — bounded to two
 consecutive auto-turns per real user message, so a model that launches workflows
 from an auto-turn can never run away on its own.
 
+### Prompt shortcuts
+
+- **`@path`** in a message expands the file inline — `look at @src/main.cpp and
+  fix the leak` — when the token starts with `@` and the path exists (emails and
+  `@decorators` are left alone). Size-capped; Tab completes `@`-paths too.
+- **`!command`** runs a shell command directly, with no model turn and no
+  confirmation (you typed it yourself). The output prints locally **and** is
+  recorded in the conversation, so `!make test` followed by "fix those" just
+  works.
+
 ### Large pastes
 
 A large paste collapses into a placeholder in the input (`[paste #1: 500 lines]`)

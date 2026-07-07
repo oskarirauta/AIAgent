@@ -25,6 +25,7 @@
 #include "agent/tools/fetch_url.hpp"
 #include "agent/tools/mcp_tool.hpp"
 #include "agent/tools/tasks_tool.hpp"
+#include "agent/tools/run_command.hpp"
 
 namespace agent {
 
@@ -98,6 +99,17 @@ std::string Repl::set_tasks(const JSON& tasks) {
     }
     return "tasks updated: " + std::to_string(_tasks.size()) + " (" +
            std::to_string(done) + " done, " + std::to_string(in_progress) + " in progress)";
+}
+
+std::string Repl::shell_passthrough(const std::string& cmd) {
+    if ( cmd.empty())
+        return "usage: !<shell command>";
+    tools::RunCommand rc;
+    std::string out = rc.execute(JSON::Object{ { "command", cmd } });
+    // Record what the user did and saw, so "fix those" just works next turn.
+    _conversation.add_user("(I ran this shell command myself)\n$ " + cmd + "\n" + out);
+    save_conversation();
+    return out;
 }
 
 std::string Repl::tasks_command() const {
@@ -1048,6 +1060,12 @@ tools::ConfirmMode Repl::tool_mode() const {
 }
 
 std::string Repl::handle_command(const std::string& line) {
+    // !shell passthrough: the user runs a command directly — no model turn, no
+    // confirmation (they typed it themselves) — but the output is recorded so
+    // the model sees it on its next turn ("!make test" … "fix those").
+    if ( !line.empty() && line[0] == '!' )
+        return shell_passthrough(common::trim_ws(line.substr(1)));
+
     std::string cmd, args;
     {
         std::istringstream iss(line);
@@ -1079,6 +1097,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /retry                   re-run your last message\n"
                "  /undo                    remove the last exchange from history\n"
                "  /tasks                   show the agent's current todo list\n"
+               "  !<command>              run a shell command yourself (recorded for the model)\n"
                "  /queue [drop <n|all>]    messages queued behind the running turn\n"
                "  /pin [text]              keep a note in context through /compact (/pins, /unpin <n|all>)\n"
                "  /changes [diff|revert <path|all>]   files the agent changed this session\n"

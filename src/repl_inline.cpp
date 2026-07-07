@@ -1416,8 +1416,9 @@ void InlineRepl::on_enter() {
         return;
     }
 
-    // Slash commands run locally (never sent to the model), even mid-turn.
-    if ( trimmed[0] == '/' ) {
+    // Slash commands and !shell passthroughs run locally (never sent to the
+    // model as prompts), even mid-turn.
+    if ( trimmed[0] == '/' || trimmed[0] == '!' ) {
         _prompt_history.push_back(trimmed);
         _history_index = _prompt_history.size();
         _stashed_input.clear();
@@ -1902,6 +1903,17 @@ void InlineRepl::commit_confirm(tools::Decision d, const std::string& label) {
 
 void InlineRepl::run_command_line(const std::string& trimmed) {
     // Always called when idle (no turn running).
+    if ( !trimmed.empty() && trimmed[0] == '!' ) {
+        // !shell passthrough: run it off-thread (it may be a build) with the
+        // spinner; the Repl side records the output for the model too.
+        std::string sh = common::trim_ws(trimmed.substr(1));
+        if ( sh.empty()) {
+            render_command(trimmed, "usage: !<shell command>   (runs locally; the model sees the output)");
+            return;
+        }
+        start_async_command(trimmed, "running: " + sh);
+        return;
+    }
     if ( trimmed == "/retry" ) {
         std::string prompt = _command_cb ? _command_cb("/retry") : "nothing to retry";
         if ( prompt.empty() || prompt == "nothing to retry" )
@@ -1946,7 +1958,7 @@ void InlineRepl::drain_pending() {
                 break;
             next = _pending.front();
             _pending.pop_front();
-            is_command = !next.empty() && next[0] == '/';
+            is_command = !next.empty() && ( next[0] == '/' || next[0] == '!' );
             if ( !is_command ) {
                 while ( !_pending.empty() && ( _pending.front().empty() || _pending.front()[0] != '/' )) {
                     next += "\n\n" + _pending.front();

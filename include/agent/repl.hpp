@@ -53,6 +53,7 @@ private:
     std::vector<Task> _tasks;
     std::string set_tasks(const JSON& tasks);   // update_tasks handler
     std::string tasks_command() const;          // /tasks view
+    std::string shell_passthrough(const std::string& cmd); // !cmd: run locally, record for the model
 
     // Session change tracking for write_file (transparency + revert).
     struct FileChange { bool existed = false; std::string original; bool tracked = true; };
