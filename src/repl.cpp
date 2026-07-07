@@ -1363,6 +1363,14 @@ std::string Repl::handle_command(const std::string& line) {
                 else return "usage: /settings multiline <on|off>";
                 return std::string("multiline: ") + ( _config.multiline ? "on" : "off" );
             }
+            if ( key == "autoresume" || key == "workflow_autoresume" ) {
+                std::string v = common::to_lower(val);
+                if ( v == "on" || v == "true" || v == "1" || v == "yes" ) _config.workflow_autoresume = true;
+                else if ( v == "off" || v == "false" || v == "0" || v == "no" ) _config.workflow_autoresume = false;
+                else return "usage: /settings autoresume <on|off>";
+                return std::string("workflow autoresume: ") + ( _config.workflow_autoresume ? "on" : "off" ) +
+                       ( _config.workflow_autoresume ? "  (a finished workflow resumes the conversation; bounded to 2 in a row)" : "" );
+            }
             if ( key == "thinking_stream" || key == "stream" ) {
                 std::string v = common::to_lower(val);
                 if ( v == "on" || v == "true" || v == "1" || v == "yes" ) { _config.thinking_stream = true; _config.thinking_collapse = false; }
@@ -1613,16 +1621,26 @@ void Repl::run_tty() {
     set_tool_notice_callback([&inline_repl](const std::string& s) { inline_repl.notify_quiet(s); });
 
     // Workflow completion notice: printed above the live block with a bell, so a
-    // long-running background run announces itself even while you're idle.
-    _workflows.set_on_finish([&inline_repl](const WorkflowRun& r) {
+    // long-running background run announces itself even while you're idle. With
+    // workflow_autoresume on, a synthetic prompt joins the normal pending queue
+    // (never a direct turn start from this background thread) so the model picks
+    // the results up by itself — bounded to 2 auto turns per real user message.
+    _workflows.set_on_finish([this, &inline_repl](const WorkflowRun& r) {
         size_t ok = 0;
         for ( const auto& st : r.steps )
             if ( st.status == "done" ) ++ok;
-        inline_repl.notify("workflow #" + std::to_string(r.id) + " " + r.name +
+        std::string head = "workflow #" + std::to_string(r.id) + " " + r.name +
                            " [" + r.status + "] " + std::to_string(ok) + "/" +
-                           std::to_string(r.steps.size()) +
-                           " steps — results fold in on your next message (/workflows " +
-                           std::to_string(r.id) + " for details)");
+                           std::to_string(r.steps.size()) + " steps";
+        bool resumed = false;
+        if ( _config.workflow_autoresume )
+            resumed = inline_repl.enqueue_prompt(
+                "Workflow #" + std::to_string(r.id) + " (" + r.name + ") just finished with status \"" +
+                r.status + "\". Its step results have been delivered above — go through them and continue "
+                "the task accordingly.");
+        inline_repl.notify(head + ( resumed
+            ? " — picking the results up automatically"
+            : " — results fold in on your next message (/workflows " + std::to_string(r.id) + " for details)" ));
     });
 
     inline_repl.run();

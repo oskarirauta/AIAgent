@@ -219,6 +219,7 @@ void Config::load(const std::string& path) {
         }
         else if ( key == "auto_compact" ) auto_compact = parse_bool(value);
         else if ( key == "auto_compact_pct" ) auto_compact_pct = parse_size(value, auto_compact_pct, key);
+        else if ( key == "workflow_autoresume" ) workflow_autoresume = parse_bool(value);
         else if ( key == "advisor" ) advisor = parse_bool(value);
         else if ( key == "advisor_model" ) advisor_model = value;
         else if ( key == "budget_tokens" ) budget_tokens = parse_size(value, budget_tokens, key);
@@ -348,6 +349,8 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.context_limit = static_cast<size_t>(static_cast<long long>(s["context_limit"]));
             if ( s.contains("auto_compact") && s["auto_compact"] == JSON::TYPE::BOOL )
                 last.auto_compact = s["auto_compact"].to_bool();
+            if ( s.contains("workflow_autoresume") && s["workflow_autoresume"] == JSON::TYPE::BOOL )
+                last.workflow_autoresume = s["workflow_autoresume"].to_bool();
             if ( s.contains("advisor") && s["advisor"] == JSON::TYPE::BOOL )
                 last.advisor = s["advisor"].to_bool();
             if ( s.contains("advisor_model") && s["advisor_model"] == JSON::TYPE::STRING )
@@ -382,6 +385,7 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "context_auto", last.context_auto },
             { "context_limit", static_cast<long long>(last.context_limit) },
             { "auto_compact", last.auto_compact },
+            { "workflow_autoresume", last.workflow_autoresume },
             { "advisor", last.advisor },
             { "advisor_model", last.advisor_model },
             { "paste_preview", static_cast<long long>(last.paste_preview) }
@@ -427,6 +431,7 @@ void Config::save_settings(const std::string& home_dir) const {
     last.context_auto = context_auto;
     last.context_limit = context_limit;
     last.auto_compact = auto_compact;
+    last.workflow_autoresume = workflow_autoresume;
     last.advisor = advisor;
     last.advisor_model = advisor_model;
     last.paste_preview = paste_preview;
@@ -444,6 +449,7 @@ void Config::apply_settings(const LastUsed& last) {
     context_auto = last.context_auto;
     context_limit = last.context_limit;
     auto_compact = last.auto_compact;
+    workflow_autoresume = last.workflow_autoresume;
     advisor = last.advisor;
     if ( !last.advisor_model.empty())
         advisor_model = last.advisor_model;

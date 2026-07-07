@@ -38,6 +38,7 @@ public:
     bool context_auto = false;  // derive the budget from the model's known context window
     bool auto_compact = false;  // summarise history automatically when it nears the context budget
     size_t auto_compact_pct = 80; // trigger threshold as a percentage of context_budget()
+    bool workflow_autoresume = false; // a finished workflow starts a turn by itself (bounded; see repl)
     bool advisor = false;       // expose a tool letting the model consult a stronger advisor model (claude only)
     std::string advisor_model = "claude-opus-4-8"; // the model consulted by the advisor tool
 
@@ -107,6 +108,7 @@ public:
         size_t context_limit = 0;
         bool context_auto = false;
         bool auto_compact = false;
+        bool workflow_autoresume = false;
         bool advisor = false;
         std::string advisor_model;
         size_t paste_preview = 8;

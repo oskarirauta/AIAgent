@@ -10,6 +10,7 @@
 
 #include "agent/config.hpp"
 #include "agent/conversation.hpp"
+#include "agent/repl_inline.hpp"
 #include "agent/memory.hpp"
 #include "agent/token_stats.hpp"
 #include "agent/tools/run_command.hpp"
@@ -788,6 +789,37 @@ static void test_workflow_tool() {
           "missing steps is an error");
 }
 
+static void test_workflow_autoresume() {
+    std::cout << "workflow autoresume (enqueue cap + config round-trip)" << std::endl;
+
+    // The chain guard: at most 2 auto prompts join the queue per user message.
+    agent::Config cfg;
+    agent::Conversation conv;
+    agent::TokenStats stats;
+    agent::InlineRepl repl(nullptr, cfg, conv, stats);
+    check(repl.enqueue_prompt("auto 1"), "first auto prompt accepted");
+    check(repl.enqueue_prompt("auto 2"), "second auto prompt accepted");
+    check(!repl.enqueue_prompt("auto 3"), "third auto prompt dropped by the chain guard");
+
+    // Config: file key + state.json settings round-trip.
+    std::string p = "/tmp/ai_war_cfg";
+    { std::ofstream o(p); o << "workflow_autoresume: on\n"; }
+    agent::Config c2;
+    c2.load(p);
+    check(c2.workflow_autoresume, "config key parses (on)");
+    std::filesystem::remove(p);
+
+    std::string home = "/tmp/ai_war_home";
+    std::filesystem::remove_all(home);
+    std::filesystem::create_directories(home);
+    c2.home_dir = home;
+    c2.save_settings(home);
+    agent::Config c3;
+    c3.apply_settings(agent::Config::load_last_used(home));
+    check(c3.workflow_autoresume, "workflow_autoresume survives state.json round-trip");
+    std::filesystem::remove_all(home);
+}
+
 static void test_workflow_parallel_cancel_retry() {
     std::cout << "workflow parallel / cancel / retry / on_finish" << std::endl;
     using namespace std::chrono_literals;
@@ -1522,6 +1554,7 @@ int main() {
     test_project_instructions();
     test_workflow_manager();
     test_workflow_tool();
+    test_workflow_autoresume();
     test_workflow_parallel_cancel_retry();
     test_provider_options_config();
     test_claude_provider();

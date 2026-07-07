@@ -66,6 +66,18 @@ precedence): `-k <key>`, `api_key:` in the config, or the environment variable
 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `MOONSHOT_API_KEY` / `OPENROUTER_API_KEY`
 (or a generic `AI_AGENT_API_KEY`).
 
+### Background workflows
+
+On the Claude provider the model can fan work out with the `run_workflow` tool:
+independent read-only sub-agents run the steps in the background (serially, or
+concurrently with `parallel`), and `/workflows` shows progress (`cancel <id>` /
+`retry <id>` to manage). When a run finishes, a bell + notice appear, and the
+results fold into the conversation on your next message. With the **autoresume**
+setting on (`/settings autoresume on`), a finished workflow instead starts a
+turn by itself so the model picks its results up immediately — bounded to two
+consecutive auto-turns per real user message, so a model that launches workflows
+from an auto-turn can never run away on its own.
+
 ### Large pastes
 
 A large paste collapses into a placeholder in the input (`[paste #1: 500 lines]`)

@@ -653,6 +653,15 @@ void InlineRepl::notify_quiet(const std::string& line) {
     _notices.push({ line, false });
 }
 
+bool InlineRepl::enqueue_prompt(const std::string& text) {
+    std::lock_guard<std::mutex> lk(_mx);
+    if ( _auto_since_user >= 2 )
+        return false; // chain guard: results still fold in on the next user message
+    ++_auto_since_user;
+    _pending.push_back(text);
+    return true;
+}
+
 void InlineRepl::drain_notices() {
     std::vector<Notice> lines;
     {
@@ -1285,6 +1294,18 @@ void InlineRepl::run() {
         if ( !_confirming && !_in_settings )
             drain_notices();
 
+        // Idle + something queued (e.g. a workflow auto-resume prompt enqueued
+        // from a background thread): run it through the normal turn machinery.
+        if ( !_turn_running && !_confirming && !_in_settings ) {
+            bool has;
+            {
+                std::lock_guard<std::mutex> lk(_mx);
+                has = !_pending.empty();
+            }
+            if ( has )
+                drain_pending();
+        }
+
         // Terminal was resized: redraw the active view at the new width.
         if ( agent::winch_pending.exchange(false, std::memory_order_relaxed)) {
             if ( _in_settings )
@@ -1399,7 +1420,10 @@ void InlineRepl::on_enter() {
         // Flush type-ahead so keys aimed at a not-yet-open interactive menu can't
         // trigger anything by accident.
         if ( _turn_running ) {
-            _pending.push_back(trimmed);
+            {
+                std::lock_guard<std::mutex> lk(_mx);
+                _pending.push_back(trimmed);
+            }
             tcflush(STDIN_FILENO, TCIFLUSH);
             draw_live();
             return;
@@ -1414,7 +1438,11 @@ void InlineRepl::on_enter() {
 
     if ( _turn_running ) {
         // A turn is in flight — queue this one to auto-send when it finishes.
-        _pending.push_back(line);
+        {
+            std::lock_guard<std::mutex> lk(_mx);
+            _pending.push_back(line);
+            _auto_since_user = 0; // real user input resets the auto-resume guard
+        }
         _input.clear();
         _cursor = 0;
         _input_window_start = 0;
@@ -1423,6 +1451,10 @@ void InlineRepl::on_enter() {
         return;
     }
 
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        _auto_since_user = 0; // real user input resets the auto-resume guard
+    }
     start_turn(line, display);
 }
 
@@ -1517,7 +1549,12 @@ void InlineRepl::finish_async_command() {
     _async_command = false;
     agent::turn_active.store(false, std::memory_order_relaxed);
     render_command(_async_cmd_line, result);
-    if ( !_pending.empty())
+    bool has_pending;
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        has_pending = !_pending.empty();
+    }
+    if ( has_pending )
         drain_pending();
     else
         draw_live();
@@ -1876,20 +1913,29 @@ void InlineRepl::drain_pending() {
     // messages are merged and sent as ONE turn, so a backlog typed during a long
     // answer flushes in a single round instead of one message per turn. Stops
     // early if a command starts a turn or opens the interactive menu.
-    while ( !_pending.empty()) {
-        std::string next = _pending.front();
-        _pending.pop_front();
-        if ( !next.empty() && next[0] == '/' ) {
+    while ( true ) {
+        std::string next;
+        bool is_command = false;
+        {
+            std::lock_guard<std::mutex> lk(_mx);
+            if ( _pending.empty())
+                break;
+            next = _pending.front();
+            _pending.pop_front();
+            is_command = !next.empty() && next[0] == '/';
+            if ( !is_command ) {
+                while ( !_pending.empty() && ( _pending.front().empty() || _pending.front()[0] != '/' )) {
+                    next += "\n\n" + _pending.front();
+                    _pending.pop_front();
+                }
+            }
+        }
+        if ( is_command ) {
             run_command_line(next);
             if ( _turn_running || _in_settings )
                 return;
         } else {
-            std::string combined = next;
-            while ( !_pending.empty() && ( _pending.front().empty() || _pending.front()[0] != '/' )) {
-                combined += "\n\n" + _pending.front();
-                _pending.pop_front();
-            }
-            start_turn(combined, combined);
+            start_turn(next, next);
             return;
         }
     }
@@ -2002,6 +2048,7 @@ void InlineRepl::open_settings_menu() {
     _settings_rows.push_back({ "context", "context",
         first_word(cur.count("context") ? cur["context"] : "unlimited"), {} });
     _settings_rows.push_back({ "auto_compact", "compact", _config.auto_compact ? "on" : "off", { "off", "on" } });
+    _settings_rows.push_back({ "autoresume", "autoresume", _config.workflow_autoresume ? "on" : "off", { "off", "on" } });
     if ( _config.provider == "claude" )
         _settings_rows.push_back({ "advisor", "advisor", _config.advisor ? "on" : "off", { "off", "on" } });
     _settings_rows.push_back({ "multiline", "multiline", _config.multiline ? "on" : "off", { "off", "on" } });
@@ -2073,7 +2120,12 @@ void InlineRepl::close_settings_menu() {
     _in_settings = false;
     _settings_editing = false;
     // Anything queued behind the menu (while a turn ran) resumes now.
-    if ( !_pending.empty())
+    bool has_pending;
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        has_pending = !_pending.empty();
+    }
+    if ( has_pending )
         drain_pending();
     else
         draw_live();

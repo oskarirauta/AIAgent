@@ -61,6 +61,12 @@ public:
     // (one compact line per executed tool call).
     void notify_quiet(const std::string& line);
 
+    // Queue a synthetic prompt (workflow auto-resume). Thread-safe; it joins the
+    // SAME pending queue as user messages, so it runs through the normal turn
+    // machinery when the REPL is idle. Bounded: at most 2 auto prompts are
+    // accepted per real user message — returns false when dropped by the cap.
+    bool enqueue_prompt(const std::string& text);
+
     // Handler for slash commands (other than /exit and /quit), run locally on the
     // main thread; returns text to show as a system message.
     void set_command_callback(command_cb_t cb) { _command_cb = std::move(cb); }
@@ -237,8 +243,9 @@ private:
     int _settings_selection = 0;
     int _settings_menu_lines = 0;
     std::vector<SettingRow> _settings_rows;
-    std::deque<std::string> _pending;      // prompts queued while a turn is running
+    std::deque<std::string> _pending;      // prompts queued while a turn is running (guarded by _mx)
     void queue_command(const std::string& line); // /queue [drop <n|all>] — inspect/edit _pending
+    int _auto_since_user = 0;              // auto-resume chain guard (guarded by _mx)
     struct Notice { std::string text; bool bell; };
     std::queue<Notice> _notices;           // async notices (guarded by _mx)
     void drain_notices();                  // print queued notices above the live block
