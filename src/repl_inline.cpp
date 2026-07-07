@@ -2124,25 +2124,39 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         };
         if ( readers.count(base)) {
             std::string text = _command_cb ? _command_cb(trimmed) : "";
-            ListMenu m;
-            m.title = base.substr(1); // drop the leading '/'
+            std::vector<std::string> all;
             std::istringstream is(text);
             std::string ln;
             while ( std::getline(is, ln))
-                m.rows.push_back(ln);
-            // /workflows: Enter on a run drills into its steps. Parse the "#<id>".
-            if ( base == "/workflows" ) {
+                all.push_back(ln);
+
+            ListMenu m;
+            m.title = base.substr(1); // drop the leading '/'
+            if ( base == "/workflows" && trimmed == "/workflows" ) {
+                // Only actual run rows ("#<id> …") are selectable and drillable;
+                // the header/footer/blank chrome is dropped so the cursor can't
+                // land on it. Enter drills into the selected run's steps.
                 m.drill_cmd = "/workflows ";
-                for ( const auto& row : m.rows ) {
-                    std::string key;
+                for ( const auto& row : all ) {
                     size_t h = row.find('#');
-                    if ( h != std::string::npos ) {
-                        size_t i = h + 1;
-                        while ( i < row.size() && std::isdigit(static_cast<unsigned char>(row[i])))
-                            key += row[i++];
-                    }
+                    if ( h == std::string::npos ) continue;
+                    std::string key;
+                    size_t i = h + 1;
+                    while ( i < row.size() && std::isdigit(static_cast<unsigned char>(row[i])))
+                        key += row[i++];
+                    if ( key.empty()) continue;
+                    m.rows.push_back(common::trim_ws(row));
                     m.keys.push_back(key);
                 }
+            } else {
+                for ( const auto& row : all )
+                    if ( !common::trim_ws(row).empty())
+                        m.rows.push_back(row);
+            }
+            // Nothing selectable (e.g. no workflows yet) — just show the text.
+            if ( m.rows.empty()) {
+                render_command(trimmed, text);
+                return;
             }
             open_list_menu(std::move(m));
             return;
