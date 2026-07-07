@@ -569,7 +569,61 @@ std::string Repl::base_system_prompt() const {
     }
     if ( !project.empty())
         system += project;
+
+    // User-pinned notes: kept verbatim so they survive compaction.
+    if ( !_pins.empty()) {
+        system += "\n\n## Pinned context (keep these in mind; do not forget)\n\n";
+        for ( const auto& p : _pins )
+            system += "- " + p + "\n";
+    }
     return system;
+}
+
+std::string Repl::pin_command(const std::string& args) {
+    std::string text = common::trim_ws(args);
+    if ( text.empty()) {
+        // No text: pin the most recent assistant reply.
+        const auto& msgs = _conversation.messages();
+        for ( auto it = msgs.rbegin(); it != msgs.rend(); ++it )
+            if ( it->role == Role::ASSISTANT && !it->content.empty()) { text = it->content; break; }
+        if ( text.empty())
+            return "usage: /pin <text>   (or /pin with no text to pin the last reply)";
+    }
+    _pins.push_back(text);
+    _conversation.set_system(base_system_prompt());   // take effect immediately
+    std::string preview = text.substr(0, 70);
+    if ( text.size() > 70 ) preview += "…";
+    return "pinned #" + std::to_string(_pins.size()) + " (kept through /compact): " + preview;
+}
+
+std::string Repl::pins_command() const {
+    if ( _pins.empty())
+        return "no pinned notes — /pin <text> keeps a note in context through compaction";
+    std::string s = "pinned notes:\n";
+    for ( size_t i = 0; i < _pins.size(); ++i ) {
+        std::string p = _pins[i];
+        if ( p.size() > 200 ) p = p.substr(0, 200) + "…";
+        s += "\n  " + std::to_string(i + 1) + ". " + p;
+    }
+    s += "\n\n/unpin <n> to remove one";
+    return s;
+}
+
+std::string Repl::unpin_command(const std::string& args) {
+    std::string a = common::trim_ws(args);
+    if ( a == "all" ) {
+        size_t n = _pins.size();
+        _pins.clear();
+        _conversation.set_system(base_system_prompt());
+        return "removed " + std::to_string(n) + " pin(s)";
+    }
+    int n = 0;
+    try { n = std::stoi(a); } catch ( ... ) { return "usage: /unpin <n|all>  (see /pins)"; }
+    if ( n < 1 || n > static_cast<int>(_pins.size()))
+        return "no pin #" + a + " (see /pins)";
+    _pins.erase(_pins.begin() + ( n - 1 ));
+    _conversation.set_system(base_system_prompt());
+    return "removed pin #" + a + " (" + std::to_string(_pins.size()) + " left)";
 }
 
 std::string Repl::compact_history() {
@@ -946,6 +1000,7 @@ std::string Repl::handle_command(const std::string& line) {
                "  /retry                   re-run your last message\n"
                "  /undo                    remove the last exchange from history\n"
                "  /tasks                   show the agent's current todo list\n"
+               "  /pin [text]              keep a note in context through /compact (/pins, /unpin <n|all>)\n"
                "  /changes [diff|revert <path|all>]   files the agent changed this session\n"
                "  /export [file]           write the conversation to a Markdown file\n"
                "  /clear (/reset)          clear the conversation history\n"
@@ -1079,6 +1134,16 @@ std::string Repl::handle_command(const std::string& line) {
 
     if ( cmd == "/tasks" ) {
         return tasks_command();
+    }
+
+    if ( cmd == "/pin" ) {
+        return pin_command(args);
+    }
+    if ( cmd == "/pins" ) {
+        return pins_command();
+    }
+    if ( cmd == "/unpin" ) {
+        return unpin_command(args);
     }
 
     if ( cmd == "/changes" ) {

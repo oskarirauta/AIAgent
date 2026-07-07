@@ -41,6 +41,13 @@ private:
     // Rebuild the system prompt (config + current date + memories).
     std::string base_system_prompt() const;
 
+    // Pinned context: user-flagged notes kept verbatim in the system prompt, so
+    // they survive /compact and auto-compact (which rebuild the system prompt).
+    std::vector<std::string> _pins;
+    std::string pin_command(const std::string& args);   // /pin
+    std::string pins_command() const;                    // /pins
+    std::string unpin_command(const std::string& args);  // /unpin
+
     // Agent todo list (model-maintained via the update_tasks tool; /tasks shows it).
     struct Task { std::string title; std::string status; };
     std::vector<Task> _tasks;

@@ -90,6 +90,12 @@ each list is roughly the current priority order.
 - **Autocomplete**: Tab in the inline REPL completes a leading slash command or a
   file-path token — unique match completes (dirs get `/`, else a space), a shared
   longer prefix extends, and an ambiguous prefix lists the candidates.
+- **Context pin (`/pin`)**: `/pin <text>` (or `/pin` alone to pin the last reply)
+  keeps a note in the system prompt, so it stays in context every turn **and
+  survives `/compact` and auto-compact** verbatim (compaction rebuilds the system
+  prompt, which carries the pins). `/pins` lists them, `/unpin <n|all>` removes.
+  Session-scoped. For "don't forget this decision / constraint" that must outlast
+  summarisation.
 - **Word-boundary wrapping in multi-line input**: the multi-line prompt now wraps
   at spaces (like the transcript) instead of hard-breaking mid-word at the column
   limit; a single over-long word (URL/token) still hard-breaks. Byte ranges stay
@@ -187,8 +193,6 @@ Roughly in priority order for real coding use. Kept only what is genuinely usefu
 
 - **Config-extensible danger/safe command lists**: let a project add its own
   safe/danger rules instead of the hard-coded lists only.
-- **Context pin**: keep flagged messages (key decisions, code facts) verbatim
-  through `/compact` and auto-compact instead of summarising everything. Medium.
 - **`/workflows` enhancements**: parallel steps, push notifications on completion,
   and cancel/retry of a run.
 - **UI polish**: settable paste thresholds in `/settings`, interactive paste-block
