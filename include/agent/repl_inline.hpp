@@ -61,6 +61,10 @@ public:
     // (one compact line per executed tool call).
     void notify_quiet(const std::string& line);
 
+    // A tool-execution notice: notify_quiet plus a per-turn counter for the
+    // end-of-turn digest. Thread-safe (parallel tool batches).
+    void notify_tool(const std::string& line);
+
     // Queue a synthetic prompt (workflow auto-resume). Thread-safe; it joins the
     // SAME pending queue as user messages, so it runs through the normal turn
     // machinery when the REPL is idle. Bounded: at most 2 auto prompts are
@@ -261,6 +265,8 @@ private:
     int _spin = 0;
     int _budget_notified = 0; // highest budget threshold already warned (0 / 80 / 100)
     std::chrono::steady_clock::time_point _turn_start;
+    std::atomic<int> _turn_tool_count{ 0 }; // tools run this turn (for the digest)
+    bool _confirm_belled = false;           // a blocking-confirm bell already rang this turn
 };
 
 } // namespace agent

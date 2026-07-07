@@ -105,6 +105,10 @@ each list is roughly the current priority order.
   prompt, which carries the pins). `/pins` lists them, `/unpin <n|all>` removes.
   Session-scoped. For "don't forget this decision / constraint" that must outlast
   summarisation.
+- **Attention cues**: when a confirm dialog appears after the turn has already
+  run unattended (≥4s), the terminal bell rings once — the agent is blocked on
+  you. And a turn that ran ≥8s ends with a one-line digest ("● done in Ns · N
+  tool calls") plus a bell, so a long unattended turn announces its completion.
 - **Per-turn tool-call budget**: `tool_call_limit` (default 50; config +
   /settings "tool budget"; 0 = unlimited) caps how many tools a single turn runs
   before asking to continue — a runaway-loop guard so `/tools auto` can be left
@@ -229,8 +233,6 @@ Batch 4 — remaining:
 - **`.gitignore`-aware traversal** (90% semantics) for the search tools.
 - **UI polish**: settable paste thresholds in `/settings`, `/paste <n>` to
   expand a collapsed paste block.
-- **Attention cues**: bell when a confirm blocks an unattended turn; one-line
-  digest after long turns.
 - **`/plan`** (read-only planning mode), **more providers** (enough, not all).
 
 ## Considered / dropped

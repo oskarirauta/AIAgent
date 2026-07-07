@@ -654,6 +654,11 @@ void InlineRepl::notify_quiet(const std::string& line) {
     _notices.push({ line, false });
 }
 
+void InlineRepl::notify_tool(const std::string& line) {
+    _turn_tool_count.fetch_add(1, std::memory_order_relaxed);
+    notify_quiet(line);
+}
+
 bool InlineRepl::enqueue_prompt(const std::string& text) {
     std::lock_guard<std::mutex> lk(_mx);
     if ( _auto_since_user >= 2 )
@@ -1503,6 +1508,8 @@ void InlineRepl::start_turn(const std::string& line, const std::string& display)
     _turn_running = true;
     _spin = 0;
     _turn_start = std::chrono::steady_clock::now();
+    _turn_tool_count.store(0, std::memory_order_relaxed);
+    _confirm_belled = false;
 
     agent::turn_active.store(true, std::memory_order_relaxed);
     agent::turn_abort.store(false, std::memory_order_relaxed);
@@ -1675,6 +1682,18 @@ void InlineRepl::finish_turn() {
     }
     _turn_running = false;
     _in_reply = false;
+
+    // Attention cue: a turn that ran long enough that you may have looked away
+    // gets a one-line digest with a bell — what happened while you were gone.
+    auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - _turn_start).count();
+    int tools = _turn_tool_count.load(std::memory_order_relaxed);
+    if ( secs >= 8 ) {
+        std::string d = "done in " + std::to_string(secs) + "s";
+        if ( tools > 0 )
+            d += " · " + std::to_string(tools) + ( tools == 1 ? " tool call" : " tool calls" );
+        wr("\n" + _theme.accent + "● " + d + Theme::reset + "\a\n");
+    }
 
     // Warn once when the session crosses 80% / 100% of a configured cost/token budget.
     std::string warn = budget_warning();
@@ -1876,6 +1895,15 @@ void InlineRepl::render_command(const std::string& cmd, const std::string& resul
 
 void InlineRepl::render_confirm_dialog(const tools::ConfirmRequest& req) {
     erase_live();
+
+    // Attention cue: if the turn has already run unattended for a few seconds,
+    // ring the bell once — the agent is now blocked waiting on you.
+    auto ran = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - _turn_start).count();
+    if ( ran >= 4 && !_confirm_belled ) {
+        wr("\a");
+        _confirm_belled = true;
+    }
 
     // Discard anything typed before the prompt appeared so type-ahead can never
     // select an option — the whole point is that a stray keypress cannot approve.

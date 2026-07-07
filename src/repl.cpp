@@ -1930,7 +1930,7 @@ void Repl::run_tty() {
     }
     inline_repl.set_command_callback([this](const std::string& cmd) { return handle_command(cmd); });
     set_progress_callback([&inline_repl](const std::string& s) { inline_repl.set_activity(s); });
-    set_tool_notice_callback([&inline_repl](const std::string& s) { inline_repl.notify_quiet(s); });
+    set_tool_notice_callback([&inline_repl](const std::string& s) { inline_repl.notify_tool(s); });
 
     // Workflow completion notice: printed above the live block with a bell, so a
     // long-running background run announces itself even while you're idle. With
