@@ -1331,6 +1331,13 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             _conversation.add_tool_result(tc.id, tc.name, results[i]);
         }
 
+        // Interrupted (e.g. Ctrl-C'd a long run_command)? Stop the turn but KEEP
+        // the tool results — the command's partial output is already captured, so
+        // it stays in context and a follow-up message can reason over it, instead
+        // of undoing the whole exchange and throwing that log away.
+        if ( abort_flag && abort_flag->load(std::memory_order_relaxed))
+            return "(interrupted — output so far is kept; send a message to continue)";
+
         // Per-turn tool-call budget: a runaway-loop guard so `/tools auto` can be
         // left unattended. After every `tool_call_limit` calls, ask whether to
         // keep going; a stop ends the turn (the work so far is kept, and a new
