@@ -2788,6 +2788,16 @@ void InlineRepl::open_list_detail(const std::string& title, const std::string& t
     draw_list_menu(false);
 }
 
+int InlineRepl::menu_view_rows() const {
+    // Cap the panel height so it sits at the bottom with the conversation still
+    // visible above (the "overlay" feel), rather than a near-full-screen list that
+    // scrolls the transcript out of view. Never exceed the space actually available.
+    constexpr int CAP = 15;
+    int avail = term_rows() - 3; // title + a little breathing room
+    int vh = avail < CAP ? avail : CAP;
+    return vh < 3 ? 3 : vh;
+}
+
 void InlineRepl::draw_list_menu(bool redraw) {
     std::string out;
     if ( redraw && _list_lines > 0 )
@@ -2796,8 +2806,7 @@ void InlineRepl::draw_list_menu(bool redraw) {
     int lines = 0;
     int cols = term_cols() - 3;
     if ( cols < 8 ) cols = 8;
-    int vh = term_rows() - 3; // reserve title + a little breathing room
-    if ( vh < 3 ) vh = 3;
+    int vh = menu_view_rows();
 
     if ( _list_detail ) {
         out += _theme.command + "  " + _list.title + Theme::reset + "   " +
@@ -2853,8 +2862,7 @@ void InlineRepl::draw_list_menu(bool redraw) {
 
 void InlineRepl::handle_list_key(int c) {
     int n = static_cast<int>(_list.rows.size());
-    int vh = term_rows() - 3;
-    if ( vh < 3 ) vh = 3;
+    int vh = menu_view_rows();
 
     if ( c == 0x1b ) {
         fd_set fds;

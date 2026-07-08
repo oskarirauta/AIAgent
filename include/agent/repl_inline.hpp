@@ -120,6 +120,7 @@ private:
     void open_list_menu(ListMenu menu);
     void open_list_detail(const std::string& title, const std::string& text);
     void draw_list_menu(bool redraw);
+    int menu_view_rows() const; // visible rows in a list/reader panel (capped so the transcript stays visible above)
     void handle_list_key(int c);
     void close_list_menu();
     bool in_list_menu() const { return _in_list; }
