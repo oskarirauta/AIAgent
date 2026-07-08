@@ -2080,6 +2080,22 @@ static void test_workflows_menu() {
     check(!repl.in_list_menu(), "esc at the runs level closes the menu");
 }
 
+static void test_themes() {
+    std::cout << "colour themes" << std::endl;
+    check(agent::theme_by_name("cool").name == "cool", "cool theme resolves by name");
+    check(agent::theme_by_name("rose").name == "rose", "rose theme resolves by name");
+    check(agent::theme_by_name("nope").name == "dark", "unknown theme falls back to dark");
+    for ( const char* n : { "dark", "light", "warm", "cool", "rose" }) {
+        agent::Theme t = agent::theme_by_name(n);
+        bool all_set = !t.user.empty() && !t.ai.empty() && !t.command.empty() &&
+                       !t.dim.empty() && !t.accent.empty() && !t.danger.empty() &&
+                       !t.warn.empty() && !t.kw.empty() && !t.str.empty() &&
+                       !t.num.empty() && !t.type.empty();
+        check(all_set, std::string(n) + " theme sets every role");
+        check(t.user != t.ai, std::string(n) + " theme distinguishes the two speakers");
+    }
+}
+
 static void test_grep_robustness() {
     std::cout << "grep robustness" << std::endl;
     agent::tools::Grep g;
@@ -2627,6 +2643,7 @@ int main() {
     test_run_command_options();
     test_edit_file();
     test_workflows_menu();
+    test_themes();
     test_grep_robustness();
     test_token_usage();
     test_trust_grants();

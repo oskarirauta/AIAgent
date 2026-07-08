@@ -309,7 +309,7 @@ Slash commands run locally (never sent to the model):
 | `/model [name]` | Show or change the active model. |
 | `/tools <confirm\|auto\|insecure>` | Change the tool confirmation mode. |
 | `/thinking <on\|off\|low\|medium\|high\|xhigh\|max>` | Set the thinking level (alias `/effort`; applied by Kimi). |
-| `/theme <dark\|light\|warm>` | Switch the colour theme. |
+| `/theme <dark\|light\|warm\|cool\|rose>` | Switch the colour theme. |
 | `/memories [name]` | List this provider's memory files, or view one. |
 | `/context` | Visual context usage: a composition bar plus system / conversation / memory token estimates and the limit. |
 | `/history` | List the messages in the current context. |
@@ -349,11 +349,12 @@ want them relaxed.
 
 ### Themes
 
-Three eye-comfort colour themes tuned with muted 256-colour tones (never setting
+Five eye-comfort colour themes tuned with muted 256-colour tones (never setting
 the background, so the terminal's own background is respected): `dark` (default,
-for dark terminals), `light` (for light terminals), and `warm` (low-blue, easier
-on tired eyes over long evening sessions). Set with `theme: <name>` in the config
-file or switch live with `/theme`.
+for dark terminals), `light` (for light terminals), `warm` (low-blue, easier on
+tired eyes over long evening sessions), `cool` (blues and greens), and `rose`
+(muted mauves and dusty pinks). Set with `theme: <name>` in the config file or
+switch live with `/theme`.
 
 ## Security
 

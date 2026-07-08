@@ -27,7 +27,7 @@ public:
     std::string system_prompt = "You are a helpful Linux CLI assistant.";
     std::string home_dir;
     std::string output_format = "text"; // single-prompt (-P) output: text | json
-    std::string theme = "dark"; // colour theme: dark | light | warm
+    std::string theme = "dark"; // colour theme: dark | light | warm | cool | rose
     bool multiline = false;     // multi-line prompt: show long input wrapped across lines
     std::string thinking;       // thinking/effort level (empty = provider default); applied by Kimi
     bool thinking_stream = true; // stream the model's reasoning live into the transcript

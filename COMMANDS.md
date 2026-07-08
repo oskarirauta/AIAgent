@@ -151,9 +151,9 @@ Shows the rate-limit and quota headers the provider returned on the last request
 
 Shows the exact JSON request last sent to the provider and the response received (assembled from the stream when streaming), in a scrollable view — for debugging prompts, tools and provider quirks. `/raw request` or `/raw response` shows just one. Auth headers are not part of the body shown.
 
-### `/theme <dark|light|warm>`
+### `/theme <dark|light|warm|cool|rose>`
 
-Changes the terminal colour theme. Persisted across sessions. Never sets the terminal background.
+Changes the terminal colour theme (dark, light, warm, cool, rose). Persisted across sessions. Never sets the terminal background.
 
 ### `/help [command]`
 

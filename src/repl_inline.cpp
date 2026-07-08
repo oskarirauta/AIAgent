@@ -146,9 +146,9 @@ std::string InlineRepl::apply_theme_command(const std::string& line) {
         iss >> arg;       // name
     }
     if ( arg.empty())
-        return "theme: " + _theme.name + "  (available: dark, light, warm)";
-    if ( arg != "dark" && arg != "light" && arg != "warm" )
-        return "unknown theme: " + arg + "  (available: dark, light, warm)";
+        return "theme: " + _theme.name + "  (available: dark, light, warm, cool, rose)";
+    if ( arg != "dark" && arg != "light" && arg != "warm" && arg != "cool" && arg != "rose" )
+        return "unknown theme: " + arg + "  (available: dark, light, warm, cool, rose)";
     _theme = theme_by_name(arg);
     _config.theme = _theme.name; // keep config in sync so the choice is persisted
     return "theme: " + _theme.name;
@@ -2554,7 +2554,7 @@ void InlineRepl::open_settings_menu() {
         { "off", "on" });
 
     add("theme", "theme", _theme.name, UI,
-        "colour theme (never sets the terminal background)", { "dark", "light", "warm" });
+        "colour theme (never sets the terminal background)", { "dark", "light", "warm", "cool", "rose" });
     add("bell", "bell", _config.bell, UI,
         "bell: always · attention (workflow/tool/?) · question · ask_user (model asks you) · never",
         { "never", "ask_user", "question", "attention", "always" });

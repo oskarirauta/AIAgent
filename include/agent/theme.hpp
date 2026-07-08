@@ -88,9 +88,50 @@ inline Theme theme_warm() {
     return t;
 }
 
+// "cool" — a dark-terminal palette built from blues and greens (the coolest end of
+// the spectrum). Blue speaker + aquamarine assistant, teal-gray chrome, aqua accent;
+// warnings stay amber so they still stand out against the cool tones.
+inline Theme theme_cool() {
+    Theme t;
+    t.name    = "cool";
+    t.user    = "\033[38;5;75m";  // sky blue
+    t.ai      = "\033[38;5;79m";  // aquamarine
+    t.command = "\033[38;5;68m";  // steel blue
+    t.dim     = "\033[38;5;66m";  // slate teal-gray
+    t.accent  = "\033[38;5;80m";  // bright aqua
+    t.danger  = "\033[38;5;174m"; // muted salmon (kept red-ish for recognisability)
+    t.warn    = "\033[38;5;179m"; // amber (stands out against the blues)
+    t.kw      = "\033[38;5;69m";  // periwinkle
+    t.str     = "\033[38;5;72m";  // sea green
+    t.num     = "\033[38;5;80m";  // aqua
+    t.type    = "\033[38;5;111m"; // light blue
+    return t;
+}
+
+// "rose" — a dark-terminal palette of muted mauves, dusty pinks and orchid, distinct
+// from the green/amber/blue themes. Green strings keep code readable.
+inline Theme theme_rose() {
+    Theme t;
+    t.name    = "rose";
+    t.user    = "\033[38;5;175m"; // dusty rose
+    t.ai      = "\033[38;5;139m"; // mauve
+    t.command = "\033[38;5;96m";  // muted plum
+    t.dim     = "\033[38;5;103m"; // lavender-gray
+    t.accent  = "\033[38;5;176m"; // orchid
+    t.danger  = "\033[38;5;167m"; // soft red
+    t.warn    = "\033[38;5;179m"; // amber
+    t.kw      = "\033[38;5;133m"; // magenta-purple
+    t.str     = "\033[38;5;108m"; // green (readable strings)
+    t.num     = "\033[38;5;173m"; // coral
+    t.type    = "\033[38;5;175m"; // rose
+    return t;
+}
+
 inline Theme theme_by_name(const std::string& name) {
     if ( name == "light" ) return theme_light();
     if ( name == "warm" )  return theme_warm();
+    if ( name == "cool" )  return theme_cool();
+    if ( name == "rose" )  return theme_rose();
     return theme_dark(); // default
 }
 
