@@ -2256,6 +2256,7 @@ void Repl::run_tty() {
         });
     });
     inline_repl.set_command_callback([this](const std::string& cmd) { return handle_command(cmd); });
+    inline_repl.set_workflows_provider([this] { return _workflows.snapshot(); });
     set_progress_callback([&inline_repl](const std::string& s) { inline_repl.set_activity(s); });
     set_tool_notice_callback([&inline_repl](const std::string& s) { inline_repl.notify_tool(s); });
 

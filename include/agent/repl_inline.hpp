@@ -16,6 +16,7 @@
 #include "agent/tools/registry.hpp"
 #include "agent/token_stats.hpp"
 #include "agent/theme.hpp"
+#include "agent/workflow.hpp"
 
 namespace agent {
 
@@ -84,6 +85,14 @@ public:
     // Handler for slash commands (other than /exit and /quit), run locally on the
     // main thread; returns text to show as a system message.
     void set_command_callback(command_cb_t cb) { _command_cb = std::move(cb); }
+    void set_workflows_provider(std::function<std::vector<WorkflowRun>()> fn) { _wf_provider = std::move(fn); }
+    // Multi-level workflows drill-down: runs → steps → one step's content. Public so
+    // the navigation can be driven directly (dispatch + tests); run_id >= 0 opens
+    // straight into that run's steps.
+    void open_workflows_menu(int run_id = -1);
+    void workflow_enter(); // runs → steps → content
+    void workflow_up();    // content → steps → runs → close
+    bool in_list_menu() const { return _in_list; }
     // Run once after the terminal is in raw mode but before the input loop — the
     // right moment for a startup confirm (e.g. approving project-local MCP).
     void set_on_ready(std::function<void()> cb) { _on_ready = std::move(cb); }
@@ -116,14 +125,17 @@ private:
         struct Action { char key; std::string cmd; std::string label; };
         std::vector<Action> actions;     // each: `key` runs `cmd + keys[sel]`
         std::string reopen_cmd;          // re-run to refresh the list after an action
+        std::string hint;                // overrides the computed footer hint when set
     };
     void open_list_menu(ListMenu menu);
     void open_list_detail(const std::string& title, const std::string& text);
     void draw_list_menu(bool redraw);
     int menu_view_rows() const; // visible rows in a list/reader panel (capped so the transcript stays visible above)
+
+    void build_workflow_level(bool redraw);    // (re)build _list for the current level from a live snapshot
+    void handle_workflow_key(int c);
     void handle_list_key(int c);
     void close_list_menu();
-    bool in_list_menu() const { return _in_list; }
 
     // Live block (input + status) at the bottom of the screen.
     void draw_live();
@@ -323,6 +335,11 @@ private:
     bool _list_detail = false;         // showing a drilled-in row's detail
     std::vector<std::string> _list_detail_rows;
     int _list_detail_top = 0;
+    // Workflows drill-down state (the list menu is in workflow mode when _wf_active).
+    std::function<std::vector<WorkflowRun>()> _wf_provider;
+    bool _wf_active = false;            // the open list menu is the workflow drill-down
+    int _wf_level = 0;                  // 0 = runs, 1 = steps (content uses _list_detail)
+    int _wf_run_id = -1;               // the run whose steps are shown at level 1
 
     bool _in_settings = false;
     bool _settings_editing = false;    // typing a free-text value into the selected row

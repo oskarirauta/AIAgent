@@ -2303,15 +2303,29 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         return;
     }
 
+    // Workflows open the multi-level drill-down menu (runs → steps → step content),
+    // built from the live snapshot. `/workflows <id>` deep-links into that run's
+    // steps; cancel/retry run the text command and print the result.
+    if ( trimmed == "/workflows" ) { open_workflows_menu(); return; }
+    if ( trimmed.rfind("/workflows ", 0) == 0 ) {
+        std::string arg = common::trim_ws(trimmed.substr(11));
+        bool is_num = !arg.empty();
+        for ( char ch : arg ) if ( !std::isdigit(static_cast<unsigned char>(ch))) { is_num = false; break; }
+        if ( is_num ) { open_workflows_menu(std::stoi(arg)); return; }
+        std::string text = _command_cb ? _command_cb(trimmed) : "";
+        render_command(trimmed, text);
+        return;
+    }
+
     // Reader commands open a scrollable, dismissable list menu instead of dumping
-    // a long block into the transcript (a big /workflows or /history used to flood
-    // it). Works for the bare list and the detail form (e.g. /workflows 3).
+    // a long block into the transcript (a big /history used to flood it). Works for
+    // the bare list and the detail form (e.g. /memories foo).
     {
         std::string base = trimmed;
         size_t sp = base.find_first_of(" \t");
         if ( sp != std::string::npos ) base = base.substr(0, sp);
         static const std::set<std::string> readers = {
-            "/workflows", "/history", "/memories", "/tasks", "/skills"
+            "/history", "/memories", "/tasks", "/skills"
         };
         if ( readers.count(base)) {
             std::string text = _command_cb ? _command_cb(trimmed) : "";
@@ -2329,31 +2343,10 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
 
             ListMenu m;
             m.title = base.substr(1); // drop the leading '/'
-            if ( base == "/workflows" && trimmed == "/workflows" ) {
-                // Only actual run rows ("#<id> …") are selectable and drillable;
-                // the header/footer/blank chrome is dropped so the cursor can't
-                // land on it. Enter drills into the selected run's steps.
-                m.drill_cmd = "/workflows ";
-                m.actions.push_back({ 'c', "/workflows cancel ", "cancel" });
-                m.actions.push_back({ 'r', "/workflows retry ", "retry" });
-                m.reopen_cmd = "/workflows";
-                for ( const auto& row : all ) {
-                    size_t h = row.find('#');
-                    if ( h == std::string::npos ) continue;
-                    std::string key;
-                    size_t i = h + 1;
-                    while ( i < row.size() && std::isdigit(static_cast<unsigned char>(row[i])))
-                        key += row[i++];
-                    if ( key.empty()) continue;
-                    m.rows.push_back(common::trim_ws(row));
-                    m.keys.push_back(key);
-                }
-            } else {
-                for ( const auto& row : all )
-                    if ( !common::trim_ws(row).empty())
-                        m.rows.push_back(row);
-            }
-            // Nothing selectable (e.g. no workflows yet) — just show the text.
+            for ( const auto& row : all )
+                if ( !common::trim_ws(row).empty())
+                    m.rows.push_back(row);
+            // Nothing selectable — just show the text.
             if ( m.rows.empty()) {
                 render_command(trimmed, text);
                 return;
@@ -2826,11 +2819,14 @@ void InlineRepl::draw_list_menu(bool redraw) {
             lines++;
         }
     } else {
-        std::string hint = "↑↓ move · esc close";
-        if ( !_list.select_cmd.empty()) hint += " · ⏎ select";
-        if ( !_list.drill_cmd.empty() || !_list.details.empty()) hint += " · ⏎ open";
-        for ( const auto& a : _list.actions )
-            hint += std::string(" · ") + a.key + " " + a.label;
+        std::string hint = _list.hint;
+        if ( hint.empty()) {
+            hint = "↑↓ move · esc close";
+            if ( !_list.select_cmd.empty()) hint += " · ⏎ select";
+            if ( !_list.drill_cmd.empty() || !_list.details.empty()) hint += " · ⏎ open";
+            for ( const auto& a : _list.actions )
+                hint += std::string(" · ") + a.key + " " + a.label;
+        }
         out += _theme.command + "  " + _list.title + Theme::reset + "   " +
                _theme.dim + hint + Theme::reset + "\r\n";
         lines++;
@@ -2861,6 +2857,7 @@ void InlineRepl::draw_list_menu(bool redraw) {
 }
 
 void InlineRepl::handle_list_key(int c) {
+    if ( _wf_active ) { handle_workflow_key(c); return; }
     int n = static_cast<int>(_list.rows.size());
     int vh = menu_view_rows();
 
@@ -2949,6 +2946,174 @@ void InlineRepl::handle_list_key(int c) {
     }
 }
 
+namespace {
+// Flatten a possibly multi-line string to one line (whitespace collapsed) and clip.
+std::string wf_flat(const std::string& s, size_t max) {
+    std::string o;
+    bool sp = true; // drop leading whitespace
+    for ( char c : s ) {
+        if ( c == '\n' || c == '\t' || c == '\r' || c == ' ' ) {
+            if ( !sp ) o += ' ';
+            sp = true;
+        } else { o += c; sp = false; }
+    }
+    while ( !o.empty() && o.back() == ' ' ) o.pop_back();
+    if ( o.size() > max ) o = o.substr(0, max) + "…";
+    return o;
+}
+std::string wf_glyph(const std::string& st) {
+    if ( st == "done" ) return "✔";
+    if ( st == "error" ) return "✗";
+    if ( st == "running" ) return "▸";
+    if ( st == "cancelled" ) return "∅";
+    return "○"; // pending
+}
+} // namespace
+
+void InlineRepl::open_workflows_menu(int run_id) {
+    erase_live();
+    tcflush(STDIN_FILENO, TCIFLUSH);
+    wr("\033[?25l"); // hide the cursor
+    _in_list = true;
+    _list_detail = false;
+    _wf_active = true;
+    _list_lines = 0;
+    _list_sel = 0;
+    _list_top = 0;
+    if ( run_id >= 0 ) { _wf_level = 1; _wf_run_id = run_id; }
+    else { _wf_level = 0; _wf_run_id = -1; }
+    build_workflow_level(false);
+}
+
+void InlineRepl::build_workflow_level(bool redraw) {
+    std::vector<WorkflowRun> runs = _wf_provider ? _wf_provider() : std::vector<WorkflowRun>{};
+    ListMenu m;
+    if ( _wf_level == 1 ) {
+        const WorkflowRun* run = nullptr;
+        for ( const auto& r : runs ) if ( r.id == _wf_run_id ) { run = &r; break; }
+        if ( !run ) { _wf_level = 0; _wf_run_id = -1; } // the run went away — fall back to the list
+        else {
+            m.title = "workflows › #" + std::to_string(run->id) + " " + wf_flat(run->name, 40);
+            m.hint = "↑↓ move · ⏎ open step · esc back";
+            for ( size_t i = 0; i < run->steps.size(); ++i ) {
+                const auto& st = run->steps[i];
+                m.rows.push_back(wf_glyph(st.status) + " " + wf_flat(st.task, 56) + "  [" + st.status + "]");
+                m.keys.push_back(std::to_string(i));
+            }
+        }
+    }
+    if ( _wf_level == 0 ) {
+        m.title = "workflows";
+        m.hint = "↑↓ move · ⏎ open · c cancel · r retry · esc close";
+        for ( const auto& r : runs ) {
+            int done = 0;
+            for ( const auto& st : r.steps )
+                if ( st.status == "done" || st.status == "error" ) ++done;
+            size_t total = r.steps.size();
+            m.rows.push_back(wf_glyph(r.status) + " " + wf_flat(r.name, 40) + "  [" +
+                             std::to_string(total) + ( total == 1 ? " step]" : " steps]" ) + "  " +
+                             std::to_string(done) + "/" + std::to_string(total) +
+                             ( r.parallel ? "  ∥" : "" ));
+            m.keys.push_back(std::to_string(r.id));
+        }
+        m.actions.push_back({ 'c', "", "cancel" });
+        m.actions.push_back({ 'r', "", "retry" });
+    }
+    _list = std::move(m);
+    int rows = static_cast<int>(_list.rows.size());
+    if ( _list_sel >= rows ) _list_sel = rows > 0 ? rows - 1 : 0;
+    if ( _list_sel < 0 ) _list_sel = 0;
+    draw_list_menu(redraw);
+}
+
+void InlineRepl::workflow_enter() {
+    if ( _wf_level == 0 ) {
+        if ( _list_sel >= static_cast<int>(_list.keys.size()) || _list.keys[_list_sel].empty())
+            return;
+        try { _wf_run_id = std::stoi(_list.keys[_list_sel]); } catch ( ... ) { return; }
+        _wf_level = 1;
+        _list_sel = 0;
+        _list_top = 0;
+        build_workflow_level(true);
+        return;
+    }
+    // Level 1: open the selected step's content in the scrollable detail view.
+    std::vector<WorkflowRun> runs = _wf_provider ? _wf_provider() : std::vector<WorkflowRun>{};
+    const WorkflowRun* run = nullptr;
+    for ( const auto& r : runs ) if ( r.id == _wf_run_id ) { run = &r; break; }
+    if ( !run || _list_sel >= static_cast<int>(run->steps.size()))
+        return;
+    const auto& st = run->steps[_list_sel];
+    std::string body = "task:\n" + st.task + "\n\nstatus: " + st.status + "\n\n" +
+                       ( st.result.empty() ? "(no output yet)" : st.result );
+    _list.title = "workflows › #" + std::to_string(run->id) + " › step " + std::to_string(_list_sel + 1);
+    _list_detail_rows = wrap_to_rows(body, term_cols() - 4);
+    _list_detail = true;
+    _list_detail_top = 0;
+    draw_list_menu(true);
+}
+
+void InlineRepl::workflow_up() {
+    if ( _list_detail ) { _list_detail = false; build_workflow_level(true); return; } // content → steps
+    if ( _wf_level == 1 ) {                                                            // steps → runs
+        int back = _wf_run_id;
+        _wf_level = 0;
+        _wf_run_id = -1;
+        _list_top = 0;
+        std::vector<WorkflowRun> runs = _wf_provider ? _wf_provider() : std::vector<WorkflowRun>{};
+        _list_sel = 0;
+        for ( size_t i = 0; i < runs.size(); ++i )
+            if ( runs[i].id == back ) { _list_sel = static_cast<int>(i); break; }
+        build_workflow_level(true);
+        return;
+    }
+    close_list_menu(); // runs → close (clears _wf_active)
+}
+
+void InlineRepl::handle_workflow_key(int c) {
+    int n = static_cast<int>(_list.rows.size());
+    int vh = menu_view_rows();
+    if ( c == 0x1b ) {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(STDIN_FILENO, &fds);
+        struct timeval tv { 0, 40 * 1000 };
+        if ( select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0 ) {
+            int b1 = read_byte();
+            if ( b1 == '[' || b1 == 'O' ) {
+                int b2 = read_byte();
+                if ( b2 == '5' || b2 == '6' ) read_byte(); // consume '~' of PgUp/PgDn
+                if ( _list_detail ) {
+                    if ( b2 == 'A' ) { _list_detail_top--; draw_list_menu(true); }
+                    else if ( b2 == 'B' ) { _list_detail_top++; draw_list_menu(true); }
+                    else if ( b2 == '5' ) { _list_detail_top -= vh; draw_list_menu(true); }
+                    else if ( b2 == '6' ) { _list_detail_top += vh; draw_list_menu(true); }
+                } else if ( n > 0 ) {
+                    if ( b2 == 'A' ) { _list_sel = std::max(0, _list_sel - 1); draw_list_menu(true); }
+                    else if ( b2 == 'B' ) { _list_sel = std::min(n - 1, _list_sel + 1); draw_list_menu(true); }
+                    else if ( b2 == '5' ) { _list_sel = std::max(0, _list_sel - vh); draw_list_menu(true); }
+                    else if ( b2 == '6' ) { _list_sel = std::min(n - 1, _list_sel + vh); draw_list_menu(true); }
+                }
+            }
+            return;
+        }
+        workflow_up(); // bare Esc goes up a level (closes at the top)
+        return;
+    }
+    if ( _list_detail )
+        return; // only scroll / esc in the content view
+    if ( c == '\r' || c == '\n' ) { workflow_enter(); return; }
+    // Actions at the runs level: c cancel, r retry (routed through the text command).
+    if ( _wf_level == 0 && ( c == 'c' || c == 'r' )) {
+        if ( _list_sel < static_cast<int>(_list.keys.size()) && !_list.keys[_list_sel].empty() && _command_cb ) {
+            std::string id = _list.keys[_list_sel];
+            _command_cb(std::string("/workflows ") + ( c == 'c' ? "cancel " : "retry " ) + id);
+            build_workflow_level(true); // refresh in place
+        }
+        return;
+    }
+}
+
 void InlineRepl::close_list_menu() {
     if ( _list_lines > 0 )
         wr("\r\033[" + std::to_string(_list_lines) + "A\033[J");
@@ -2956,6 +3121,7 @@ void InlineRepl::close_list_menu() {
     _list_lines = 0;
     _in_list = false;
     _list_detail = false;
+    _wf_active = false;
     bool has_pending;
     {
         std::lock_guard<std::mutex> lk(_mx);

@@ -5,6 +5,8 @@
 #include <thread>
 #include <chrono>
 #include <cstdlib>
+#include <unistd.h>
+#include <fcntl.h>
 
 #include "agent/signal_handler.hpp"
 
@@ -2021,6 +2023,63 @@ static void test_edit_file() {
     std::filesystem::remove(path);
 }
 
+static void test_workflows_menu() {
+    std::cout << "workflows drill-down menu (runs → steps → content)" << std::endl;
+    agent::Config cfg;
+    agent::Conversation conv;
+    agent::TokenStats stats;
+    agent::InlineRepl repl(nullptr, cfg, conv, stats);
+    repl.set_workflows_provider([]() {
+        std::vector<agent::WorkflowRun> runs;
+        agent::WorkflowRun r;
+        r.id = 7; r.name = "build stuff"; r.status = "running"; r.parallel = true;
+        agent::WorkflowStep s1; s1.task = "compile the code"; s1.status = "done"; s1.result = "compiled OK";
+        agent::WorkflowStep s2; s2.task = "run the tests"; s2.status = "running";
+        r.steps = { s1, s2 };
+        runs.push_back(r);
+        return runs;
+    });
+
+    // Capture everything the menu writes to the terminal (STDOUT_FILENO) so the
+    // rendered rows can be asserted. Theme codes surround whole rows, so the text
+    // substrings survive intact — no need to strip escapes.
+    auto capture = [](std::function<void()> fn) {
+        fflush(stdout);
+        int saved = dup(STDOUT_FILENO);
+        int pfd[2];
+        if ( pipe(pfd) != 0 ) return std::string();
+        dup2(pfd[1], STDOUT_FILENO); close(pfd[1]);
+        fn();
+        dup2(saved, STDOUT_FILENO); close(saved);
+        int fl = fcntl(pfd[0], F_GETFL);
+        fcntl(pfd[0], F_SETFL, fl | O_NONBLOCK);
+        std::string out; char buf[16384]; ssize_t n;
+        while (( n = read(pfd[0], buf, sizeof(buf))) > 0 ) out.append(buf, static_cast<size_t>(n));
+        close(pfd[0]);
+        return out;
+    };
+
+    std::string lvl0 = capture([&]{ repl.open_workflows_menu(); });
+    check(lvl0.find("build stuff") != std::string::npos, "runs level shows the run name");
+    check(lvl0.find("[2 steps]") != std::string::npos, "runs level shows the step-count badge");
+    check(lvl0.find("1/2") != std::string::npos, "runs level shows done/total");
+    check(lvl0.find("\xe2\x96\xb8") != std::string::npos, "runs level shows the running glyph ▸");
+
+    std::string lvl1 = capture([&]{ repl.workflow_enter(); }); // drill into steps
+    check(lvl1.find("compile the code") != std::string::npos, "steps level lists the first step");
+    check(lvl1.find("run the tests") != std::string::npos, "steps level lists the second step");
+    check(lvl1.find("build stuff") != std::string::npos, "steps level breadcrumb names the run");
+
+    std::string lvl2 = capture([&]{ repl.workflow_enter(); }); // open step 1's content
+    check(lvl2.find("compiled OK") != std::string::npos, "step content shows the result");
+
+    capture([&]{ repl.workflow_up(); }); // content → steps
+    capture([&]{ repl.workflow_up(); }); // steps → runs
+    check(repl.in_list_menu(), "still in the menu after backing up to the runs level");
+    capture([&]{ repl.workflow_up(); }); // runs → close
+    check(!repl.in_list_menu(), "esc at the runs level closes the menu");
+}
+
 static void test_grep_robustness() {
     std::cout << "grep robustness" << std::endl;
     agent::tools::Grep g;
@@ -2567,6 +2626,7 @@ int main() {
     test_parallel_tool_safety();
     test_run_command_options();
     test_edit_file();
+    test_workflows_menu();
     test_grep_robustness();
     test_token_usage();
     test_trust_grants();
