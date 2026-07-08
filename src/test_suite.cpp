@@ -1963,6 +1963,14 @@ static void test_edit_file() {
     std::string mf = ef.execute(JSON::Object{{ "path", "/tmp/does_not_exist_edit.txt" }, { "old_string", "a" }, { "new_string", "b" }});
     check(mf.find("does not exist") != std::string::npos, "editing a missing file refused");
 
+    // A null or missing `path` gives a clear error, NOT "file does not exist: null"
+    // (JSON null -> "null" used to slip past the empty-check).
+    std::string np = ef.execute(JSON::Object{{ "path", nullptr }, { "old_string", "a" }, { "new_string", "b" }});
+    check(np.find("provide a `path`") != std::string::npos && np.find("null") == std::string::npos,
+          "null path gives a clear error, not 'does not exist: null'");
+    std::string mp = ef.execute(JSON::Object{{ "old_string", "a" }, { "new_string", "b" }});
+    check(mp.find("provide a `path`") != std::string::npos, "missing path key gives a clear error");
+
     // Multi-edit: several edits in one atomic call, applied in order.
     write("one\ntwo\nthree\n");
     std::string me = ef.execute(JSON::Object{ { "path", path }, { "edits", JSON::Array{

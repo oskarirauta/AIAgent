@@ -258,6 +258,12 @@ JSON EditFile::parameters() const {
 }
 
 std::string EditFile::execute(const JSON& args) {
+    // A missing or null `path` must give a clear error. Without this guard
+    // args["path"].to_string() on a JSON null yields the string "null", which is
+    // non-empty, so it slips past the empty-check and surfaces as the misleading
+    // "file does not exist: null (use write_file to create it)".
+    if ( args != JSON::TYPE::OBJECT || !args.contains("path") || args["path"] != JSON::TYPE::STRING )
+        return "error: provide a `path` string (the file to edit)";
     std::string path = common::trim_ws(args["path"].to_string());
     if ( path.empty())
         return "error: provide a file `path`";
