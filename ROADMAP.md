@@ -2,7 +2,7 @@
 
 Development history and forward-looking ideas for AIAgent. The **Done** sections
 record what shipped (kept for context); the only outstanding work is under
-**ROADMAP TO V2** near the bottom. **Considered / dropped** lists ideas
+**ROADMAP TO V3** near the bottom. **Considered / dropped** lists ideas
 deliberately left out.
 
 ## Done
@@ -365,8 +365,6 @@ a coding tool (it's a tool, not a toy).
 - **File watch / auto-run on change** — niche for an interactive CLI.
 - **Command macros / snippets / templates** — prompt history + `AGENTS.md` conventions
   cover most of it.
-- **Multi-agent cloud orchestration** — the local `/workflows` is the lightweight
-  take; full cloud orchestration is a separate project.
 - **Internal commands** replacing busybox coreutils — high effort, uncertain uptake;
   prefer clean errors + date-in-context.
 - **Filesystem snapshots before dangerous ops** — `/changes` + revert covers the
