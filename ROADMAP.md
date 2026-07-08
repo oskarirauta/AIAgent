@@ -20,7 +20,7 @@ deliberately left out.
   (Note: Claude's OAuth API redacts thinking text, so only Kimi shows a transcript.)
 - **Current date** injected into the system prompt (so the model needn't call `date`).
 - **UI**: inline REPL (native scrollback, no ncurses), colour themes
-  (dark/light/warm), multi-line prompt mode, interactive `/settings` menu,
+  (dark/light/warm/cool/rose), multi-line prompt mode, interactive `/settings` menu,
   visual `/context`, arrow-select tool confirmation.
 - **Context management**: `context_limit` trimming, `context: auto` (per-model window).
 - **Tool safety**: confirm / auto / insecure modes, danger list, chain-aware safe
