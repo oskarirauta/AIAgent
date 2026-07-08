@@ -93,6 +93,9 @@ public:
     void workflow_enter(); // runs → steps → content
     void workflow_up();    // content → steps → runs → close
     bool in_list_menu() const { return _in_list; }
+    // Public for the dispatch + tests: render the tool-confirmation dialog (also
+    // rings the attention/danger bell).
+    void render_confirm_dialog(const tools::ConfirmRequest& req);
     // Run once after the terminal is in raw mode but before the input loop — the
     // right moment for a startup confirm (e.g. approving project-local MCP).
     void set_on_ready(std::function<void()> cb) { _on_ready = std::move(cb); }
@@ -167,7 +170,6 @@ private:
     void route_stream_chunk(const std::string& chunk); // split think preview vs answer in collapse mode
     std::vector<std::string> think_preview_lines(int cols) const; // transient collapse-mode preview
     void render_command(const std::string& cmd, const std::string& result);
-    void render_confirm_dialog(const tools::ConfirmRequest& req);
     void draw_confirm_menu(const tools::ConfirmRequest& req, bool redraw);
     void handle_confirm_key(int c);
     void commit_confirm(tools::Decision d, const std::string& label);

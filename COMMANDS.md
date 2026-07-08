@@ -137,7 +137,7 @@ With no argument opens the interactive settings menu. With `<key> <value>` sets 
 
 ### `/bell [never|ask_user|question|attention|always]`
 
-Controls the terminal bell. always: on every answer plus anything needing you. attention: only a workflow finishing, a tool-permission prompt, or an answer that is a question. question: only when the answer is a question. never: silent. Bare /bell opens a picker; also the "bell" row in /settings.
+Controls the terminal bell. always: on every answer plus anything needing you. attention: only a workflow finishing, a tool-permission prompt, or an answer that is a question. question: only when the answer is a question. never: silent. At any level except never, a DANGEROUS command's confirmation always rings. Bare /bell opens a picker; also the "bell" row in /settings.
 
 ### `/jobs [id | stop <id|all>]`
 

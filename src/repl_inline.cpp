@@ -2064,12 +2064,19 @@ void InlineRepl::render_command(const std::string& cmd, const std::string& resul
 void InlineRepl::render_confirm_dialog(const tools::ConfirmRequest& req) {
     erase_live();
 
-    // Attention cue: if the turn has already run unattended for a few seconds,
-    // ring the bell once — the agent is now blocked waiting on you.
+    // Attention cue. render_confirm_dialog runs exactly once per dialog (redraws go
+    // through draw_confirm_menu), so this rings at most once per confirmation.
     auto ran = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::steady_clock::now() - _turn_start).count();
-    // A tool-permission prompt is an "attention" event.
-    if ( ran >= 4 && !_confirm_belled && bell_level(_config.bell) >= 3 ) {
+    if ( !req.danger.empty()) {
+        // A DANGEROUS (danger-listed) command always rings at any non-silent bell
+        // level, immediately — this is exactly the prompt you must not miss, even if
+        // you're watching. (Independent of the once-per-turn attention throttle.)
+        if ( bell_level(_config.bell) >= 1 )
+            wr("\a");
+    } else if ( ran >= 4 && !_confirm_belled && bell_level(_config.bell) >= 3 ) {
+        // A normal tool-permission prompt is an "attention" event: rung once per
+        // turn, and only after the turn ran unattended for a few seconds.
         wr("\a");
         _confirm_belled = true;
     }
@@ -2556,7 +2563,7 @@ void InlineRepl::open_settings_menu() {
     add("theme", "theme", _theme.name, UI,
         "colour theme (never sets the terminal background)", { "dark", "light", "warm", "cool", "rose" });
     add("bell", "bell", _config.bell, UI,
-        "bell: always · attention (workflow/tool/?) · question · ask_user (model asks you) · never",
+        "bell: always · attention (workflow/tool/?) · question · ask_user (model asks you) · never — a dangerous command always rings unless never",
         { "never", "ask_user", "question", "attention", "always" });
     add("multiline", "multiline", _config.multiline ? "on" : "off", UI,
         "Enter inserts a newline; Alt+Enter sends the message", { "off", "on" });

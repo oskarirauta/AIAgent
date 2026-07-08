@@ -2121,6 +2121,63 @@ static void test_themes() {
     }
 }
 
+static void test_confirm_danger_bell() {
+    std::cout << "danger-command confirmation bell" << std::endl;
+    agent::Conversation conv;
+    agent::TokenStats stats;
+
+    auto has_bell = [](const std::string& s) { return s.find('\a') != std::string::npos; };
+    auto capture = [](std::function<void()> fn) {
+        fflush(stdout);
+        int saved = dup(STDOUT_FILENO);
+        int pfd[2];
+        if ( pipe(pfd) != 0 ) return std::string();
+        dup2(pfd[1], STDOUT_FILENO); close(pfd[1]);
+        fn();
+        dup2(saved, STDOUT_FILENO); close(saved);
+        int fl = fcntl(pfd[0], F_GETFL);
+        fcntl(pfd[0], F_SETFL, fl | O_NONBLOCK);
+        std::string out; char buf[16384]; ssize_t n;
+        while (( n = read(pfd[0], buf, sizeof(buf))) > 0 ) out.append(buf, static_cast<size_t>(n));
+        close(pfd[0]);
+        return out;
+    };
+    auto danger = []() {
+        agent::tools::ConfirmRequest r;
+        r.tool = "run_command"; r.summary = "rm -rf /"; r.danger = "recursive force delete";
+        return r;
+    };
+    auto safe = []() {
+        agent::tools::ConfirmRequest r;
+        r.tool = "run_command"; r.summary = "ls -la"; // danger empty
+        return r;
+    };
+
+    // A dangerous command rings at every non-silent level, immediately (independent
+    // of the turn's elapsed time).
+    for ( const char* lvl : { "ask_user", "question", "attention", "always" }) {
+        agent::Config c; c.bell = lvl;
+        agent::InlineRepl r(nullptr, c, conv, stats);
+        check(has_bell(capture([&]{ r.render_confirm_dialog(danger()); })),
+              std::string("danger command rings at bell=") + lvl);
+    }
+    // never stays silent even for a dangerous command.
+    {
+        agent::Config c; c.bell = "never";
+        agent::InlineRepl r(nullptr, c, conv, stats);
+        check(!has_bell(capture([&]{ r.render_confirm_dialog(danger()); })),
+              "danger command stays silent at bell=never");
+    }
+    // A safe command at the lowest non-silent level does not ring (the normal
+    // tool-permission bell needs the higher 'attention' threshold).
+    {
+        agent::Config c; c.bell = "ask_user";
+        agent::InlineRepl r(nullptr, c, conv, stats);
+        check(!has_bell(capture([&]{ r.render_confirm_dialog(safe()); })),
+              "safe command does not ring at bell=ask_user");
+    }
+}
+
 static void test_grep_robustness() {
     std::cout << "grep robustness" << std::endl;
     agent::tools::Grep g;
@@ -2669,6 +2726,7 @@ int main() {
     test_edit_file();
     test_workflows_menu();
     test_themes();
+    test_confirm_danger_bell();
     test_grep_robustness();
     test_token_usage();
     test_trust_grants();

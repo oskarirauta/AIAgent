@@ -130,8 +130,9 @@ const std::vector<CommandDoc>& command_catalog() {
       "when the terminal bell rings",
       "Controls the terminal bell. always: on every answer plus anything needing you. "
       "attention: only a workflow finishing, a tool-permission prompt, or an answer that "
-      "is a question. question: only when the answer is a question. never: silent. Bare "
-      "/bell opens a picker; also the \"bell\" row in /settings." },
+      "is a question. question: only when the answer is a question. never: silent. At any "
+      "level except never, a DANGEROUS command's confirmation always rings. Bare /bell "
+      "opens a picker; also the \"bell\" row in /settings." },
     { "/jobs", "", "[id | stop <id|all>]", "Session & UI", "background commands the agent started",
       "Lists background jobs started with run_command(background:true) — a dev server, "
       "watcher, or tail -f — with running/exited status and runtime. `/jobs <id>` shows "
