@@ -303,9 +303,47 @@ Working toward a long-lived "actually finished" release; going through each:
   `-Wall`-clean build, `make release`/`make tests`, and the test suite (609 tests)
   round it out.
 
-## ROADMAP TO V2
- - **Multi-agent cloud orchestration** - full cloud orchestration
- - **Overlows** - Improve user interface
+## Done — v2.0.0 cycle
+
+- ✅ **Workflows view redesign — a multi-level drill-down menu.** `/workflows` is
+  now hierarchical: runs → steps → the single step's content (the model's run_workflow
+  is runs+steps, so there is no separate "phase" level). Each level is a short page
+  with a status glyph (✔ done / ▸ running / ○ pending / ✗ error / ∅ cancelled) and
+  badges (`[N steps]`, `done/total`, `∥` for parallel). Enter drills down, Esc goes
+  up a level (closes at the top); `c`/`r` cancel/retry a run in place. `/workflows <id>`
+  stays as a deep-link. Built from the live snapshot so progress updates.
+- ✅ **Overlay-style bounded menus.** The list/reader panel was drawn at nearly full
+  screen height, scrolling the conversation out of view. It is now capped to a modest
+  height so it sits at the bottom with the transcript still visible above — within the
+  native-scrollback design (no alternate screen).
+- ✅ **Two more colour themes** — `cool` (blues + greens) and `rose` (muted
+  mauve/pink), alongside dark/light/warm.
+- ✅ **Fixes:** the turn-status blank-line regression (a multi-line command flattened
+  in the live status); the tool confirmation mode now persists across sessions (with a
+  CLI-flag guard); `edit_file` gives a clear error on a missing/null path instead of
+  "file does not exist: null".
+
+## ROADMAP TO V3
+
+Speculative — a sketch, not a commitment (and it remains to be seen whether v3 ever
+happens).
+
+- **Multi-agent cloud orchestration.** Today's `/workflows` runs each step as a
+  sub-agent on a background *thread* of the one local process; results fold into the
+  conversation on the next turn. v3 would distribute that:
+  - **Remote workers.** A step is dispatched to a worker process/host instead of a
+    local thread. Each sub-agent already carries its own client/provider/conversation
+    and OAuth, so the unit of work is self-contained; what is missing is a transport
+    (dispatch a step + stream its result back) and worker lifecycle.
+  - **A coordinator.** Schedules steps across N workers with real parallelism at scale
+    (beyond one machine's core count), handles worker failure/retry, and enforces a
+    global budget.
+  - **Live push.** Step results stream back and surface in the UI as they land, rather
+    than the current pull-view + next-turn fold-in.
+  - **Nested workflows.** A step could itself launch a workflow (bounded), for
+    decompose-and-conquer over large tasks.
+  This is a separate, much larger project than the local take; the local `/workflows`
+  is deliberately the lightweight version and stays useful on its own.
 
 ## Considered / dropped
 
