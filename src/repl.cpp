@@ -2047,7 +2047,9 @@ std::string Repl::handle_command(const std::string& line) {
         else return "usage: /tools <confirm|auto|insecure>";
         _registry.set_mode(tool_mode());
         _registry.set_strict(_config.strict);
-    _registry.set_plan_mode(_config.plan_mode);
+        _registry.set_plan_mode(_config.plan_mode);
+        _config.tool_mode_explicit = false; // a deliberate in-session choice — save it
+        _config.save_settings(_config.home_dir); // tool mode now persists across sessions
         return "tool mode: " + m;
     }
 

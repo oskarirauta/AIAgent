@@ -1271,6 +1271,47 @@ static void test_workflow_autoresume() {
     std::filesystem::remove_all(home);
 }
 
+static void test_tool_mode_persistence() {
+    std::cout << "tool mode persistence (save/apply + CLI-flag guard)" << std::endl;
+    std::string home = "/tmp/ai_toolmode_home";
+    std::filesystem::remove_all(home);
+    std::filesystem::create_directories(home);
+
+    // auto (confirm_tools=false) round-trips through state.json.
+    agent::Config saver;
+    saver.home_dir = home;
+    saver.confirm_tools = false;
+    saver.insecure = false;
+    saver.save_settings(home);
+    agent::Config loader;
+    loader.apply_settings(agent::Config::load_last_used(home));
+    check(!loader.confirm_tools && !loader.insecure, "auto mode survives the round-trip");
+
+    // insecure round-trips too.
+    saver.confirm_tools = true;
+    saver.insecure = true;
+    saver.save_settings(home);
+    agent::Config loader2;
+    loader2.apply_settings(agent::Config::load_last_used(home));
+    check(loader2.insecure, "insecure mode survives the round-trip");
+
+    // A CLI flag (tool_mode_explicit) wins over the saved mode AND is not written
+    // back over it. Saved = insecure; this session was launched --yes-tools (auto).
+    agent::Config cli;
+    cli.home_dir = home;
+    cli.confirm_tools = false; // -Y
+    cli.insecure = false;
+    cli.tool_mode_explicit = true;
+    cli.apply_settings(agent::Config::load_last_used(home)); // must NOT flip to insecure
+    check(!cli.insecure && !cli.confirm_tools, "explicit CLI mode not overridden by saved state");
+    cli.save_settings(home); // must NOT clobber the saved insecure preference
+    agent::Config after;
+    after.apply_settings(agent::Config::load_last_used(home));
+    check(after.insecure, "saved mode preserved when the session mode came from a CLI flag");
+
+    std::filesystem::remove_all(home);
+}
+
 static void test_workflow_parallel_cancel_retry() {
     std::cout << "workflow parallel / cancel / retry / on_finish" << std::endl;
     using namespace std::chrono_literals;
@@ -2505,6 +2546,7 @@ int main() {
     test_workflow_manager();
     test_workflow_tool();
     test_workflow_autoresume();
+    test_tool_mode_persistence();
     test_workflow_parallel_cancel_retry();
     test_provider_options_config();
     test_claude_provider();

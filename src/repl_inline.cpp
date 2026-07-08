@@ -684,6 +684,7 @@ std::string InlineRepl::status_line() const {
     try { cwd = std::filesystem::current_path().string(); } catch ( ... ) { cwd = "?"; }
 
     std::string tools = !_config.tools_enabled ? "tools off"
+                        : _config.insecure ? "tools: insecure"
                         : (_config.confirm_tools ? "tools: confirm" : "tools: auto");
     if ( _config.plan_mode )
         tools += " · plan";
@@ -2282,7 +2283,7 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         if ( trimmed == "/tools" ) {
             m.title = "tool confirmation";
             m.rows = { "confirm", "auto", "insecure" };
-            m.current = _config.confirm_tools ? "confirm" : "auto";
+            m.current = _config.insecure ? "insecure" : ( _config.confirm_tools ? "confirm" : "auto" );
         } else if ( trimmed == "/stream" ) {
             m.title = "live reasoning";
             m.rows = { "off", "on", "collapse" };

@@ -35,6 +35,7 @@ public:
     bool tools_enabled = true;
     bool confirm_tools = true;  // ask before confirmation-requiring tools
     bool insecure = false;      // run every tool without asking (implies no danger warnings)
+    bool tool_mode_explicit = false; // a CLI flag (-T/-Y/-I) set the mode; don't let saved state override it
     bool strict = false;        // in confirm mode, ignore the safe-command allowlist
     bool plan_mode = false;     // read-only planning: mutating tools are blocked (session-only)
     size_t context_limit = 0;   // approx token budget for history sent to the model (0 = unlimited)
@@ -129,6 +130,8 @@ public:
         bool context_auto = false;
         bool auto_compact = false;
         bool workflow_autoresume = false;
+        bool confirm_tools = true;  // persisted tool mode (confirm/auto/insecure)
+        bool insecure = false;
         std::string bell = "attention";
         bool advisor = false;
         std::string advisor_model;

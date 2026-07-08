@@ -324,6 +324,8 @@ void Config::apply_cli(const usage_t& usage) {
         confirm_tools = false;
     if ( usage["insecure"] )
         insecure = true;
+    if ( usage["no_tools"] || usage["yes_tools"] || usage["insecure"] )
+        tool_mode_explicit = true; // an explicit CLI mode wins over saved state
     // paste thresholds and oauth host/client id are config-file only (see load()).
 }
 
@@ -377,6 +379,10 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.auto_compact = s["auto_compact"].to_bool();
             if ( s.contains("workflow_autoresume") && s["workflow_autoresume"] == JSON::TYPE::BOOL )
                 last.workflow_autoresume = s["workflow_autoresume"].to_bool();
+            if ( s.contains("confirm_tools") && s["confirm_tools"] == JSON::TYPE::BOOL )
+                last.confirm_tools = s["confirm_tools"].to_bool();
+            if ( s.contains("insecure") && s["insecure"] == JSON::TYPE::BOOL )
+                last.insecure = s["insecure"].to_bool();
             if ( s.contains("bell") && s["bell"] == JSON::TYPE::STRING )
                 last.bell = s["bell"].to_string();
             if ( s.contains("advisor") && s["advisor"] == JSON::TYPE::BOOL )
@@ -413,6 +419,8 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "context_auto", last.context_auto },
             { "context_limit", static_cast<long long>(last.context_limit) },
             { "auto_compact", last.auto_compact },
+            { "confirm_tools", last.confirm_tools },
+            { "insecure", last.insecure },
             { "workflow_autoresume", last.workflow_autoresume },
             { "bell", last.bell },
             { "advisor", last.advisor },
@@ -461,6 +469,14 @@ void Config::save_settings(const std::string& home_dir) const {
     last.context_limit = context_limit;
     last.auto_compact = auto_compact;
     last.workflow_autoresume = workflow_autoresume;
+    // A CLI flag (-Y/-I/-T) sets the mode for this session only — it must NOT
+    // overwrite the user's saved preference. `last` already holds the persisted
+    // mode (loaded above), so keep it unless the mode is a deliberate in-session
+    // choice (/tools clears tool_mode_explicit before saving).
+    if ( !tool_mode_explicit ) {
+        last.confirm_tools = confirm_tools;
+        last.insecure = insecure;
+    }
     last.bell = bell;
     last.advisor = advisor;
     last.advisor_model = advisor_model;
@@ -480,6 +496,12 @@ void Config::apply_settings(const LastUsed& last) {
     context_limit = last.context_limit;
     auto_compact = last.auto_compact;
     workflow_autoresume = last.workflow_autoresume;
+    // Tool confirmation mode is persisted (user opted in), but an explicit CLI
+    // flag (-T/-Y/-I) for this launch always wins over the saved mode.
+    if ( !tool_mode_explicit ) {
+        confirm_tools = last.confirm_tools;
+        insecure = last.insecure;
+    }
     bell = last.bell;
     advisor = last.advisor;
     if ( !last.advisor_model.empty())
