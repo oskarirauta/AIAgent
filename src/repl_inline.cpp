@@ -601,6 +601,12 @@ std::string InlineRepl::status_line() const {
                 next_queued = _pending.front();
         }
         std::string what = !activity.empty() ? activity : ( streamed ? "responding" : "thinking");
+        // The status MUST stay one line (erase_live assumes it). A multi-line
+        // command (e.g. a heredoc) reaches here via "running: <command>", so flatten
+        // any newline/tab/CR to a space before it is clipped — otherwise the extra
+        // lines aren't erased and blank frames pile up between tool notices.
+        for ( char& c : what )
+            if ( c == '\n' || c == '\r' || c == '\t' ) c = ' ';
 
         auto secs = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - _turn_start).count();
