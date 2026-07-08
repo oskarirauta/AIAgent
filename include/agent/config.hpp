@@ -141,8 +141,10 @@ public:
     static void save_last_used(const std::string& home_dir, const std::string& provider, const std::string& model);
 
     // Persist the UI/behaviour settings (theme, multiline, thinking, context) of
-    // this config to the state file, preserving the last provider/model. Security
-    // settings (tool mode, strict) are intentionally NOT persisted.
+    // this config to the state file, preserving the last provider/model. The tool
+    // confirmation mode is persisted when the user chose it (via /tools or /settings),
+    // but a CLI flag (-T/-Y/-I, i.e. tool_mode_explicit) is session-only and never
+    // written back over the saved preference; `strict` is not persisted.
     void save_settings(const std::string& home_dir) const;
 
     // Apply persisted settings from a loaded state onto this config.

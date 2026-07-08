@@ -2078,6 +2078,31 @@ static void test_workflows_menu() {
     check(repl.in_list_menu(), "still in the menu after backing up to the runs level");
     capture([&]{ repl.workflow_up(); }); // runs → close
     check(!repl.in_list_menu(), "esc at the runs level closes the menu");
+
+    // A run vanishing while its step content is open must fall back to the runs
+    // level cleanly (build_workflow_level's _wf_level==1 + no-run path).
+    {
+        bool vanish = false;
+        agent::InlineRepl r2(nullptr, cfg, conv, stats);
+        r2.set_workflows_provider([&vanish]() {
+            std::vector<agent::WorkflowRun> v;
+            if ( !vanish ) {
+                agent::WorkflowRun r; r.id = 3; r.name = "x"; r.status = "running";
+                agent::WorkflowStep s; s.task = "t"; s.status = "running";
+                r.steps = { s, s, s };
+                v.push_back(r);
+            }
+            return v;
+        });
+        capture([&]{ r2.open_workflows_menu(); }); // level 0
+        capture([&]{ r2.workflow_enter(); });      // level 1 (steps)
+        capture([&]{ r2.workflow_enter(); });      // level 2 (step content)
+        vanish = true;                             // the run disappears
+        capture([&]{ r2.workflow_up(); });         // content → build at level 1 → fallback to runs
+        check(r2.in_list_menu(), "menu survives a run vanishing while viewing step content");
+        capture([&]{ r2.workflow_up(); });         // runs → close
+        check(!r2.in_list_menu(), "closes cleanly after the vanish fallback");
+    }
 }
 
 static void test_themes() {

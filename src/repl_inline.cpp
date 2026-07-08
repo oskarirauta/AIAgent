@@ -638,7 +638,7 @@ std::string InlineRepl::status_line() const {
         std::string qclip;
         if ( queued > 0 ) {
             for ( char& c : next_queued )
-                if ( c == '\n' || c == '\t' ) c = ' ';
+                if ( c == '\n' || c == '\r' || c == '\t' ) c = ' '; // flatten CR too — the status is one line
             qclip = clip(next_queued, 24);
         }
 
@@ -2784,11 +2784,12 @@ void InlineRepl::open_list_detail(const std::string& title, const std::string& t
 int InlineRepl::menu_view_rows() const {
     // Cap the panel height so it sits at the bottom with the conversation still
     // visible above (the "overlay" feel), rather than a near-full-screen list that
-    // scrolls the transcript out of view. Never exceed the space actually available.
+    // scrolls the transcript out of view. Floor of 1 (not 3) so an absurdly short
+    // terminal isn't overrun — the whole panel is title + vh + footer.
     constexpr int CAP = 15;
     int avail = term_rows() - 3; // title + a little breathing room
     int vh = avail < CAP ? avail : CAP;
-    return vh < 3 ? 3 : vh;
+    return vh < 1 ? 1 : vh;
 }
 
 void InlineRepl::draw_list_menu(bool redraw) {
@@ -2991,7 +2992,7 @@ void InlineRepl::build_workflow_level(bool redraw) {
     if ( _wf_level == 1 ) {
         const WorkflowRun* run = nullptr;
         for ( const auto& r : runs ) if ( r.id == _wf_run_id ) { run = &r; break; }
-        if ( !run ) { _wf_level = 0; _wf_run_id = -1; } // the run went away — fall back to the list
+        if ( !run ) { _wf_level = 0; _wf_run_id = -1; _list_top = 0; _list_sel = 0; } // run went away — fall back to the list (reset scroll like a normal transition)
         else {
             m.title = "workflows › #" + std::to_string(run->id) + " " + wf_flat(run->name, 40);
             m.hint = "↑↓ move · ⏎ open step · esc back";
