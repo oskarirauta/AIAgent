@@ -330,9 +330,8 @@ surfaced three failures that all had to be fixed before anything else. They are
 recorded here because each one is a lesson about where the app is fragile. The
 features below them came out of the same session.
 
-The version in `include/agent/version.hpp` is still 2.0.0: the bump waits until
-this cycle has been used live, per the rhythm this project follows — one change,
-build, tests, try it in real use, then the next.
+Released as **v2.1.0** after the cycle was exercised in real use — per the rhythm
+this project follows: one change, build, tests, try it live, then the next.
 
 - ✅ **Crash: worker-thread stack overflow in secret redaction.** `redact_secrets`
   runs on every tool result, on the WORKER thread, and libstdc++'s backtracking
