@@ -2510,6 +2510,11 @@ static void test_redact_secrets() {
     check(n == 0, "placeholder value left alone");
     n = 0; redact_secrets("ls -la /home/user", n);
     check(n == 0, "a plain command is untouched");
+    // A label at the end of a line must not bind to an identifier on the NEXT
+    // line: a `? "..._API_KEY" :\n <code>` ternary is source, not a secret.
+    n = 0;
+    redact_secrets("v = cond ? \"OPENAI_API_KEY\" :\n    other == \"x\" ? \"y\" : nullptr;", n);
+    check(n == 0, "a line-end label does not redact the next line's code (ternary)");
 }
 
 static void test_stale_read_guard() {

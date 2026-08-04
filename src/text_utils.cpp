@@ -66,10 +66,14 @@ std::string redact_secrets(const std::string& text, int& count) {
 
     // Labelled assignments: `SECRET=<value>`, `api_key: "<value>"`, etc. Redact the
     // value, keeping the label. Skips obvious placeholders so template/.env.example
-    // files don't get noisily rewritten.
+    // files don't get noisily rewritten. The separator allows only horizontal
+    // whitespace ([ \t], not \s): a real `key: value` secret is on ONE line, so a
+    // "value" on the next line is code -- e.g. a `? "..._API_KEY" :\n config.x`
+    // ternary would otherwise bind the label to the next line's identifier and
+    // redact it.
     {
         static const std::regex re(
-            R"((password|passwd|secret|api[_-]?key|apikey|access[_-]?key|secret[_-]?key|auth[_-]?token|token|private[_-]?key)("?\s*[:=]\s*"?)([^\s"']{8,}))",
+            R"((password|passwd|secret|api[_-]?key|apikey|access[_-]?key|secret[_-]?key|auth[_-]?token|token|private[_-]?key)("?[ \t]*[:=][ \t]*"?)([^\s"']{8,}))",
             std::regex::icase);
         std::string res;
         auto begin = std::sregex_iterator(out.begin(), out.end(), re);
