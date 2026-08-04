@@ -35,7 +35,7 @@ static usage_t make_usage(int argc, char **argv) {
         { "AI Agent", "\nversion ", agent::VERSION, "author ", "Oskari Rauta", "copyright ", "2026, Oskari Rauta", "\nusage:\n   ", "[options] [prompt]", "\nOptions:",
           "\nUniversal Linux CLI AI assistant — a provider-agnostic alternative to Kimi Code / Claude Code.\n"
           "With no prompt it starts an interactive REPL; type /help there for the in-app commands.\n"
-          "Config: ~/.config/ai-agent/config (or -c). Data/credentials/memory: ~/.local/share/ai-agent (or -d).\n" },
+          "Config, data, credentials and memory all live in ~/.local/share/ai-agent (config file there is `config`; override the dir with -d or the config path with -c).\n" },
         {
             { "help", { "h", "help", "show usage help" }},
             { "version", { "v", "version", "show version" }},

@@ -99,10 +99,12 @@ std::string Config::expand_tilde(const std::string& path) {
 }
 
 std::string Config::default_path() {
-    const char* home = std::getenv("HOME");
-    if ( !home || !*home )
-        home = "/root";
-    return std::string(home) + "/.config/ai-agent/config";
+    // The config file lives in the data directory alongside conversations,
+    // credentials and memory, so one directory holds everything. A backup or
+    // migration that copies the data dir then cannot leave the config behind --
+    // and, more importantly, cannot miss the irreplaceable conversation history
+    // by glancing only at a separate ~/.config location.
+    return default_home_dir() + "/config";
 }
 
 std::string Config::default_model_for(const std::string& provider) {

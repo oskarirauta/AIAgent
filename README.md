@@ -55,7 +55,9 @@ make tests      # builds test_runner and runs the suite (make test is an alias)
 
 ## Configuration
 
-Create `~/.config/ai-agent/config`:
+Create `~/.local/share/ai-agent/config` (the config file lives in the data
+directory alongside your conversations, credentials and memory -- one directory
+holds everything, so a backup or migration never leaves part of it behind):
 
 ```text
 provider: kimi
@@ -173,6 +175,7 @@ If `model` is not set (via config or `-m`), each provider falls back to a sensib
 Everything the agent persists lives under `home_dir` (default `~/.local/share/ai-agent`):
 
 ```text
+config                               # optional config file (defaults; you create it)
 credentials/<provider>.json          # OAuth tokens (mode 0600)
 conversations/<provider>/<cwd>.json  # history, per provider AND per project directory
 memories/<provider>/                 # long-term memory, per provider (shared across models)
