@@ -323,6 +323,59 @@ Working toward a long-lived "actually finished" release; going through each:
   CLI-flag guard); `edit_file` gives a clear error on a missing/null path instead of
   "file does not exist: null".
 
+## Done — v2.0.1 cycle (first real-use hardening)
+
+The first serious real-world use of the agent (a full working day on this repo)
+surfaced three failures that all had to be fixed before anything else. They are
+recorded here because each one is a lesson about where the app is fragile.
+
+- ✅ **Crash: worker-thread stack overflow in secret redaction.** `redact_secrets`
+  runs on every tool result, on the WORKER thread, and libstdc++'s backtracking
+  regex matcher recurses per character of a quantified run. On musl a thread's
+  stack comes from `PT_GNU_STACK` (~128K), so a few-hundred-character unbroken
+  token in tool output killed the whole app mid-turn. Fixed on both layers:
+  `-Wl,-z,stack-size=8MiB` and line-aligned 16K spans in the redactor.
+- ✅ **Data loss: the session file could be destroyed by its own save.** `save()`
+  truncated the target first and never checked for errors (a full disk left an
+  empty file); `load()` ignored a corrupt file and the next save overwrote it.
+  Now: write-temp + verify + atomic rename, and a corrupt file is quarantined to
+  `<path>.corrupt-<epoch>` instead of being overwritten.
+- ✅ **Auth: "logged out" mid-session after a run of tool calls.** Several causes:
+  refreshing on every launch rotated the refresh token out from under any other
+  running instance; a refreshed token was discarded when saving it failed; and
+  `prepare_request` could fall into the INTERACTIVE OAuth prompt from the worker
+  thread with the terminal in raw mode (an unrecoverable hang). Mid-session auth
+  is now strictly silent, re-reads the credentials file first, and an HTTP 401
+  triggers one silent refresh + retry.
+- ✅ **Log growth.** `file_stream` received every entry regardless of level, so
+  vverbose HTTP dumps grew `agent.log` past 300 MB and filled the disk (which is
+  what corrupted the session save). The log file now follows the configured
+  level, and is rotated at 10 MB on startup.
+- ✅ **Session resume on startup** — a resumed project opens on the tail of its
+  last exchange instead of a blank screen (also the signal that a session exists).
+- ✅ **Session lock** — a pid-stamped `<conversation>.lock` so two agents in one
+  project cannot overwrite each other's history. A lock whose pid is dead or no
+  longer an agent is recognised as a crash leftover and broken automatically;
+  a live owner is named in the refusal, and `--steal-lock` takes over.
+- ✅ **`/sessions`** — list every saved session with size and age, delete to
+  reclaim space (the active session can't be deleted).
+- ✅ **`/shell`** — full terminal handover to `$SHELL` for interactive work (a
+  push that asks for a password); jumps the queue, refuses mid-turn, and redraws
+  without clearing so the transcript survives.
+- ✅ **Low-disk-space warning** — once per threshold (200 MB / 50 MB free) on the
+  data dir, so the failure that corrupted a session is visible before it happens.
+- ✅ **Markdown `_emphasis_` restored** with CommonMark word-boundary rules, so
+  italics work again *and* `snake_case` identifiers stay intact.
+
+## Backlog (next)
+
+- **A "custom" theme.** The five fixed themes each get most of the way there but
+  something always clashes. Let a theme start from a base and override individual
+  roles (user/ai/dim/command/accent/warn + the syntax colours) from the config.
+- **Parallel sessions per project.** With the lock in place, the natural next step
+  is more than one session in the same directory (one building, one reviewing),
+  selected/created by name — plus deletion, which `/sessions` already does.
+
 ## ROADMAP TO V3
 
 Speculative — a sketch, not a commitment (and it remains to be seen whether v3 ever
