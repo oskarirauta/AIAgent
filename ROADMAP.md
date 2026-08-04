@@ -323,11 +323,16 @@ Working toward a long-lived "actually finished" release; going through each:
   CLI-flag guard); `edit_file` gives a clear error on a missing/null path instead of
   "file does not exist: null".
 
-## Done — v2.0.1 cycle (first real-use hardening)
+## Done — v2.1.0 cycle (first real-use hardening + the features it prompted)
 
 The first serious real-world use of the agent (a full working day on this repo)
 surfaced three failures that all had to be fixed before anything else. They are
-recorded here because each one is a lesson about where the app is fragile.
+recorded here because each one is a lesson about where the app is fragile. The
+features below them came out of the same session.
+
+The version in `include/agent/version.hpp` is still 2.0.0: the bump waits until
+this cycle has been used live, per the rhythm this project follows — one change,
+build, tests, try it in real use, then the next.
 
 - ✅ **Crash: worker-thread stack overflow in secret redaction.** `redact_secrets`
   runs on every tool result, on the WORKER thread, and libstdc++'s backtracking
