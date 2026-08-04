@@ -147,7 +147,11 @@ private:
 
     // Transcript output.
     void echo_user(const std::string& display);
-    // Echo several queued user messages as one group — each with its own "›"
+    // On startup, redraw the previous session's last exchange (dimmed prompt +
+    // the last reply) so a resumed conversation shows where it left off -- and,
+    // as a side effect, signals "this directory has a saved session".
+    void resume_last_exchange();
+    // Echo several queued user messages as one group -- each with its own "›"
     // marker and no blank line between, so a flushed backlog reads as several
     // user messages, not alternating speakers.
     void echo_user_multi(const std::vector<std::string>& parts);
@@ -271,6 +275,7 @@ private:
     // ones (flushed only when more content follows), drop trailing ones.
     int  _pending_blanks = 0;
     bool _reply_has_content = false;
+    bool _notice_gap_done = false;  // blank line already printed before this turn's ⚙ group
     bool _reply_first_line = false; // the reply's first printed line gets the AI marker
     bool _reply_dim = false;        // inside a streamed "thinking" region (rendered dim, 💭 marker)
 

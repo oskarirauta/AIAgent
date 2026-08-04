@@ -480,6 +480,64 @@ void InlineRepl::echo_user(const std::string& display) {
         wr(_theme.user + "›" + Theme::reset + "\n");
 }
 
+void InlineRepl::resume_last_exchange() {
+    const auto& msgs = _conversation.messages();
+    // The last assistant message that actually said something (skip tool-call-only
+    // turns and empty content).
+    int ai = -1;
+    for ( int i = static_cast<int>(msgs.size()) - 1; i >= 0; --i )
+        if ( msgs[i].role == Role::ASSISTANT && !common::trim_ws(msgs[i].content).empty()) { ai = i; break; }
+    if ( ai < 0 )
+        return; // nothing saved for this directory -- a fresh start
+
+    // The user prompt that led to it, for context.
+    int ui = -1;
+    for ( int i = ai - 1; i >= 0; --i )
+        if ( msgs[i].role == Role::USER ) { ui = i; break; }
+
+    int width = term_cols() - 4;
+    if ( width < 8 ) width = 8;
+
+    wr("\n" + _theme.dim + "── resuming this project's last session · /clear to start fresh ──" + Theme::reset + "\n");
+
+    // The prompt as a dim, single-line anchor (first line, clipped to width).
+    // Sanitized: saved content can carry control bytes (e.g. a BEL echoed out of
+    // tool output) that must never reach the terminal raw.
+    if ( ui >= 0 ) {
+        std::string p = common::trim_ws(msgs[ui].content);
+        size_t nl = p.find('\n');
+        if ( nl != std::string::npos ) p = p.substr(0, nl);
+        p = sanitize_display(p); // after the line cut — this strips \n too
+        auto cells = split_cells(p);
+        if ( static_cast<int>(cells.size()) > width ) {
+            std::string cut;
+            for ( int i = 0; i < width - 1; ++i ) cut += cells[i];
+            p = cut + "…";
+        }
+        wr("\n" + _theme.dim + "> " + p + Theme::reset + "\n");
+    }
+
+    // The reply, capped to the last N logical lines -- the tail (the conclusion /
+    // the question it left you on) is what "where we left off" means -- rendered
+    // through the normal reply path so wrapping / code fences / highlighting apply.
+    std::vector<std::string> lines;
+    {
+        std::istringstream ls(msgs[ai].content);
+        std::string ln;
+        while ( std::getline(ls, ln)) lines.push_back(ln);
+    }
+    const size_t cap = 30;
+    size_t start = ( lines.size() > cap ) ? lines.size() - cap : 0;
+    if ( start > 0 )
+        wr("\n" + _theme.dim + "  … earlier part omitted · /history for the full log" + Theme::reset + "\n");
+
+    begin_reply();
+    for ( size_t i = start; i < lines.size(); ++i )
+        emit_reply_line(lines[i]);
+    _in_reply = false;
+    if ( _in_code ) { _in_code = false; _code_lang = Language::none; }
+}
+
 void InlineRepl::begin_reply() {
     _in_reply = true;
     _line_buf.clear();
@@ -489,6 +547,7 @@ void InlineRepl::begin_reply() {
     _reply_has_content = false;
     _reply_first_line = true;
     _reply_dim = false;
+    _notice_gap_done = false;
     _think_preview.clear();
     _stream_in_think = false;
 }
@@ -777,6 +836,13 @@ void InlineRepl::drain_notices() {
     if ( lines.empty())
         return;
     erase_live();
+    // Every speaker block is preceded by exactly one blank line — including a
+    // tool-notice (⚙) group that starts before any reply text has been printed,
+    // which otherwise sat flush under the user's echoed prompt.
+    if ( _turn_running && !_reply_has_content && !_notice_gap_done ) {
+        wr("\n");
+        _notice_gap_done = true;
+    }
     bool ring = false;
     for ( const auto& n : lines ) {
         std::string text = sanitize_control(n.text);
@@ -1408,6 +1474,10 @@ void InlineRepl::run() {
 
     wr("\033[1magent\033[0m — " + _config.provider + " · " + _config.model + "\n");
     wr(_theme.dim + "Type your message. /exit or /quit to leave, Ctrl-C to interrupt." + Theme::reset + "\n");
+
+    // Show the previous session's last exchange (if this directory has one) so a
+    // resumed conversation opens where it left off instead of on a blank screen.
+    resume_last_exchange();
 
     _history_index = _prompt_history.size();
     draw_live();
