@@ -12,11 +12,11 @@
 
 namespace agent {
 
-std::string redact_secrets(const std::string& text, int& count) {
-    count = 0;
-    if ( text.empty())
-        return text;
-    std::string out = text;
+// One redaction pass over a bounded span: the fixed-format token rules plus the
+// labelled-assignment rule. Kept span-sized (see redact_secrets) because
+// libstdc++'s backtracking matcher recurses roughly once per character of a
+// quantified run — an unbounded input can overflow the running thread's stack.
+static std::string redact_span(std::string out, int& count) {
 
     // Replace every match in ONE pass and count them (regex_replace + a separate
     // count would scan twice). Leaves the input untouched — no copy — when there is
@@ -37,14 +37,6 @@ std::string redact_secrets(const std::string& text, int& count) {
         res.append(s, last, std::string::npos);
         return res;
     };
-
-    // PEM private-key block. Guarded by a cheap substring check that BOTH markers are
-    // present, so an adversarial "BEGIN … PRIVATE KEY" with no END can't drive the
-    // lazy `[\s\S]*?` into quadratic backtracking.
-    if ( out.find("PRIVATE KEY") != std::string::npos && out.find("-----END") != std::string::npos ) {
-        static const std::regex pem(R"(-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----)");
-        out = replace_count(std::move(out), pem, "[REDACTED PRIVATE KEY]");
-    }
 
     // Ordered fixed-format token patterns (all anchored — no catastrophic
     // backtracking). sk-ant- must precede sk- (the hyphenated form would slip past).
@@ -105,6 +97,61 @@ std::string redact_secrets(const std::string& text, int& count) {
     }
 
     return out;
+}
+
+std::string redact_secrets(const std::string& text, int& count) {
+    count = 0;
+    if ( text.empty())
+        return text;
+    std::string out = text;
+
+    // PEM private-key block. Guarded by a cheap substring check that BOTH markers are
+    // present, so an adversarial "BEGIN … PRIVATE KEY" with no END can't drive the
+    // lazy `[\s\S]*?` into quadratic backtracking. Runs on the whole text (a PEM
+    // block spans lines); real PEM bodies are a few KB, so the matcher's recursion
+    // stays shallow.
+    if ( out.find("PRIVATE KEY") != std::string::npos && out.find("-----END") != std::string::npos ) {
+        static const std::regex pem(R"(-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----)");
+        auto it = std::sregex_iterator(out.begin(), out.end(), pem);
+        auto end = std::sregex_iterator();
+        if ( it != end ) {
+            std::string res;
+            size_t last = 0;
+            for ( ; it != end; ++it ) {
+                res.append(out, last, static_cast<size_t>(it->position()) - last);
+                res += "[REDACTED PRIVATE KEY]";
+                last = static_cast<size_t>(it->position()) + static_cast<size_t>(it->length());
+                ++count;
+            }
+            res.append(out, last, std::string::npos);
+            out = std::move(res);
+        }
+    }
+
+    // Bound every other regex pass to line-aligned spans of at most CHUNK bytes:
+    // the matcher's recursion depth follows the length of a quantified run, so an
+    // unbounded line (a minified blob, a giant single-line log) would overflow the
+    // thread's stack. No real single-line secret is anywhere near CHUNK long, and
+    // every token charset excludes newlines, so cutting at line boundaries never
+    // splits a secret; only a pathological >CHUNK unbroken line is cut mid-run.
+    constexpr size_t CHUNK = 16 * 1024;
+    if ( out.size() <= CHUNK )
+        return redact_span(std::move(out), count);
+
+    std::string res;
+    res.reserve(out.size());
+    size_t pos = 0;
+    while ( pos < out.size()) {
+        size_t end = std::min(pos + CHUNK, out.size());
+        if ( end < out.size()) {
+            size_t nl = out.rfind('\n', end);
+            if ( nl != std::string::npos && nl > pos )
+                end = nl + 1; // cut on a line boundary whenever one exists
+        }
+        res += redact_span(out.substr(pos, end - pos), count);
+        pos = end;
+    }
+    return res;
 }
 
 namespace {

@@ -2515,6 +2515,29 @@ static void test_redact_secrets() {
     n = 0;
     redact_secrets("v = cond ? \"OPENAI_API_KEY\" :\n    other == \"x\" ? \"y\" : nullptr;", n);
     check(n == 0, "a line-end label does not redact the next line's code (ternary)");
+
+    // Regression (stack overflow): the libstdc++ matcher recurses per character of
+    // a quantified run, so a very long unbroken token used to blow the stack —
+    // fatally on musl's small default THREAD stacks (the tool-result path runs on
+    // a worker thread). Input is now processed in bounded spans; run the worst
+    // case on a real thread like production does.
+    {
+        std::string big = "log: Bearer " + std::string(200000, 'a') + "\ntail line";
+        int tn = 0;
+        std::string tr;
+        std::thread t([&]() { tr = redact_secrets(big, tn); });
+        t.join();
+        check(tn >= 1 && tr.find("Bearer [REDACTED]") != std::string::npos &&
+              tr.find("tail line") != std::string::npos,
+              "a 200k unbroken token redacts on a worker thread (no stack overflow)");
+    }
+    n = 0;
+    std::string chunked = redact_secrets(
+        "a\nkey sk-abcdefghij0123456789ABCD\n" + std::string(20000, 'x') +
+        "\npassword: hunter2secret\n", n);
+    check(n == 2 && chunked.find("sk-abcdefg") == std::string::npos &&
+          chunked.find("hunter2secret") == std::string::npos,
+          "secrets on both sides of a chunk boundary are still masked");
 }
 
 static void test_stale_read_guard() {

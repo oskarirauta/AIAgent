@@ -13,6 +13,13 @@ CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include -O2
 # memory corruption at runtime.
 CXXFLAGS+=-MMD -MP
 LDFLAGS?=-L/usr/lib
+# musl sizes new threads' stacks from PT_GNU_STACK (this flag), and its default
+# (~128K) is far too small for libstdc++'s std::regex, whose backtracking matcher
+# recurses roughly once per character of a quantified run — a ~500-char token in
+# tool output overflowed the worker thread's stack (SIGSEGV in _Executor::_M_dfs).
+# 8 MiB matches the usual main-stack ulimit; glibc ignores this (its threads
+# already default to 8 MiB).
+LDFLAGS+=-Wl,-z,stack-size=8388608
 
 # Prefer pkg-config for curl when available, fallback to plain flags. The inline
 # REPL uses raw ANSI/termios, so no curses dependency is needed.
