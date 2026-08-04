@@ -465,7 +465,8 @@ void InlineRepl::echo_user(const std::string& display) {
         size_t limit = _config.paste_preview;
         size_t shown = ( limit > 0 && plines.size() > limit ) ? limit : plines.size();
         for ( size_t i = 0; i < shown; ++i )
-            emit(_theme.dim + sanitize_display(plines[i]) + "\033[0m");
+            for ( const auto& seg : word_wrap(sanitize_display(plines[i]), width))
+                emit(_theme.dim + seg + "\033[0m");
         if ( shown < plines.size())
             emit(_theme.dim + "  … " + std::to_string(plines.size() - shown) + " more lines" + "\033[0m");
         std::string footer;
@@ -3549,7 +3550,20 @@ void InlineRepl::render_ask_dialog() {
     // waiting for your decision — exactly the "you looked away" case.
     if ( bell_level(_config.bell) >= 1 )
         wr("\a");
-    wr("\n" + _theme.command + "❓ " + _ask_question + Theme::reset + "\n");
+    // Word-wrap the question with a hanging indent so wrapped lines align under
+    // the question TEXT (column 3, same as the options below), not back at the
+    // ❓ marker in column 0.
+    {
+        int qwidth = term_cols() - 4;
+        if ( qwidth < 8 ) qwidth = 8;
+        std::vector<std::string> qsegs = word_wrap(_ask_question, qwidth);
+        wr("\n");
+        for ( size_t i = 0; i < qsegs.size(); ++i ) {
+            std::string pfx = ( i == 0 ) ? "❓ " : "   ";
+            wr(_theme.command + pfx + qsegs[i] + Theme::reset + "\n");
+        }
+        wr("\n");
+    }
     _ask_sel = 0;
     _ask_input.clear();
     _ask_menu_lines = 0;
@@ -3568,12 +3582,22 @@ void InlineRepl::draw_ask_menu(bool redraw) {
         out += "\033[1;7m ❯ \033[0m " + _ask_input + "\r\n";
         lines = 2;
     } else {
+        // Word-wrap each option to the terminal width and count its ACTUAL
+        // physical rows: a long option wraps onto several rows, and if the line
+        // count is off, the redraw backs up too few rows and leaves stale copies
+        // behind (the same one-row-per-item trap as the status/reader).
+        int width = term_cols() - 4;
+        if ( width < 8 ) width = 8;
         for ( size_t i = 0; i < _ask_options.size(); ++i ) {
-            if ( static_cast<int>(i) == _ask_sel )
-                out += "\033[1;7m ❯ " + _ask_options[i] + " \033[0m\r\n";
-            else
-                out += "   " + _ask_options[i] + "\r\n";
-            lines++;
+            bool sel = ( static_cast<int>(i) == _ask_sel );
+            std::vector<std::string> segs = word_wrap(_ask_options[i], width);
+            for ( size_t s = 0; s < segs.size(); ++s ) {
+                if ( sel )
+                    out += "\033[1;7m " + std::string( s == 0 ? "❯ " : "  " ) + segs[s] + " \033[0m\r\n";
+                else
+                    out += "   " + segs[s] + "\r\n";
+                lines++;
+            }
         }
         out += _theme.dim + "  ↑↓ move · ⏎ pick · esc skip" + Theme::reset + "\r\n";
         lines++;
