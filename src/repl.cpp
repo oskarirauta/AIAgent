@@ -2,6 +2,9 @@
 
 #include <iostream>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <csignal>
 #include <cctype>
 #include <ctime>
 #include <algorithm>
@@ -77,6 +80,11 @@ Repl::Repl(const Config& config)
     // whatever the provider defaulted to.
     if ( _provider && !_config.thinking.empty())
         _provider->apply_provider_options(JSON::Object{{ "thinking", _config.thinking }});
+
+    // One agent per session file: claim the lock BEFORE touching the history, so
+    // a second instance in the same project can't overwrite this one's session
+    // (throws when the session is genuinely in use by a live agent).
+    acquire_session_lock(conversation_path());
 
     // Load any persisted history for THIS provider first, then (re)apply the
     // current system prompt so a provider's identity and freshly-loaded memories
@@ -1007,6 +1015,21 @@ std::string Repl::switch_provider(const std::string& name) {
                    " — relaunch with `-p " + name + "` to log in first, then switch back.";
     }
 
+    // Move the session lock to the new provider's conversation file first — if
+    // THAT session is open in another window, refuse the switch cleanly instead
+    // of letting two agents share a file.
+    std::string new_path = conversation_path_for(name);
+    if ( new_path != conversation_path()) {
+        std::string old_path = conversation_path();
+        try {
+            release_session_lock();
+            acquire_session_lock(new_path);
+        } catch ( const std::exception& e ) {
+            acquire_session_lock(old_path); // take the old lock back; stay put
+            return std::string(e.what());
+        }
+    }
+
     // Commit the switch. _config / _conversation are shared by reference with the
     // running InlineRepl, so the status line and settings reflect the change at
     // once. The conversation is carried over: keep the dialogue, but refresh the
@@ -1023,7 +1046,7 @@ std::string Repl::switch_provider(const std::string& name) {
     return "switched to " + name + " (" + _config.model + ") — the conversation continues here";
 }
 
-std::string Repl::conversation_path() const {
+std::string Repl::conversation_path_for(const std::string& provider) const {
     // History is scoped by provider AND project (working directory), so different
     // projects keep separate chats and Claude's chat never bleeds into Kimi's.
     // The cwd is turned into a readable, filesystem-safe key, e.g.
@@ -1041,13 +1064,170 @@ std::string Repl::conversation_path() const {
     if ( key.empty())
         key = "default";
 
-    return _config.home_dir + "/conversations/" + _config.provider + "/" + key + ".json";
+    return _config.home_dir + "/conversations/" + provider + "/" + key + ".json";
+}
+
+std::string Repl::conversation_path() const {
+    return conversation_path_for(_config.provider);
+}
+
+// ── session lock ─────────────────────────────────────────────────────────
+
+// The short process name (/proc/<pid>/comm content) or "" when unreadable.
+static std::string proc_comm(pid_t pid) {
+    std::ifstream ifd("/proc/" + std::to_string(pid) + "/comm");
+    std::string comm;
+    if ( ifd.is_open())
+        std::getline(ifd, comm);
+    return comm;
+}
+
+void Repl::acquire_session_lock(const std::string& conv_path) {
+    std::string lock = conv_path + ".lock";
+    std::filesystem::create_directories(std::filesystem::path(lock).parent_path());
+    std::string self_comm = proc_comm(getpid());
+
+    for ( int attempt = 0; attempt < 8; ++attempt ) {
+        int fd = ::open(lock.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0644);
+        if ( fd >= 0 ) {
+            JSON j = JSON::Object{
+                { "pid", static_cast<long long>(getpid()) },
+                { "comm", self_comm },
+                { "started", static_cast<long long>(::time(nullptr)) }
+            };
+            std::string data = j.dump_minified() + "\n";
+            (void)!::write(fd, data.data(), data.size());
+            ::close(fd);
+            _lock_path = lock;
+            return;
+        }
+
+        // Lock exists: read the owner and decide whether it is real or a leftover.
+        long long pid = 0;
+        {
+            std::ifstream ifd(lock);
+            std::stringstream ss;
+            ss << ifd.rdbuf();
+            try {
+                JSON j = JSON::parse(ss.str());
+                if ( j.contains("pid"))
+                    pid = static_cast<long long>(j["pid"]);
+            } catch ( ... ) { /* unreadable = stale */ }
+        }
+
+        bool alive = pid > 0 && ( ::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM );
+        // pid reuse guard: the process must still BE an agent, not whatever
+        // happens to occupy that pid now.
+        bool is_agent = alive && proc_comm(static_cast<pid_t>(pid)) == self_comm;
+        bool ours = pid == static_cast<long long>(getpid());
+
+        if ( alive && is_agent && !ours && !_config.steal_lock )
+            throws << "this project's session is in use by another agent (pid " << pid
+                   << ") — close that window first, or run again with --steal-lock to take over"
+                   << std::endl;
+
+        // Stale (dead pid / not an agent / unreadable), ours, or a forced
+        // takeover: break it and retry the create.
+        if ( alive && is_agent && !ours )
+            logger::warning["agent"] << "taking over the session lock from pid " << pid
+                                     << " (--steal-lock)" << std::endl;
+        else if ( pid > 0 )
+            logger::info["agent"] << "breaking a stale session lock (pid " << pid
+                                  << ( alive ? " is not an agent" : " is gone" ) << ")" << std::endl;
+        std::error_code ec;
+        std::filesystem::remove(lock, ec);
+    }
+    throws << "could not acquire the session lock: " << lock << std::endl;
+}
+
+void Repl::release_session_lock() {
+    if ( _lock_path.empty())
+        return;
+    std::error_code ec;
+    std::filesystem::remove(_lock_path, ec);
+    _lock_path.clear();
+}
+
+Repl::~Repl() {
+    release_session_lock();
 }
 
 void Repl::save_conversation() {
     std::string path = conversation_path();
     std::filesystem::create_directories(std::filesystem::path(path).parent_path());
     _conversation.save(path);
+}
+
+std::string Repl::sessions_command(const std::string& args) {
+    std::string root = _config.home_dir + "/conversations";
+
+    // "delete <key>" removes one saved session. The key is the path relative to
+    // conversations/ (as listed); it must resolve INSIDE that directory and must
+    // not be the session this agent has open.
+    std::string a = common::trim_ws(args);
+    if ( a.rfind("delete ", 0) == 0 || a.rfind("rm ", 0) == 0 ) {
+        std::string key = common::trim_ws(a.substr(a.find(' ') + 1));
+        if ( key.empty() || key.find("..") != std::string::npos || key.front() == '/' )
+            return "usage: /sessions delete <key>   (keys as shown by /sessions)";
+        std::string path = root + "/" + key;
+        std::error_code ec;
+        if ( !std::filesystem::is_regular_file(path, ec))
+            return "no such session: " + key;
+        if ( std::filesystem::equivalent(path, conversation_path(), ec))
+            return "that is THIS session — /clear empties it instead of deleting the file";
+        auto size = std::filesystem::file_size(path, ec);
+        std::filesystem::remove(path, ec);
+        if ( ec )
+            return "could not delete " + key + ": " + ec.message();
+        std::filesystem::remove(path + ".lock", ec); // a leftover lock goes with it
+        return "deleted " + key + " (" + std::to_string(ec ? 0 : size / 1024) + " KB freed)";
+    }
+    if ( !a.empty())
+        return "usage: /sessions [delete <key>]";
+
+    // List every saved session: "<key>|<provider> · <project> · <size> · <age>".
+    struct Row { std::string key; std::string display; std::time_t mtime; };
+    std::vector<Row> rows;
+    std::error_code ec;
+    unsigned long long total = 0;
+    for ( auto it = std::filesystem::recursive_directory_iterator(root, ec);
+          !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        if ( !it->is_regular_file(ec))
+            continue;
+        std::string name = it->path().filename().string();
+        if ( name.size() < 5 || name.substr(name.size() - 5) != ".json" )
+            continue; // skip .lock, .corrupt-*, .tmp leftovers
+        std::string key = std::filesystem::relative(it->path(), root, ec).string();
+        std::string provider = key.find('/') != std::string::npos ? key.substr(0, key.find('/')) : "(old)";
+        std::string project = name.substr(0, name.size() - 5);
+
+        auto size = std::filesystem::file_size(it->path(), ec);
+        total += ec ? 0 : size;
+        struct stat st {};
+        std::time_t mtime = ::stat(it->path().c_str(), &st) == 0 ? st.st_mtime : 0;
+        char when[32] = "?";
+        if ( mtime > 0 )
+            std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M", std::localtime(&mtime));
+
+        char sz[32];
+        if ( size >= 1024 * 1024 ) std::snprintf(sz, sizeof(sz), "%.1f MB", size / ( 1024.0 * 1024.0 ));
+        else                       std::snprintf(sz, sizeof(sz), "%.0f KB", size / 1024.0 );
+
+        bool current = !std::filesystem::equivalent(it->path(), conversation_path(), ec) ? false : true;
+        rows.push_back({ key, provider + " · " + project + " · " + sz + " · " + when +
+                              ( current ? "  (current)" : "" ), mtime });
+    }
+    if ( rows.empty())
+        return "no saved sessions under " + root;
+
+    std::sort(rows.begin(), rows.end(), [](const Row& x, const Row& y) { return x.mtime > y.mtime; });
+    std::string out;
+    for ( const auto& r : rows )
+        out += r.key + "|" + r.display + "\n";
+    char tot[32];
+    std::snprintf(tot, sizeof(tot), "%.1f MB", total / ( 1024.0 * 1024.0 ));
+    out += "|" + std::to_string(rows.size()) + " sessions · " + tot + " total";
+    return out;
 }
 
 // Convert the streamed thinking-region markers for plain (non-TTY) output: \x01
@@ -1494,6 +1674,9 @@ std::string Repl::handle_command(const std::string& line) {
              ? "no such command: " + args + "  (try /help for the full list)"
              : detail;
     }
+
+    if ( cmd == "/sessions" )
+        return sessions_command(args);
 
     if ( cmd == "/history" ) {
         std::string s;

@@ -38,6 +38,7 @@ public:
     bool tool_mode_explicit = false; // a CLI flag (-T/-Y/-I) set the mode; don't let saved state override it
     bool strict = false;        // in confirm mode, ignore the safe-command allowlist
     bool plan_mode = false;     // read-only planning: mutating tools are blocked (session-only)
+    bool steal_lock = false;    // --steal-lock: take over a session locked by a live agent (session-only)
     size_t context_limit = 0;   // approx token budget for history sent to the model (0 = unlimited)
     bool context_auto = false;  // derive the budget from the model's known context window
     size_t max_tokens = 8192;   // cap on a single reply's output tokens (config: max_tokens)

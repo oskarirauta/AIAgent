@@ -328,6 +328,8 @@ void Config::apply_cli(const usage_t& usage) {
         insecure = true;
     if ( usage["no_tools"] || usage["yes_tools"] || usage["insecure"] )
         tool_mode_explicit = true; // an explicit CLI mode wins over saved state
+    if ( usage["steal_lock"] )
+        steal_lock = true;
     // paste thresholds and oauth host/client id are config-file only (see load()).
 }
 

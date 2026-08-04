@@ -22,6 +22,7 @@ namespace agent {
 class Repl {
 public:
     explicit Repl(const Config& config);
+    ~Repl();
 
     void run();
     void run_once(const std::string& prompt);
@@ -38,7 +39,18 @@ private:
     void run_tty();
     void run_plain();
     std::string conversation_path() const;
+    std::string conversation_path_for(const std::string& provider) const;
     tools::ConfirmMode tool_mode() const;
+
+    // Session lock: one agent per conversation file, so two instances in the
+    // same project can't silently overwrite each other's history. The lock file
+    // (<conversation>.lock) records the owner's pid; a lock whose pid is dead or
+    // no longer an agent process is stale and is broken automatically.
+    // acquire throws (with the owner's pid) when the session is genuinely busy,
+    // unless config.steal_lock is set.
+    void acquire_session_lock(const std::string& conv_path);
+    void release_session_lock();
+    std::string _lock_path;      // owned lock file ("" = none)
 
     // Handle a slash command (e.g. /settings, /model). Returns text to display.
     std::string handle_command(const std::string& line);
@@ -81,6 +93,9 @@ private:
     void record_file_change(const std::string& tool, const JSON& args); // pre-run hook
     std::string changes_command(const std::string& args);
     std::string export_transcript(const std::string& path);
+    // /sessions: list every saved session (provider/project, size, age) as
+    // "<key>|<display>" rows for the UI menu; "delete <key>" removes one.
+    std::string sessions_command(const std::string& args);
     // Summarise the OLD part of the conversation via one LLM call, keeping the
     // last `keep_tail` user exchanges verbatim (0 = summarise everything). The
     // session's tasks/changes are carried into the summary verbatim.
