@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include "common.hpp"
 #include "logger.hpp"
+#include "agent/theme.hpp" // colour-spec validation for the `theme.<role>` keys
 
 namespace agent {
 
@@ -226,6 +227,21 @@ void Config::load(const std::string& path) {
         else if ( key == "oauth_client_id" ) oauth_client_id = value;
         else if ( key == "log_level" ) log_level = value;
         else if ( key == "theme" ) theme = value;
+        else if ( key == "theme_base" ) theme_base = value;
+        else if ( key.rfind("theme.", 0) == 0 ) {
+            // theme.<role>: <256-index | #rrggbb | colour name> — one override for
+            // the "custom" theme. Validated here so a typo is reported at load
+            // time instead of silently doing nothing.
+            std::string role = trim(key.substr(6));
+            if ( !theme_role_name_valid(role))
+                logger::warning["config"] << "unknown theme role: " << role
+                                          << " (roles: " << theme_role_list() << ")" << std::endl;
+            else if ( theme_color_sgr(value).empty())
+                logger::warning["config"] << "invalid colour for theme." << role << ": " << value
+                                          << " (use 0-255, #rrggbb, or a colour name)" << std::endl;
+            else
+                theme_colors[role] = value;
+        }
         else if ( key == "multiline" ) multiline = parse_bool(value);
         else if ( key == "thinking_stream" ) thinking_stream = parse_bool(value);
         else if ( key == "thinking_collapse" ) thinking_collapse = parse_bool(value);

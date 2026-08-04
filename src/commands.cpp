@@ -158,9 +158,16 @@ const std::vector<CommandDoc>& command_catalog() {
       "received (assembled from the stream when streaming), in a scrollable view — "
       "for debugging prompts, tools and provider quirks. `/raw request` or `/raw "
       "response` shows just one. Auth headers are not part of the body shown." },
-    { "/theme", "", "<dark|light|warm|cool|rose>", "Session & UI", "switch the colour theme",
+    { "/theme", "", "<dark|light|warm|cool|rose|custom>", "Session & UI", "switch the colour theme",
       "Changes the terminal colour theme (dark, light, warm, cool, rose). Persisted "
-      "across sessions. Never sets the terminal background." },
+      "across sessions. Never sets the terminal background.\n\n"
+      "`custom` is your own palette: in the config file set a base with "
+      "`theme_base: cool` and override individual roles with `theme.<role>: <colour>` "
+      "— e.g. `theme.ai: #7aa2f7`, `theme.dim: 244`, `theme.warn: amber`. Roles: "
+      "user, ai, command, dim, accent, danger, warn, kw, str, num, type. Colours: a "
+      "256-colour index (0-255), a hex triplet (#rrggbb), or a colour name. `custom` "
+      "is offered only once at least one override exists; bare `/theme` prints the "
+      "active overrides in their own colours." },
     { "/help", "", "[command]", "Session & UI", "list commands, or help for one",
       "With no argument lists all commands grouped by area. With a command name "
       "(with or without the leading /) shows detailed help for just that command." },

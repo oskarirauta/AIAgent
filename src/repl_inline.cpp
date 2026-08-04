@@ -141,7 +141,15 @@ static std::vector<std::string> word_wrap(const std::string& line, int width) {
 
 InlineRepl::InlineRepl(callback_t cb, Config& config, const Conversation& conversation, const TokenStats& stats)
     : _callback(std::move(cb)), _config(config), _conversation(conversation), _stats(stats) {
-    _theme = theme_by_name(config.theme);
+    _theme = build_theme(config.theme);
+}
+
+Theme InlineRepl::build_theme(const std::string& name) const {
+    // "custom" is the config's base palette with its per-role overrides applied;
+    // everything else is a built-in palette.
+    if ( name == "custom" )
+        return theme_custom(_config.theme_base, _config.theme_colors);
+    return theme_by_name(name);
 }
 
 std::string InlineRepl::apply_theme_command(const std::string& line) {
@@ -152,13 +160,54 @@ std::string InlineRepl::apply_theme_command(const std::string& line) {
         iss >> cmd;       // "/theme"
         iss >> arg;       // name
     }
-    if ( arg.empty())
-        return "theme: " + _theme.name + "  (available: dark, light, warm, cool, rose)";
-    if ( arg != "dark" && arg != "light" && arg != "warm" && arg != "cool" && arg != "rose" )
-        return "unknown theme: " + arg + "  (available: dark, light, warm, cool, rose)";
-    _theme = theme_by_name(arg);
+    // "custom" is offered only once the config actually defines overrides —
+    // otherwise it would just be a second name for the base palette.
+    bool has_custom = !_config.theme_colors.empty();
+    std::string list = "dark, light, warm, cool, rose";
+    if ( has_custom )
+        list += ", custom";
+
+    if ( arg.empty()) {
+        std::string s = "theme: " + _theme.name + "  (available: " + list + ")";
+        if ( _theme.name == "custom" )
+            s += "\n  custom = base " + _config.theme_base + " with " +
+                 std::to_string(_config.theme_colors.size()) + " override(s): " + theme_overrides_summary();
+        else if ( !has_custom )
+            s += "\n  a custom palette: put `theme_base: " + _theme.name + "` and e.g. `theme.ai: #7aa2f7` "
+                 "in " + Config::default_path() + "\n  roles: " + theme_role_list() +
+                 "  ·  colours: 0-255, #rrggbb, or a name (red, teal, amber, …)";
+        return s;
+    }
+    if ( arg == "custom" && !has_custom )
+        return "no custom palette configured — add `theme_base: <palette>` and one or more "
+               "`theme.<role>: <colour>` lines to " + Config::default_path() +
+               "\n  roles: " + theme_role_list() +
+               "\n  colours: 0-255, #rrggbb, or a name (red, teal, amber, …)";
+    if ( arg != "dark" && arg != "light" && arg != "warm" && arg != "cool" && arg != "rose" &&
+         arg != "custom" )
+        return "unknown theme: " + arg + "  (available: " + list + ")";
+    _theme = build_theme(arg);
     _config.theme = _theme.name; // keep config in sync so the choice is persisted
-    return "theme: " + _theme.name;
+    std::string s = "theme: " + _theme.name;
+    if ( _theme.name == "custom" )
+        s += "  (base " + _config.theme_base + " · " + theme_overrides_summary() + ")";
+    return s;
+}
+
+std::string InlineRepl::theme_overrides_summary() const {
+    // Roles in the canonical order, each shown IN its own colour so the summary
+    // doubles as a preview of what was changed.
+    std::string s;
+    for ( const auto& role : theme_roles()) {
+        auto it = _config.theme_colors.find(role);
+        if ( it == _config.theme_colors.end())
+            continue;
+        Theme t = _theme;
+        const std::string* slot = theme_role_slot(t, role);
+        std::string color = slot ? *slot : "";
+        s += ( s.empty() ? "" : " " ) + color + role + "=" + it->second + Theme::reset;
+    }
+    return s.empty() ? "(none)" : s;
 }
 
 InlineRepl::~InlineRepl() {
@@ -2775,8 +2824,18 @@ void InlineRepl::open_settings_menu() {
         "when a background workflow finishes, feed its results to the model automatically",
         { "off", "on" });
 
-    add("theme", "theme", _theme.name, UI,
-        "colour theme (never sets the terminal background)", { "dark", "light", "warm", "cool", "rose" });
+    {
+        // "custom" joins the cycle only when the config defines overrides, so the
+        // menu never offers a palette that would look identical to its base.
+        std::vector<std::string> themes = { "dark", "light", "warm", "cool", "rose" };
+        if ( !_config.theme_colors.empty())
+            themes.push_back("custom");
+        add("theme", "theme", _theme.name, UI,
+            _config.theme_colors.empty()
+                ? "colour theme (never sets the terminal background) · add theme.<role> to the config for a custom one"
+                : "colour theme (never sets the terminal background) · custom = base " + _config.theme_base + " + your overrides",
+            themes);
+    }
     add("bell", "bell", _config.bell, UI,
         "bell: always · attention (workflow/tool/?) · question · ask_user (model asks you) · never — a dangerous command always rings unless never",
         { "never", "ask_user", "question", "attention", "always" });

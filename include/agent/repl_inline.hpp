@@ -293,6 +293,11 @@ private:
 
     // Handle the UI-local /theme command (returns text to display).
     std::string apply_theme_command(const std::string& line);
+    // Resolve a theme name to a palette: "custom" is the config's base plus its
+    // per-role overrides, anything else a built-in palette.
+    Theme build_theme(const std::string& name) const;
+    // The configured custom overrides as "role=colour" pairs, each in its colour.
+    std::string theme_overrides_summary() const;
 
     // ── concurrency ──────────────────────────────────────────────────────
     // The LLM turn runs on a worker thread; the main thread keeps reading the

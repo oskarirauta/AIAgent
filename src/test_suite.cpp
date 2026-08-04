@@ -2119,6 +2119,35 @@ static void test_themes() {
         check(all_set, std::string(n) + " theme sets every role");
         check(t.user != t.ai, std::string(n) + " theme distinguishes the two speakers");
     }
+
+    // Custom theme: a base palette with per-role overrides.
+    check(agent::theme_color_sgr("110") == "\033[38;5;110m", "a 256-colour index parses");
+    check(agent::theme_color_sgr("#7aa2f7") == "\033[38;2;122;162;247m", "a hex triplet parses as truecolour");
+    check(agent::theme_color_sgr("7aa2f7") == "\033[38;2;122;162;247m", "hex without '#' also parses");
+    check(agent::theme_color_sgr("amber") == agent::theme_color_sgr("179"), "a colour name maps to the palette");
+    check(agent::theme_color_sgr("256").empty() && agent::theme_color_sgr("nosuchcolour").empty() &&
+          agent::theme_color_sgr("").empty(), "out-of-range / unknown / empty colours are rejected");
+    check(agent::theme_role_name_valid("ai") && !agent::theme_role_name_valid("background"),
+          "role names are validated");
+
+    {
+        agent::Theme base = agent::theme_by_name("cool");
+        agent::Theme c = agent::theme_custom("cool", {{ "ai", "#7aa2f7" }, { "dim", "244" }});
+        check(c.name == "custom", "the custom theme is named custom");
+        check(c.ai == "\033[38;2;122;162;247m" && c.dim == "\033[38;5;244m",
+              "overridden roles take the configured colour");
+        check(c.user == base.user && c.warn == base.warn,
+              "roles without an override keep the base palette");
+    }
+    {
+        // A typo costs one colour, never the whole theme.
+        agent::Theme d = agent::theme_by_name("dark");
+        agent::Theme c = agent::theme_custom("dark", {{ "ai", "notacolour" }, { "bogusrole", "12" }});
+        check(c.ai == d.ai, "an unparseable colour leaves the base colour in place");
+        check(c.user == d.user && c.dim == d.dim, "an unknown role is ignored");
+    }
+    check(agent::theme_custom("custom", {}).user == agent::theme_by_name("dark").user,
+          "a self-referential base falls back to dark");
 }
 
 static void test_confirm_danger_bell() {

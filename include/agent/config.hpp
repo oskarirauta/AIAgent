@@ -27,7 +27,12 @@ public:
     std::string system_prompt = "You are a helpful Linux CLI assistant.";
     std::string home_dir;
     std::string output_format = "text"; // single-prompt (-P) output: text | json
-    std::string theme = "dark"; // colour theme: dark | light | warm | cool | rose
+    std::string theme = "dark"; // colour theme: dark | light | warm | cool | rose | custom
+    // The "custom" theme: a base palette plus per-role colour overrides, written
+    // in the config file as `theme_base: cool` and `theme.ai: #7aa2f7` /
+    // `theme.dim: 244`. Config-file only (they are a palette, not a toggle).
+    std::string theme_base = "dark";
+    std::map<std::string, std::string> theme_colors; // role -> colour spec
     bool multiline = false;     // multi-line prompt: show long input wrapped across lines
     std::string thinking;       // thinking/effort level (empty = provider default); applied by Kimi
     bool thinking_stream = true; // stream the model's reasoning live into the transcript
