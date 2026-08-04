@@ -53,6 +53,16 @@ const std::vector<CommandDoc>& command_catalog() {
     { "/tasks", "", "", "Context & cost", "show the agent's todo list",
       "Shows the todo list the model maintains for multi-step work (via the "
       "update_tasks tool), with ✓/▸/○ status glyphs." },
+    { "/sessions", "", "[delete <key>]", "Context & cost", "list saved sessions (size, age); delete to free space",
+      "Lists every saved session across providers and projects with its file size "
+      "and last-used time. In the menu `d` deletes the selected session; "
+      "`/sessions delete <key>` does the same directly. The active session cannot "
+      "be deleted (use /clear to empty it)." },
+    { "/shell", "", "", "Session", "visit an interactive shell, then return",
+      "Hands the whole terminal to your $SHELL (for `git push` with a password, "
+      "a quick editor visit, …); `exit` returns to the agent with the transcript "
+      "intact. For one-off commands `!<command>` is faster and lets the model see "
+      "the output. Not available while the AI is answering — wait and retry." },
     { "/queue", "", "[drop <n|all>]", "Context & cost", "messages queued behind the running turn",
       "Lists messages you typed while a turn was running (they auto-send when it "
       "finishes). `/queue drop <n|all>` removes queued entries." },

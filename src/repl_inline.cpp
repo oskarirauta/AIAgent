@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
+#include <sys/statvfs.h>
+#include <cstdlib>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -56,6 +58,11 @@ static bool command_runs_immediately(const std::string& trimmed) {
         "/about", "/info", "/help", "/theme", "/settings", "/workflows",
         "/trust", "/history", "/memories", "/tasks", "/skills", "/pins",
         "/context", "/cost", "/changes", "/mcp", "/paste", "/raw", "/limits", "/jobs",
+        "/sessions",
+        // /shell jumps the queue by design, but never RUNS mid-turn: a full
+        // terminal handover cannot share the tty with a streaming reply, so
+        // run_command_line only prints a "try again when idle" notice then.
+        "/shell",
         // settings that only affect the NEXT request — running them mid-turn just
         // updates local state (last value wins: /effort medium then /effort max
         // leaves only max, a natural dedup), applied before the next prompt. They
@@ -1193,7 +1200,8 @@ const std::vector<std::string>& slash_commands() {
         "/memories", "/context", "/cost", "/history", "/retry", "/undo", "/tasks",
         "/pin", "/pins", "/unpin", "/queue", "/trust", "/skills", "/skill", "/plan",
         "/changes", "/export", "/compact", "/clear", "/reset", "/mcp", "/advisor",
-        "/autoresume", "/paste", "/raw", "/limits", "/jobs", "/workflows", "/exit", "/quit"
+        "/autoresume", "/paste", "/raw", "/limits", "/jobs", "/workflows",
+        "/sessions", "/shell", "/exit", "/quit"
     };
     return cmds;
 }
@@ -1478,6 +1486,14 @@ void InlineRepl::run() {
     // Show the previous session's last exchange (if this directory has one) so a
     // resumed conversation opens where it left off instead of on a blank screen.
     resume_last_exchange();
+
+    // A nearly-full disk endangers the session file itself — surface it before
+    // the first save, not after it already failed.
+    {
+        std::string dwarn = disk_space_warning();
+        if ( !dwarn.empty())
+            wr("\n" + _theme.warn + "⚠ " + dwarn + Theme::reset + "\n");
+    }
 
     _history_index = _prompt_history.size();
     draw_live();
@@ -1944,6 +1960,13 @@ void InlineRepl::finish_turn() {
     if ( !warn.empty())
         wr("\n" + _theme.warn + "⚠ " + warn + Theme::reset + "\n");
 
+    // Warn when the data dir's disk is nearly full — a full disk breaks saving
+    // the conversation, so this must surface BEFORE it happens (once per level,
+    // so it never becomes spam).
+    std::string dwarn = disk_space_warning();
+    if ( !dwarn.empty())
+        wr("\n" + _theme.warn + "⚠ " + dwarn + Theme::reset + "\n");
+
     // If the context is now near its budget, summarise it before anything else
     // (so queued messages run against the smaller history). The async compaction
     // drains the pending queue itself when it finishes.
@@ -1952,6 +1975,33 @@ void InlineRepl::finish_turn() {
 
     // Run whatever was queued while the turn was in flight.
     drain_pending();
+}
+
+std::string InlineRepl::disk_space_warning() {
+    // Free space on the filesystem holding the data dir (conversations, logs,
+    // credentials). Two thresholds, each warned ONCE per session (re-armed if
+    // space is freed back above the soft level): low enough to matter, quiet
+    // enough not to be spam.
+    struct statvfs vfs;
+    if ( statvfs(_config.home_dir.c_str(), &vfs) != 0 )
+        return "";
+    unsigned long long free_bytes =
+        static_cast<unsigned long long>(vfs.f_bavail) * vfs.f_frsize;
+    constexpr unsigned long long HARD = 50ULL * 1024 * 1024;   // saving is at risk
+    constexpr unsigned long long SOFT = 200ULL * 1024 * 1024;  // heads-up
+    int level = free_bytes < HARD ? 2 : ( free_bytes < SOFT ? 1 : 0 );
+    if ( level == 0 ) {
+        _disk_notified = 0; // recovered — re-arm the warnings
+        return "";
+    }
+    if ( level <= _disk_notified )
+        return "";
+    _disk_notified = level;
+    std::string mb = std::to_string(free_bytes / ( 1024 * 1024 )) + " MB free";
+    if ( level == 2 )
+        return "disk space critically low (" + mb + ") — saving the conversation may fail; "
+               "free some space (old sessions: /sessions)";
+    return "disk space is getting low (" + mb + ") — consider pruning old sessions (/sessions) or logs";
 }
 
 std::string InlineRepl::budget_warning() {
@@ -2225,10 +2275,82 @@ void InlineRepl::commit_confirm(tools::Decision d, const std::string& label) {
     draw_live();
 }
 
+void InlineRepl::shell_command() {
+    // Design (recovered from the planning session): /shell is a FULL handover —
+    // no split screen. It runs locally and immediately (jumps the queue), but
+    // never mid-turn: a streaming reply and an interactive shell can't share
+    // the terminal, so mid-turn it only prints a "try again" notice.
+    if ( _turn_running || _confirming || _asking ) {
+        erase_live();
+        wr("\n" + _theme.dim +
+           "⚙ /shell — not available while the AI is answering. Wait for the reply to finish and try again." +
+           Theme::reset + "\n");
+        draw_live();
+        return;
+    }
+
+    erase_live();
+    wr("\n" + _theme.dim + "── shell — type `exit` to return to the agent ──" + Theme::reset + "\n");
+    // Hand the tty over: restore canonical mode for the child, run an
+    // interactive shell, then re-enter raw mode. On return: redraw ONLY —
+    // never the clear-screen sequence, or the transcript/scrollback is lost.
+    teardown();
+    const char* sh = std::getenv("SHELL");
+    std::string shell = ( sh && *sh ) ? sh : "/bin/sh";
+    int rc = std::system(shell.c_str());
+    setup();
+    std::string note = "── back in the agent";
+    if ( rc != 0 )
+        note += " (shell exit " + std::to_string(rc) + ")";
+    note += " ──";
+    wr(_theme.dim + note + Theme::reset + "\n");
+    draw_live();
+}
+
 // ── command execution / queue ───────────────────────────────────────────
 
 void InlineRepl::run_command_line(const std::string& trimmed) {
-    // Always called when idle (no turn running).
+    // Always called when idle (no turn running) — except the commands marked
+    // "immediate" (see command_runs_immediately), which may arrive mid-turn.
+    if ( trimmed == "/shell" ) {
+        shell_command();
+        return;
+    }
+    if ( trimmed == "/sessions" || trimmed.rfind("/sessions ", 0) == 0 ) {
+        // Bare /sessions opens a menu of saved sessions (size + age) with a
+        // delete action, so old history can be pruned to reclaim disk space.
+        // The sub-forms (delete …) are plain commands handled by the Repl.
+        std::string text = _command_cb ? _command_cb(trimmed) : "";
+        if ( trimmed != "/sessions" || text.rfind("no saved", 0) == 0 ) {
+            render_command(trimmed, text);
+            return;
+        }
+        ListMenu m;
+        m.title = "sessions";
+        std::istringstream is(text);
+        std::string ln;
+        while ( std::getline(is, ln)) {
+            if ( common::trim_ws(ln).empty())
+                continue;
+            // Each row arrives as "<key>|<display>"; the key drives the actions.
+            size_t bar = ln.find('|');
+            if ( bar == std::string::npos ) {
+                m.rows.push_back(ln);
+                m.keys.push_back("");
+            } else {
+                m.keys.push_back(ln.substr(0, bar));
+                m.rows.push_back(ln.substr(bar + 1));
+            }
+        }
+        if ( m.rows.empty()) {
+            render_command(trimmed, text);
+            return;
+        }
+        m.actions.push_back({ 'd', "/sessions delete ", "delete" });
+        m.reopen_cmd = "/sessions";
+        open_list_menu(std::move(m));
+        return;
+    }
     if ( !trimmed.empty() && trimmed[0] == '!' ) {
         // !shell passthrough: run it off-thread (it may be a build) with the
         // spinner; the Repl side records the output for the model too.
