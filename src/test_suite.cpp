@@ -2540,6 +2540,41 @@ static void test_redact_secrets() {
           "secrets on both sides of a chunk boundary are still masked");
 }
 
+static void test_markdown_emphasis() {
+    std::cout << "markdown emphasis (underscore only at word boundaries)" << std::endl;
+    agent::SyntaxHighlighter hl{ 1 };
+    auto joined = [](const std::vector<agent::StyledSpan>& spans) {
+        std::string s;
+        for ( const auto& sp : spans ) s += sp.text;
+        return s;
+    };
+    auto styled = [&hl](const std::vector<agent::StyledSpan>& spans) {
+        int n = 0;
+        for ( const auto& sp : spans )
+            if ( sp.color_pair == hl.color_for_string()) ++n;
+        return n;
+    };
+
+    auto s1 = hl.highlight("this is _italic_ text", agent::Language::markdown);
+    check(styled(s1) == 1 && joined(s1) == "this is _italic_ text",
+          "_italic_ at word boundaries is emphasis (text intact)");
+    auto s2 = hl.highlight("call some_long_name(x) now", agent::Language::markdown);
+    check(styled(s2) == 0 && joined(s2) == "call some_long_name(x) now",
+          "an intraword underscore (snake_case) is never emphasis");
+    auto s3 = hl.highlight("mixed foo_bar and _real one_ here", agent::Language::markdown);
+    check(styled(s3) == 1 && joined(s3) == "mixed foo_bar and _real one_ here",
+          "snake_case and real _emphasis_ coexist on one line");
+    auto s4 = hl.highlight("unclosed _tail stays plain", agent::Language::markdown);
+    check(styled(s4) == 0 && joined(s4) == "unclosed _tail stays plain",
+          "an unclosed underscore stays plain");
+    auto s5 = hl.highlight("__bold words__ too", agent::Language::markdown);
+    check(styled(s5) == 1 && !s5.empty() && joined(s5) == "__bold words__ too",
+          "__double underscore__ styles as bold emphasis");
+    auto s6 = hl.highlight("`code_with_underscores` and _em_", agent::Language::markdown);
+    check(joined(s6) == "`code_with_underscores` and _em_",
+          "inline code shields its underscores; emphasis after it still works");
+}
+
 static void test_stale_read_guard() {
     std::cout << "stale-read guard (no silent clobber of a changed file)" << std::endl;
     using namespace agent::tools;
@@ -2765,6 +2800,7 @@ int main() {
     test_turn_scoped_grant();
     test_danger_list();
     test_redact_secrets();
+    test_markdown_emphasis();
     test_stale_read_guard();
     test_list_directory();
     test_config_booleans();

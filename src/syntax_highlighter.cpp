@@ -265,11 +265,6 @@ std::vector<StyledSpan> SyntaxHighlighter::highlight_markdown(const std::string&
             spans.push_back({ line.substr(start, count), _fence_pair, false });
             continue;
         }
-        // Emphasis: only `*` (`*italic*` / `**bold**`). `_` is deliberately NOT
-        // treated as emphasis -- in a coding assistant it is far more often a
-        // snake_case separator (some_long_name) than an italic marker, so
-        // honouring it would mangle identifiers. Underscore falls through to
-        // the plain-text run below.
         if ( c == '*' ) {
             size_t start = i;
             int count = 0;
@@ -284,8 +279,44 @@ std::vector<StyledSpan> SyntaxHighlighter::highlight_markdown(const std::string&
             spans.push_back({ line.substr(start, i - start), 0, false });
             continue;
         }
+        // `_` emphasis, CommonMark-style word boundaries only: an underscore
+        // opens emphasis only at a word EDGE (start of line / after non-word)
+        // with text right after it, and closes only at a word edge again. An
+        // INTRAWORD underscore (some_long_name) is never emphasis, so
+        // snake_case identifiers render intact — both worlds.
+        if ( c == '_' ) {
+            size_t start = i;
+            int count = 0;
+            while ( i < line.size() && line[i] == '_' && count < 2 ) { i++; count++; }
+            auto word = [](char ch) {
+                return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+            };
+            bool open_ok = ( start == 0 || !word(line[start - 1])) &&
+                           i < line.size() &&
+                           !std::isspace(static_cast<unsigned char>(line[i])) && line[i] != '_';
+            if ( open_ok ) {
+                size_t end = line.find(std::string(count, '_'), i);
+                while ( end != std::string::npos ) {
+                    char after = ( end + count < line.size()) ? line[end + count] : '\0';
+                    bool close_ok = !std::isspace(static_cast<unsigned char>(line[end - 1])) &&
+                                    ( after == '\0' || !word(after));
+                    if ( close_ok )
+                        break;
+                    end = line.find(std::string(count, '_'), end + 1);
+                }
+                if ( end != std::string::npos ) {
+                    end += count;
+                    spans.push_back({ line.substr(start, end - start), _string_pair, count == 2 });
+                    i = end;
+                    continue;
+                }
+            }
+            // Mid-word or unclosed: ordinary text.
+            spans.push_back({ line.substr(start, count), 0, false });
+            continue;
+        }
         size_t start = i;
-        while ( i < line.size() && line[i] != '#' && line[i] != '`' && line[i] != '*' )
+        while ( i < line.size() && line[i] != '#' && line[i] != '`' && line[i] != '*' && line[i] != '_' )
             i++;
         spans.push_back({ line.substr(start, i - start), 0, false });
     }
