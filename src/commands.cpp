@@ -53,6 +53,13 @@ const std::vector<CommandDoc>& command_catalog() {
     { "/tasks", "", "", "Context & cost", "show the agent's todo list",
       "Shows the todo list the model maintains for multi-step work (via the "
       "update_tasks tool), with ✓/▸/○ status glyphs." },
+    { "/session", "", "[name]", "Conversation", "switch between parallel sessions in this project",
+      "One project directory can hold several independent conversations — e.g. one "
+      "building a feature and one reviewing it — each with its own history file and "
+      "lock. With no argument shows the active session and this project's others. "
+      "`/session <name>` saves the current conversation and switches (creating the "
+      "session if it is new); `/session default` returns to the main one. To open a "
+      "second window directly on a named session: `agent -n <name>`." },
     { "/sessions", "", "[delete <key>]", "Context & cost", "list saved sessions (size, age); delete to free space",
       "Lists every saved session across providers and projects with its file size "
       "and last-used time. In the menu `d` deletes the selected session; "

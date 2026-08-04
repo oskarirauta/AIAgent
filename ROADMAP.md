@@ -367,14 +367,21 @@ recorded here because each one is a lesson about where the app is fragile.
 - ✅ **Markdown `_emphasis_` restored** with CommonMark word-boundary rules, so
   italics work again *and* `snake_case` identifiers stay intact.
 
+- ✅ **A "custom" theme** — `theme: custom` takes a base palette (`theme_base:`)
+  and overrides individual roles from the config (`theme.ai: #7aa2f7`,
+  `theme.dim: 244`, `theme.warn: amber`; 256-index, hex or colour name). A bad
+  role/colour is reported at load time and skipped, so a typo costs one colour
+  rather than the theme; `custom` is offered only once an override exists, and
+  bare `/theme` previews the overrides in their own colours.
+- ✅ **Parallel sessions per project** — `agent -n <name>` opens a separate
+  conversation alongside the project's default one (own file `…@<name>.json`, own
+  lock), and `/session <name>` switches mid-run (saving the outgoing one, showing
+  the project's sessions with sizes). The status line marks a named session, and
+  `/sessions` lists them per project.
+
 ## Backlog (next)
 
-- **A "custom" theme.** The five fixed themes each get most of the way there but
-  something always clashes. Let a theme start from a base and override individual
-  roles (user/ai/dim/command/accent/warn + the syntax colours) from the config.
-- **Parallel sessions per project.** With the lock in place, the natural next step
-  is more than one session in the same directory (one building, one reviewing),
-  selected/created by name — plus deletion, which `/sessions` already does.
+Nothing outstanding beyond the speculative V3 section below.
 
 ## ROADMAP TO V3
 

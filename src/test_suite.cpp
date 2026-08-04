@@ -2569,6 +2569,22 @@ static void test_redact_secrets() {
           "secrets on both sides of a chunk boundary are still masked");
 }
 
+static void test_session_names() {
+    std::cout << "named parallel sessions (filename-safe names)" << std::endl;
+    using agent::Config;
+    check(Config::sanitize_session_name("").empty(), "an empty name is the default session");
+    check(Config::sanitize_session_name("  default ").empty(), "\"default\" normalises to the default session");
+    check(Config::sanitize_session_name("DEFAULT").empty(), "\"default\" is matched case-insensitively");
+    check(Config::sanitize_session_name("review") == "review", "a plain name passes through");
+    check(Config::sanitize_session_name("feature_2-b") == "feature_2-b", "'-' and '_' are kept");
+    check(Config::sanitize_session_name("../../etc/passwd") == "etc-passwd",
+          "path separators and dots cannot escape the conversations dir");
+    check(Config::sanitize_session_name("a b/c") == "a-b-c", "unsafe characters become '-'");
+    check(Config::sanitize_session_name("--edge--") == "edge", "leading/trailing separators are trimmed");
+    check(Config::sanitize_session_name("...").empty(), "a name of only unsafe characters becomes the default");
+    check(Config::sanitize_session_name(std::string(80, 'x')).size() == 48, "long names are capped");
+}
+
 static void test_markdown_emphasis() {
     std::cout << "markdown emphasis (underscore only at word boundaries)" << std::endl;
     agent::SyntaxHighlighter hl{ 1 };
@@ -2829,6 +2845,7 @@ int main() {
     test_turn_scoped_grant();
     test_danger_list();
     test_redact_secrets();
+    test_session_names();
     test_markdown_emphasis();
     test_stale_read_guard();
     test_list_directory();

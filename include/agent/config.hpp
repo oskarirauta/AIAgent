@@ -44,6 +44,10 @@ public:
     bool strict = false;        // in confirm mode, ignore the safe-command allowlist
     bool plan_mode = false;     // read-only planning: mutating tools are blocked (session-only)
     bool steal_lock = false;    // --steal-lock: take over a session locked by a live agent (session-only)
+    // Named session within this project: several conversations can live side by
+    // side in one directory (e.g. one building, one reviewing), each with its own
+    // history file and lock. Empty = the project's default session.
+    std::string session_name;
     size_t context_limit = 0;   // approx token budget for history sent to the model (0 = unlimited)
     bool context_auto = false;  // derive the budget from the model's known context window
     size_t max_tokens = 8192;   // cap on a single reply's output tokens (config: max_tokens)
@@ -181,6 +185,11 @@ public:
     // is a substring of the model (so "gpt-4o" covers "gpt-4o-2024-..."). Empty if
     // no price is configured (e.g. a flat-rate subscription).
     std::optional<ModelPricing> pricing_for(const std::string& model) const;
+
+    // A session name reduced to a filename-safe token: letters, digits, '-' and
+    // '_' survive, anything else becomes '-'. "default" (and an empty name) mean
+    // the project's default session and normalise to "".
+    static std::string sanitize_session_name(const std::string& name);
 
     // Estimated session cost in USD for the current model, or -1 if unpriced.
     double session_cost(long input_tokens, long output_tokens, long cached_input = 0) const;

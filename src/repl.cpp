@@ -1064,7 +1064,23 @@ std::string Repl::conversation_path_for(const std::string& provider) const {
     if ( key.empty())
         key = "default";
 
+    // A named session gets its own file next to the project's default one, so
+    // several conversations can run side by side in the same directory:
+    //   -usr-src-AIAgent.json        (default)
+    //   -usr-src-AIAgent@review.json (session "review")
+    if ( !_config.session_name.empty())
+        key += "@" + _config.session_name;
+
     return _config.home_dir + "/conversations/" + provider + "/" + key + ".json";
+}
+
+// Split a conversation filename stem into its project key and session name
+// ("-usr-src-AIAgent@review" -> {"-usr-src-AIAgent", "review"}).
+static std::pair<std::string, std::string> split_session_stem(const std::string& stem) {
+    size_t at = stem.rfind('@');
+    if ( at == std::string::npos )
+        return { stem, "" };
+    return { stem.substr(0, at), stem.substr(at + 1) };
 }
 
 std::string Repl::conversation_path() const {
@@ -1158,6 +1174,90 @@ void Repl::save_conversation() {
     _conversation.save(path);
 }
 
+std::string Repl::session_command(const std::string& args) {
+    // The project key this agent's sessions share (the filename stem without any
+    // "@name" suffix), so we can list the siblings of the current session.
+    std::string dir = std::filesystem::path(conversation_path()).parent_path().string();
+    std::string stem = std::filesystem::path(conversation_path()).stem().string();
+    std::string project = split_session_stem(stem).first;
+
+    auto label = [](const std::string& n) { return n.empty() ? std::string("default") : n; };
+
+    std::string want = common::trim_ws(args);
+    if ( want.empty()) {
+        // Show the current session and this project's other sessions.
+        std::string s = "session: " + label(_config.session_name) +
+                        "   (provider " + _config.provider + ")";
+        std::vector<std::pair<std::string, uintmax_t>> found;
+        std::error_code ec;
+        for ( auto it = std::filesystem::directory_iterator(dir, ec);
+              !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+            if ( !it->is_regular_file(ec))
+                continue;
+            std::string fname = it->path().filename().string();
+            if ( fname.size() < 6 || fname.substr(fname.size() - 5) != ".json" )
+                continue;
+            auto [proj, name] = split_session_stem(fname.substr(0, fname.size() - 5));
+            if ( proj != project )
+                continue;
+            auto size = std::filesystem::file_size(it->path(), ec);
+            found.push_back({ name, ec ? 0 : size });
+        }
+        std::sort(found.begin(), found.end());
+        if ( !found.empty()) {
+            s += "\n\nthis project's sessions:";
+            for ( const auto& [name, size] : found ) {
+                char sz[32];
+                std::snprintf(sz, sizeof(sz), "%.0f KB", size / 1024.0);
+                s += "\n  " + std::string( name == _config.session_name ? "▸ " : "  " ) +
+                     label(name) + "  " + sz;
+            }
+        }
+        s += "\n\n/session <name> switches (creating it if new) · /session default returns to the main one"
+             "\nor start a second window with: agent -n <name>";
+        return s;
+    }
+
+    std::string name = Config::sanitize_session_name(want);
+    if ( name == _config.session_name )
+        return "already on session " + label(name);
+
+    // Move the lock to the target session FIRST: if that session is open in
+    // another window, refuse without touching this one's state.
+    std::string saved = _config.session_name;
+    std::string old_path = conversation_path();
+    _config.session_name = name;
+    std::string new_path = conversation_path();
+    try {
+        release_session_lock();
+        acquire_session_lock(new_path);
+    } catch ( const std::exception& e ) {
+        _config.session_name = saved;
+        acquire_session_lock(old_path); // take our own session back; stay put
+        return std::string(e.what());
+    }
+
+    // Persist the outgoing conversation under its OWN name, then load the target.
+    _config.session_name = saved;
+    save_conversation();
+    _config.session_name = name;
+
+    bool existed = std::filesystem::exists(new_path);
+    _conversation.clear();
+    _conversation.load(new_path);
+    _conversation.set_system(base_system_prompt());
+    _changes.clear(); // file snapshots belong to the session we just left
+    _tasks.clear();
+
+    size_t msgs = 0;
+    for ( const auto& m : _conversation.messages())
+        if ( m.role != Role::SYSTEM ) ++msgs;
+
+    return "switched to session " + label(name) +
+           ( existed ? " — " + std::to_string(msgs) + " message(s) restored"
+                     : " — new, empty session" );
+}
+
 std::string Repl::sessions_command(const std::string& args) {
     std::string root = _config.home_dir + "/conversations";
 
@@ -1199,7 +1299,9 @@ std::string Repl::sessions_command(const std::string& args) {
             continue; // skip .lock, .corrupt-*, .tmp leftovers
         std::string key = std::filesystem::relative(it->path(), root, ec).string();
         std::string provider = key.find('/') != std::string::npos ? key.substr(0, key.find('/')) : "(old)";
-        std::string project = name.substr(0, name.size() - 5);
+        auto [project, session] = split_session_stem(name.substr(0, name.size() - 5));
+        if ( !session.empty())
+            project += "  [" + session + "]"; // a named parallel session of that project
 
         auto size = std::filesystem::file_size(it->path(), ec);
         total += ec ? 0 : size;
@@ -1677,6 +1779,9 @@ std::string Repl::handle_command(const std::string& line) {
 
     if ( cmd == "/sessions" )
         return sessions_command(args);
+
+    if ( cmd == "/session" )
+        return session_command(args);
 
     if ( cmd == "/history" ) {
         std::string s;

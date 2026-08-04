@@ -824,7 +824,12 @@ std::string InlineRepl::status_line() const {
     if ( _config.plan_mode )
         tools += " · plan";
 
-    std::string s = _config.provider + " · " + _config.model + " · " + cwd + " · " + tools;
+    std::string s = _config.provider + " · " + _config.model + " · " + cwd;
+    // A named parallel session is shown so two windows on the same project are
+    // never confused with each other; the default session adds nothing.
+    if ( !_config.session_name.empty())
+        s += " · [" + _config.session_name + "]";
+    s += " · " + tools;
 
     // Token usage: current context size and cumulative session total.
     long ctx = _stats.context_tokens.load(std::memory_order_relaxed);
@@ -1250,7 +1255,7 @@ const std::vector<std::string>& slash_commands() {
         "/pin", "/pins", "/unpin", "/queue", "/trust", "/skills", "/skill", "/plan",
         "/changes", "/export", "/compact", "/clear", "/reset", "/mcp", "/advisor",
         "/autoresume", "/paste", "/raw", "/limits", "/jobs", "/workflows",
-        "/sessions", "/shell", "/exit", "/quit"
+        "/sessions", "/session", "/shell", "/exit", "/quit"
     };
     return cmds;
 }

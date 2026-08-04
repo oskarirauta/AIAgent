@@ -1,5 +1,6 @@
 #include "agent/config.hpp"
 
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -316,6 +317,24 @@ void Config::load(const std::string& path) {
         home_dir = default_home_dir();
 }
 
+std::string Config::sanitize_session_name(const std::string& name) {
+    std::string s = common::trim_ws(name);
+    if ( s.empty() || common::to_lower(s) == "default" )
+        return ""; // the project's default session
+    std::string out;
+    for ( char c : s ) {
+        unsigned char u = static_cast<unsigned char>(c);
+        out += ( std::isalnum(u) || c == '-' || c == '_' ) ? c : '-';
+    }
+    // Trim leading/trailing separators so a name can never start a hidden file
+    // or end in noise, and cap the length so the filename stays sane.
+    while ( !out.empty() && ( out.front() == '-' || out.front() == '_' )) out.erase(out.begin());
+    while ( !out.empty() && ( out.back() == '-' || out.back() == '_' )) out.pop_back();
+    if ( out.size() > 48 )
+        out.resize(48);
+    return out;
+}
+
 void Config::apply_cli(const usage_t& usage) {
 
     if ( usage["provider"] ) {
@@ -346,6 +365,8 @@ void Config::apply_cli(const usage_t& usage) {
         tool_mode_explicit = true; // an explicit CLI mode wins over saved state
     if ( usage["steal_lock"] )
         steal_lock = true;
+    if ( usage["session"] )
+        session_name = sanitize_session_name(usage["session"].stringValue());
     // paste thresholds and oauth host/client id are config-file only (see load()).
 }
 

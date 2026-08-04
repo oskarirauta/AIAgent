@@ -175,16 +175,22 @@ If `model` is not set (via config or `-m`), each provider falls back to a sensib
 Everything the agent persists lives under `home_dir` (default `~/.local/share/ai-agent`):
 
 ```text
-config                               # optional config file (defaults; you create it)
-credentials/<provider>.json          # OAuth tokens (mode 0600)
-conversations/<provider>/<cwd>.json  # history, per provider AND per project directory
-memories/<provider>/                 # long-term memory, per provider (shared across models)
-state.json                           # last-used provider + per-provider model
-logs/agent.log                       # full log
-device_id                            # stable Kimi device id
+config                                    # optional config file (defaults; you create it)
+credentials/<provider>.json               # OAuth tokens (mode 0600)
+conversations/<provider>/<cwd>.json       # history, per provider AND per project directory
+conversations/<provider>/<cwd>@<name>.json # a named parallel session of that project
+conversations/<provider>/<cwd>.json.lock  # session lock (pid of the agent using it)
+memories/<provider>/                      # long-term memory, per provider (shared across models)
+state.json                                # last-used provider + per-provider model
+logs/agent.log                            # log (follows log_level; rotated at 10 MB)
+device_id                                 # stable Kimi device id
 ```
 
 Conversation history and memories are **not** tied to the model, so switching e.g. Opus → Fable keeps the same context.
+
+Each session file is **locked** while an agent has it open, so two windows in the same project cannot overwrite each other's history. The lock records the owner's pid; one left behind by a crash (dead pid, or a pid that is no longer an agent) is detected and cleared automatically, and `--steal-lock` takes over a live one deliberately.
+
+For deliberately parallel work in one directory — say one session building a feature and another reviewing it — use **named sessions**: `agent -n review` opens (or creates) a separate conversation alongside the default one, and `/session <name>` switches between them mid-run. `/sessions` lists every saved session with its size and age, and deletes the ones you no longer need.
 
 Long-term memory is just text/markdown files:
 

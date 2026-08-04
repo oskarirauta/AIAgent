@@ -96,6 +96,9 @@ private:
     // /sessions: list every saved session (provider/project, size, age) as
     // "<key>|<display>" rows for the UI menu; "delete <key>" removes one.
     std::string sessions_command(const std::string& args);
+    // /session [name]: show or switch the named session WITHIN this project —
+    // parallel conversations in one directory, each with its own file and lock.
+    std::string session_command(const std::string& args);
     // Summarise the OLD part of the conversation via one LLM call, keeping the
     // last `keep_tail` user exchanges verbatim (0 = summarise everything). The
     // session's tasks/changes are carried into the summary verbatim.

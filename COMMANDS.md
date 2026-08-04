@@ -55,6 +55,30 @@ Long-term memory is per provider. With no argument, lists the memory files; with
 
 Shows the todo list the model maintains for multi-step work (via the update_tasks tool), with ✓/▸/○ status glyphs.
 
+
+## Conversation
+
+### `/session [name]`
+
+One project directory can hold several independent conversations — e.g. one building a feature and one reviewing it — each with its own history file and lock. With no argument shows the active session and this project's others. `/session <name>` saves the current conversation and switches (creating the session if it is new); `/session default` returns to the main one. To open a second window directly on a named session: `agent -n <name>`.
+
+
+## Context & cost
+
+### `/sessions [delete <key>]`
+
+Lists every saved session across providers and projects with its file size and last-used time. In the menu `d` deletes the selected session; `/sessions delete <key>` does the same directly. The active session cannot be deleted (use /clear to empty it).
+
+
+## Session
+
+### `/shell`
+
+Hands the whole terminal to your $SHELL (for `git push` with a password, a quick editor visit, …); `exit` returns to the agent with the transcript intact. For one-off commands `!<command>` is faster and lets the model see the output. Not available while the AI is answering — wait and retry.
+
+
+## Context & cost
+
 ### `/queue [drop <n|all>]`
 
 Lists messages you typed while a turn was running (they auto-send when it finishes). `/queue drop <n|all>` removes queued entries.
@@ -151,9 +175,11 @@ Shows the rate-limit and quota headers the provider returned on the last request
 
 Shows the exact JSON request last sent to the provider and the response received (assembled from the stream when streaming), in a scrollable view — for debugging prompts, tools and provider quirks. `/raw request` or `/raw response` shows just one. Auth headers are not part of the body shown.
 
-### `/theme <dark|light|warm|cool|rose>`
+### `/theme <dark|light|warm|cool|rose|custom>`
 
 Changes the terminal colour theme (dark, light, warm, cool, rose). Persisted across sessions. Never sets the terminal background.
+
+`custom` is your own palette: in the config file set a base with `theme_base: cool` and override individual roles with `theme.<role>: <colour>` — e.g. `theme.ai: #7aa2f7`, `theme.dim: 244`, `theme.warn: amber`. Roles: user, ai, command, dim, accent, danger, warn, kw, str, num, type. Colours: a 256-colour index (0-255), a hex triplet (#rrggbb), or a colour name. `custom` is offered only once at least one override exists; bare `/theme` prints the active overrides in their own colours.
 
 ### `/help [command]`
 
