@@ -46,27 +46,59 @@ Claude::Claude(const Config& cfg) : Anthropic(cfg) {
     _token = auth::load_claude_token(_config.home_dir);
 }
 
-bool Claude::authenticate(api::Client& client, bool force_login) {
-    // 1. Try refreshing an existing token first (unless forced re-login).
-    if ( !force_login && _token && !_token->refresh_token.empty()) {
-        try {
-            std::string previous_refresh = _token->refresh_token;
-            auto refreshed = auth::refresh_access_token(client, _token->refresh_token);
-            // Anthropic rotates the refresh token; if the response omits a new one,
-            // keep the old (and log it — reusing a rotated-out token 401s next time).
-            bool rotated = !refreshed.refresh_token.empty();
-            if ( !rotated )
-                refreshed.refresh_token = previous_refresh;
-            _token = refreshed;
-            auth::save_claude_token(_config.home_dir, *_token);
-            logger::info["claude"] << "access token refreshed (expires_in=" << _token->expires_in
-                                   << "s, new_refresh_token=" << ( rotated ? "yes" : "no" ) << ")" << std::endl;
-            return true;
-        } catch ( const std::exception& e ) {
-            logger::warning["claude"] << "token refresh failed: " << e.what() << std::endl;
-            _token = std::nullopt;
-        }
+bool Claude::refresh_now(api::Client& client) {
+    // Another instance (or a restart) may have refreshed — and thereby ROTATED —
+    // the refresh token since this process loaded its copy. Re-read the
+    // credentials file first and prefer the stored token when it differs, so we
+    // never burn a rotated-out refresh token (which 401s and used to demand a
+    // full re-login mid-session).
+    if ( auto disk = auth::load_claude_token(_config.home_dir)) {
+        if ( !disk->refresh_token.empty() &&
+             ( !_token || disk->refresh_token != _token->refresh_token ||
+               disk->access_token != _token->access_token ))
+            _token = disk;
     }
+
+    if ( !_token || _token->refresh_token.empty())
+        return false;
+
+    try {
+        std::string previous_refresh = _token->refresh_token;
+        auto refreshed = auth::refresh_access_token(client, _token->refresh_token);
+        // Anthropic rotates the refresh token; if the response omits a new one,
+        // keep the old (and log it — reusing a rotated-out token 401s next time).
+        bool rotated = !refreshed.refresh_token.empty();
+        if ( !rotated )
+            refreshed.refresh_token = previous_refresh;
+        _token = refreshed;
+        try {
+            auth::save_claude_token(_config.home_dir, *_token);
+        } catch ( const std::exception& e ) {
+            // The refreshed token IS valid — a failed save (e.g. a full disk) must
+            // not discard it and force a re-login; it just won't survive a restart.
+            logger::warning["claude"] << "could not persist refreshed token: " << e.what() << std::endl;
+        }
+        logger::info["claude"] << "access token refreshed (expires_in=" << _token->expires_in
+                               << "s, new_refresh_token=" << ( rotated ? "yes" : "no" ) << ")" << std::endl;
+        return true;
+    } catch ( const std::exception& e ) {
+        logger::warning["claude"] << "token refresh failed: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool Claude::authenticate(api::Client& client, bool force_login) {
+    // 0. A still-valid token is reused as-is. Refreshing on every launch would
+    //    rotate the refresh token each time, and any OTHER running instance still
+    //    holding the older refresh token would then fail its own mid-session
+    //    refresh and demand a full re-login (the "logged out mid-work" bug).
+    if ( !force_login && _token && !_token->access_token.empty() &&
+         !auth::token_needs_refresh(*_token, 300))
+        return true;
+
+    // 1. Try refreshing the existing token silently (unless forced re-login).
+    if ( !force_login && refresh_now(client))
+        return true;
 
     // 2. Run manual OAuth authorization-code flow with PKCE.
     // This avoids requiring a local browser / callback listener.
@@ -95,30 +127,21 @@ bool Claude::authenticate(api::Client& client, bool force_login) {
 
 bool Claude::ready_noninteractive(api::Client& client) {
     // Used by a mid-session /provider switch: refresh silently, never prompt.
-    if ( !_token || _token->access_token.empty())
-        return false;
-    if ( auth::token_needs_refresh(*_token, 300)) {
-        if ( _token->refresh_token.empty())
-            return false;
-        try {
-            std::string previous_refresh = _token->refresh_token;
-            auto refreshed = auth::refresh_access_token(client, _token->refresh_token);
-            if ( refreshed.refresh_token.empty())
-                refreshed.refresh_token = previous_refresh;
-            _token = refreshed;
-            auth::save_claude_token(_config.home_dir, *_token);
-        } catch ( const std::exception& e ) {
-            logger::warning["claude"] << "token refresh failed on switch: " << e.what() << std::endl;
-            return false;
-        }
-    }
-    return true;
+    if ( _token && !_token->access_token.empty() && !auth::token_needs_refresh(*_token, 300))
+        return true;
+    return refresh_now(client);
 }
 
 void Claude::prepare_request(api::Client& client) {
-    if ( !_token || _token->access_token.empty() || auth::token_needs_refresh(*_token, 300)) {
-        authenticate(client, false);
-    }
+    if ( _token && !_token->access_token.empty() && !auth::token_needs_refresh(*_token, 300))
+        return;
+    // Mid-session — usually on the worker thread with the terminal in raw mode.
+    // NEVER start the interactive OAuth flow here: it would dump a login URL into
+    // the transcript and block reading stdin the UI owns. Refresh silently or
+    // fail the turn with a clear, actionable error instead.
+    if ( refresh_now(client))
+        return;
+    throws << "claude session could not be refreshed — restart the app, or run `agent -p claude -L` to log in again" << std::endl;
 }
 
 JSON Claude::build_request(const Conversation& conv, const JSON& tools_schema) {

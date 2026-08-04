@@ -61,6 +61,8 @@ public:
     // Returns true if a usable token is now available.
     bool authenticate(api::Client& client, bool force_login = false);
     bool ready_noninteractive(api::Client& client) override;
+    // A 401 mid-turn: force one silent refresh so the request can be retried.
+    bool reauthenticate(api::Client& client) override { return refresh_now(client); }
 
     // Claude authenticates with an OAuth token (_token), never _config.api_key.
 
@@ -68,6 +70,11 @@ public:
     void apply_provider_options(const JSON& options) override;
 
 private:
+    // Silent refresh: reloads the credentials file first (another instance may
+    // have rotated the refresh token), never prompts, and never discards a
+    // successfully refreshed token because persisting it failed.
+    bool refresh_now(api::Client& client);
+
     std::optional<auth::ClaudeToken> _token;
 };
 

@@ -68,6 +68,13 @@ public:
     // Providers without authentication are always ready.
     virtual bool ready_noninteractive(api::Client& client) { (void)client; return true; }
 
+    // Called after an authorization failure (HTTP 401) mid-turn: force one silent
+    // credential refresh so the failed request can be retried, e.g. when the
+    // server invalidated the access token early or another instance rotated the
+    // refresh token. Returns true when a fresh credential is ready. Providers
+    // without refreshable credentials have nothing to do.
+    virtual bool reauthenticate(api::Client& client) { (void)client; return false; }
+
     virtual bool supports_streaming() const { return false; }
 
     // Streaming: reset per-turn accumulation, parse one SSE chunk (returning the

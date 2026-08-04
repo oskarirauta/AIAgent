@@ -1124,6 +1124,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         // a mid-stream failure never double-renders. `produced` tracks that.
         bool produced = false;
         bool failed_over = false;
+        bool reauthed = false; // one silent credential refresh per request on a 401
         for ( int attempt = 0; ; ++attempt ) {
             try {
                 if ( can_stream ) {
@@ -1175,6 +1176,20 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                     ( m.find(" 429") != std::string::npos || m.find(" 503") != std::string::npos ||
                       m.find(" 529") != std::string::npos );
                 bool aborting = abort_flag && abort_flag->load(std::memory_order_relaxed);
+
+                // Authorization failed (the server invalidated the access token
+                // early, or another instance rotated the refresh token): force ONE
+                // silent credential refresh and retry this request — the turn must
+                // never end in a "please log in again" for a refreshable session.
+                // auth_value() is re-read on the retry, so it picks up the fresh token.
+                bool auth_error = m.find("http error") != std::string::npos &&
+                                  m.find(" 401") != std::string::npos;
+                if ( auth_error && !reauthed && !produced && !aborting &&
+                     _provider->reauthenticate(_client)) {
+                    reauthed = true;
+                    logger::warning["agent"] << "401 mid-turn — credentials refreshed, retrying" << std::endl;
+                    continue;
+                }
                 if ( !transient || produced || aborting || attempt >= 3 ) {
                     // Give up on this provider. Before propagating the error, fail
                     // over to the next configured provider — safe only if nothing

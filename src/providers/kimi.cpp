@@ -27,22 +27,51 @@ std::string Kimi::oauth_client_id() const {
     return _config.oauth_client_id.empty() ? DEFAULT_CLIENT_ID : _config.oauth_client_id;
 }
 
-bool Kimi::authenticate(api::Client& client, bool force_login) {
-    // 1. Try refreshing an existing token first (unless forced re-login).
-    if ( !force_login && _token && !_token->refresh_token.empty()) {
-        try {
-            auto refreshed = auth::refresh_access_token(oauth_host(), oauth_client_id(), _token->refresh_token, _config.home_dir, client);
-            auth::save_token(_config.home_dir, refreshed);
-            _token = refreshed;
-            _config.api_key = refreshed.access_token;
-            logger::info["kimi"] << "access token refreshed" << std::endl;
-            return true;
-        } catch ( const std::exception& e ) {
-            logger::warning["kimi"] << "token refresh failed: " << e.what() << std::endl;
-            _token = std::nullopt;
-            _config.api_key.clear();
-        }
+bool Kimi::refresh_now(api::Client& client) {
+    // Another instance (or a restart) may have refreshed — and possibly rotated —
+    // the token since this process loaded its copy: re-read the credentials file
+    // first and prefer the stored token when it differs.
+    if ( auto disk = auth::load_token(_config.home_dir)) {
+        if ( !disk->refresh_token.empty() &&
+             ( !_token || disk->refresh_token != _token->refresh_token ||
+               disk->access_token != _token->access_token ))
+            _token = disk;
     }
+
+    if ( !_token || _token->refresh_token.empty())
+        return false;
+
+    try {
+        auto refreshed = auth::refresh_access_token(oauth_host(), oauth_client_id(), _token->refresh_token, _config.home_dir, client);
+        try {
+            auth::save_token(_config.home_dir, refreshed);
+        } catch ( const std::exception& e ) {
+            // The refreshed token IS valid — a failed save (e.g. a full disk) must
+            // not discard it and force a re-login; it just won't survive a restart.
+            logger::warning["kimi"] << "could not persist refreshed token: " << e.what() << std::endl;
+        }
+        _token = refreshed;
+        _config.api_key = refreshed.access_token;
+        logger::info["kimi"] << "access token refreshed" << std::endl;
+        return true;
+    } catch ( const std::exception& e ) {
+        logger::warning["kimi"] << "token refresh failed: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool Kimi::authenticate(api::Client& client, bool force_login) {
+    // 0. A still-valid token is reused as-is — refreshing on every launch would
+    //    needlessly rotate it and break any other running instance's copy.
+    if ( !force_login && _token && !_token->access_token.empty() &&
+         !auth::token_needs_refresh(*_token, 300)) {
+        _config.api_key = _token->access_token;
+        return true;
+    }
+
+    // 1. Try refreshing an existing token silently (unless forced re-login).
+    if ( !force_login && refresh_now(client))
+        return true;
 
     // 2. Run interactive device-code flow.
     auto device_auth = auth::request_device_authorization(oauth_host(), oauth_client_id(), _config.home_dir, client);
@@ -118,30 +147,23 @@ JSON Kimi::build_request(const Conversation& conv, const JSON& tools_schema) {
 
 bool Kimi::ready_noninteractive(api::Client& client) {
     // Used by a mid-session /provider switch: refresh silently, never prompt.
-    if ( !_token )
-        return false;
-    if ( auth::token_needs_refresh(*_token, 300)) {
-        if ( _token->refresh_token.empty())
-            return false;
-        try {
-            auto refreshed = auth::refresh_access_token(oauth_host(), oauth_client_id(), _token->refresh_token, _config.home_dir, client);
-            auth::save_token(_config.home_dir, refreshed);
-            _token = refreshed;
-            _config.api_key = refreshed.access_token;
-        } catch ( const std::exception& e ) {
-            logger::warning["kimi"] << "token refresh failed on switch: " << e.what() << std::endl;
-            return false;
-        }
-    } else {
+    if ( _token && !_token->access_token.empty() && !auth::token_needs_refresh(*_token, 300)) {
         _config.api_key = _token->access_token;
+        return true;
     }
-    return true;
+    return refresh_now(client);
 }
 
 void Kimi::prepare_request(api::Client& client) {
-    if ( _config.api_key.empty() || !_token || auth::token_needs_refresh(*_token, 300)) {
-        authenticate(client, false);
-    }
+    if ( _token && !_config.api_key.empty() && !auth::token_needs_refresh(*_token, 300))
+        return;
+    // Mid-session — usually on the worker thread with the terminal in raw mode.
+    // NEVER start the interactive device-code flow here: it would print a login
+    // URL into the transcript and poll for minutes. Refresh silently or fail the
+    // turn with a clear, actionable error instead.
+    if ( refresh_now(client))
+        return;
+    throws << "kimi session could not be refreshed — restart the app, or run `agent -p kimi -L` to log in again" << std::endl;
 }
 
 void Kimi::apply_provider_options(const JSON& options) {
