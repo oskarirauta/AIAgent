@@ -246,16 +246,35 @@ std::vector<StyledSpan> SyntaxHighlighter::highlight_markdown(const std::string&
         }
         if ( c == '`' ) {
             size_t start = i;
-            while ( i < line.size() && line[i] == '`' ) i++;
-            spans.push_back({ line.substr(start, i - start), _fence_pair, false });
+            int count = 0;
+            while ( i < line.size() && line[i] == '`' ) { i++; count++; }
+            // Inline code: colour the whole `...` span (delimiters AND content),
+            // like bold/italic below -- the content is the part the reader needs
+            // set apart, not just the backticks. Consuming the whole span also
+            // stops snake_case content (e.g. `some_long_name`) from being
+            // re-read as `_italic_` by the emphasis branch. Find the matching
+            // closing run of the same length.
+            size_t end = line.find(std::string(count, '`'), i);
+            if ( end != std::string::npos ) {
+                end += count;
+                spans.push_back({ line.substr(start, end - start), _fence_pair, false });
+                i = end;
+                continue;
+            }
+            // No closing backtick on this line: just style the delimiters.
+            spans.push_back({ line.substr(start, count), _fence_pair, false });
             continue;
         }
-        if ( c == '*' || c == '_' ) {
-            char mark = c;
+        // Emphasis: only `*` (`*italic*` / `**bold**`). `_` is deliberately NOT
+        // treated as emphasis -- in a coding assistant it is far more often a
+        // snake_case separator (some_long_name) than an italic marker, so
+        // honouring it would mangle identifiers. Underscore falls through to
+        // the plain-text run below.
+        if ( c == '*' ) {
             size_t start = i;
             int count = 0;
-            while ( i < line.size() && line[i] == mark && count < 2 ) { i++; count++; }
-            size_t end = line.find(std::string(count, mark), i);
+            while ( i < line.size() && line[i] == '*' && count < 2 ) { i++; count++; }
+            size_t end = line.find(std::string(count, '*'), i);
             if ( end != std::string::npos ) {
                 end += count;
                 spans.push_back({ line.substr(start, end - start), _string_pair, count == 2 });
@@ -266,7 +285,7 @@ std::vector<StyledSpan> SyntaxHighlighter::highlight_markdown(const std::string&
             continue;
         }
         size_t start = i;
-        while ( i < line.size() && line[i] != '#' && line[i] != '`' && line[i] != '*' && line[i] != '_' )
+        while ( i < line.size() && line[i] != '#' && line[i] != '`' && line[i] != '*' )
             i++;
         spans.push_back({ line.substr(start, i - start), 0, false });
     }
