@@ -359,6 +359,21 @@ static std::string sanitize_display(const std::string& s) {
     return out;
 }
 
+// Strip terminal control bytes (except tab) from CONTENT before it is written --
+// most importantly BEL (0x07), which rings the terminal bell. A stray BEL in a
+// tool's output or echoed back in a model reply would otherwise ring the bell
+// outside the deliberate, level-gated bell policy (the source of "random" bells).
+// Applied to raw content only, before any of our own ANSI colour codes are added;
+// UTF-8 bytes (>= 0x80) pass through untouched, so multibyte text is preserved.
+static std::string sanitize_control(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for ( unsigned char c : s )
+        if ( c == '\t' || ( c >= 0x20 && c != 0x7f ))
+            out += static_cast<char>(c);
+    return out;
+}
+
 void InlineRepl::echo_user_multi(const std::vector<std::string>& parts) {
     erase_live();
     wr("\n"); // one blank line before the whole group, none between parts
@@ -487,6 +502,10 @@ void InlineRepl::emit_reply_line(const std::string& raw_line) {
         _reply_first_line = true; // the first line of each region gets its marker
         line.erase(mp, 1);
     }
+
+    // Drop any stray terminal control byte (e.g. a BEL echoed from tool output)
+    // so only the deliberate, level-gated bell can ever ring.
+    line = sanitize_control(line);
 
     if ( common::trim_ws(line).empty()) {
         // Defer blank lines: interior ones are flushed once more content arrives;
@@ -759,11 +778,12 @@ void InlineRepl::drain_notices() {
     erase_live();
     bool ring = false;
     for ( const auto& n : lines ) {
+        std::string text = sanitize_control(n.text);
         if ( n.bell ) {
-            wr(_theme.accent + "● " + n.text + Theme::reset + "\r\n");
+            wr(_theme.accent + "● " + text + Theme::reset + "\r\n");
             ring = true;
         } else {
-            wr(_theme.dim + n.text + Theme::reset + "\r\n");
+            wr(_theme.dim + text + Theme::reset + "\r\n");
         }
     }
     if ( ring && bell_level(_config.bell) >= 3 ) // a notice (workflow done) is "attention"
@@ -2052,9 +2072,11 @@ void InlineRepl::render_command(const std::string& cmd, const std::string& resul
     if ( width < 8 ) width = 8;
     std::istringstream ls(result);
     std::string line;
-    while ( std::getline(ls, line))
+    while ( std::getline(ls, line)) {
+        line = sanitize_control(line);
         for ( const auto& seg : word_wrap(line, width))
             wr("  " + seg + "\n");
+    }
     // No trailing blank: the live block's own leading spacer separates the result
     // from the prompt (and from a following command), so adding one here would
     // double the gap when commands are chained.
