@@ -1,6 +1,7 @@
 #include "agent/conversation.hpp"
 
 #include <algorithm>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <unordered_map>
@@ -253,11 +254,32 @@ void Conversation::save(const std::string& path) const {
         arr.append(obj);
     }
 
-    std::ofstream ofd(path, std::ios::out | std::ios::trunc);
-    if ( !ofd.is_open())
-        throws << "cannot open conversation file for writing: " << path << std::endl;
+    // Write to a sibling temp file and rename it over the target only once the
+    // write is KNOWN good. A straight overwrite truncates the target first, so a
+    // full disk (or a crash mid-write) used to destroy the previous, intact
+    // history — the only copy of the conversation.
+    std::string tmp = path + ".tmp";
+    {
+        std::ofstream ofd(tmp, std::ios::out | std::ios::trunc);
+        if ( !ofd.is_open())
+            throws << "cannot open conversation file for writing: " << tmp << std::endl;
+        ofd << arr.dump();
+        ofd.flush();
+        if ( !ofd.good()) {
+            ofd.close();
+            std::error_code ec;
+            std::filesystem::remove(tmp, ec);
+            throws << "conversation save failed — disk full? (" << tmp << ")" << std::endl;
+        }
+    }
 
-    ofd << arr.dump();
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+    if ( ec ) {
+        std::error_code ec2;
+        std::filesystem::remove(tmp, ec2);
+        throws << "conversation save could not replace " << path << ": " << ec.message() << std::endl;
+    }
     logger::verbose["conversation"] << "saved " << _messages.size() << " message(s) to " << path << std::endl;
 }
 
@@ -275,10 +297,23 @@ void Conversation::load(const std::string& path) {
     std::stringstream ss;
     ss << ifd.rdbuf();
 
+    // An unreadable history must not crash the agent — but it must not be left in
+    // place to be OVERWRITTEN either: after an ignored load the conversation is
+    // empty, and the first save would have replaced the damaged file (the only
+    // copy, likely just truncated by a full disk) with the fresh session. Move it
+    // aside so the bytes survive for recovery and the session starts cleanly.
+    auto quarantine = [&path](const std::string& why) {
+        std::string aside = path + ".corrupt-" + std::to_string(static_cast<long long>(::time(nullptr)));
+        std::error_code ec;
+        std::filesystem::rename(path, aside, ec);
+        logger::warning["conversation"] << "conversation file " << path << " is unreadable (" << why
+                                        << ") — moved to " << aside << ", starting fresh" << std::endl;
+    };
+
     try {
         JSON arr = JSON::parse(ss.str());
         if ( arr != JSON::TYPE::ARRAY ) {
-            logger::warning["conversation"] << "conversation file is not an array, ignoring: " << path << std::endl;
+            quarantine("not a JSON array");
             return;
         }
 
@@ -320,8 +355,7 @@ void Conversation::load(const std::string& path) {
         _messages = std::move(loaded);
         logger::verbose["conversation"] << "loaded " << _messages.size() << " message(s) from " << path << std::endl;
     } catch ( const std::exception& e ) {
-        // A corrupt history must not crash the agent — warn and start fresh.
-        logger::warning["conversation"] << "ignoring unreadable conversation file " << path << ": " << e.what() << std::endl;
+        quarantine(e.what());
     }
 }
 
