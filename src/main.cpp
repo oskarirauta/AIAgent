@@ -51,6 +51,7 @@ static usage_t make_usage(int argc, char **argv) {
             { "no_tools", { "T", "no-tools", "disable tool calls (safer mode)" }},
             { "yes_tools", { "Y", "yes-tools", "run ordinary tools without confirmation (danger-listed commands still warn)" }},
             { "insecure", { "I", "insecure", "run ALL tools without any confirmation, including dangerous commands" }},
+            { "steal_lock", { "S", "steal-lock", "take over this project's session even if another agent has it locked" }},
             { "prompt", { "P", "prompt", "single prompt mode, exit after answer", usage_t::OPTIONAL }},
             { "output_format", { "o", "output-format", "single-prompt output: text (default) or json", usage_t::OPTIONAL }},
             { "dump_commands", { "", "dump-commands", "print the slash-command reference as Markdown (regenerates COMMANDS.md) and exit" }}
@@ -104,13 +105,29 @@ int main(int argc, char **argv) {
 
     set_log_level(config.log_level);
 
-    // Send the full log to a file so it never has to clutter the conversation.
+    // Send the log to a file so it never has to clutter the conversation. The
+    // FILE follows the configured level too (default info) — it used to receive
+    // every entry unconditionally, and the vverbose per-chunk HTTP logging grew
+    // it by hundreds of MB until the disk filled (which then corrupted the
+    // conversation save). -l verbose/debug still captures everything on demand.
     // (The interactive REPL additionally limits the terminal to errors only.)
+    logger::file_log_level = logger::log_level;
     static std::ofstream log_file;
     {
         std::string log_dir = config.home_dir + "/logs";
         std::filesystem::create_directories(log_dir);
-        log_file.open(log_dir + "/agent.log", std::ios::app);
+        std::string log_path = log_dir + "/agent.log";
+
+        // Startup rotation: cap the log's growth across sessions. One previous
+        // generation is kept as agent.log.1 for post-mortems.
+        std::error_code ec;
+        auto size = std::filesystem::file_size(log_path, ec);
+        if ( !ec && size > 10 * 1024 * 1024 ) {
+            std::filesystem::remove(log_dir + "/agent.log.1", ec);
+            std::filesystem::rename(log_path, log_dir + "/agent.log.1", ec);
+        }
+
+        log_file.open(log_path, std::ios::app);
         if ( log_file.is_open())
             logger::file_stream = &log_file;
     }
