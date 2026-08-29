@@ -1,4 +1,5 @@
 #include "agent/api/client.hpp"
+#include "agent/api/rate_limit.hpp"
 
 #include <curl/curl.h>
 #include <cctype>
@@ -100,14 +101,43 @@ static std::string format_api_error(const std::string& body) {
     return body;
 }
 
-// A short hint for the common transient HTTP statuses.
-static std::string http_hint(long code) {
-    if ( code == 429 )
-        return " (rate limited — wait a moment and retry, or try a different/paid model; "
+// A short hint for the common transient HTTP statuses. For 429 the response
+// headers say far more than a generic sentence can (which limit, and when it
+// clears), so the caller passes them in and we decode them.
+static std::string http_hint(long code,
+                             const std::vector<std::pair<std::string, std::string>>& headers = {},
+                             const std::string& body = "") {
+    if ( code == 429 ) {
+        RateLimitInfo info = parse_rate_limit(headers, body);
+        std::string desc = describe_rate_limit(info);
+        if ( !desc.empty()) {
+            std::string out = " \u2014 " + desc;
+            if ( info.kind == RateLimitInfo::Kind::Rate )
+                out += " (a different or paid model may work now; free models are "
+                       "heavily throttled)";
+            return out;
+        }
+        return " (rate limited \u2014 wait a moment and retry, or try a different/paid model; "
                "free models are heavily throttled)";
+    }
     if ( code == 503 || code == 529 )
-        return " (provider overloaded — retry shortly)";
+        return " (provider overloaded \u2014 retry shortly)";
     return "";
+}
+
+// Keep the raw HTTP wrapper for errors that cannot be explained reliably. A
+// decoded usage-limit response is already a user-facing diagnosis, so showing
+// "http error 429" in front of it only adds noise.
+static std::string format_http_error(long code,
+                                     const std::vector<std::pair<std::string, std::string>>& headers,
+                                     const std::string& body) {
+    if ( code == 429 ) {
+        RateLimitInfo info = parse_rate_limit(headers, body);
+        std::string desc = describe_rate_limit(info);
+        if ( !desc.empty()) return desc;
+    }
+    return "http error " + std::to_string(code) + ": " + format_api_error(body) +
+           http_hint(code, headers, body);
 }
 
 static size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -234,7 +264,7 @@ std::string Client::post(const std::string& url, const std::string& auth_header,
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
 
     if ( http_code < 200 || http_code >= 300 )
-        throws << "http error " << http_code << ": " << format_api_error(response) << http_hint(http_code) << std::endl;
+        throws << format_http_error(http_code, _headers, response) << std::endl;
 
     return response;
 }
@@ -316,7 +346,7 @@ void Client::post_stream(const std::string& url, const std::string& auth_header,
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
 
     if ( http_code < 200 || http_code >= 300 )
-        throws << "http error " << http_code << ": " << format_api_error(error_body) << http_hint(http_code) << std::endl;
+        throws << format_http_error(http_code, _headers, error_body) << std::endl;
 }
 
 std::string Client::get(const std::string& url,
@@ -426,6 +456,27 @@ std::string Client::post_form_raw(const std::string& url,
     return response; // whatever the server sent, 2xx or not (e.g. a 400 + error JSON)
 }
 
+std::string Client::post_json_raw(const std::string& url, const std::string& body) {
+    CURL* c = static_cast<CURL*>(curl);
+    std::string response;
+    curl_easy_reset(c);
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, "Accept: application/json");
+    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
+    CURLcode res = curl_easy_perform(c);
+    curl_slist_free_all(headers);
+    if ( res != CURLE_OK ) return "";
+    return response;
+}
+
 std::string Client::post_form(const std::string& url,
                               const std::vector<std::pair<std::string, std::string>>& extra_headers,
                               const std::string& body, std::atomic<bool>* abort_flag) {
@@ -473,7 +524,10 @@ std::string Client::post_form(const std::string& url,
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
 
     if ( http_code < 200 || http_code >= 300 )
-        throws << "http error " << http_code << ": " << format_api_error(response) << http_hint(http_code) << std::endl;
+        // No header capture on this path (it is used by tools, not the provider
+        // APIs), so decode from the body alone rather than from another
+        // request's stale headers.
+        throws << format_http_error(http_code, {}, response) << std::endl;
 
     return response;
 }

@@ -42,6 +42,9 @@ public:
     std::string post_form_raw(const std::string& url,
                               const std::vector<std::pair<std::string, std::string>>& extra_headers,
                               const std::string& body);
+    // JSON counterpart used by OAuth device polling, whose pending state is a
+    // non-2xx JSON response that the caller must inspect rather than throw away.
+    std::string post_json_raw(const std::string& url, const std::string& body);
     void post_stream(const std::string& url, const std::string& auth_header, const std::string& auth_value, const std::string& body, std::function<void(const std::string&)> callback, std::atomic<bool>* abort_flag = nullptr);
     void post_stream(const std::string& url, const std::string& auth_header, const std::string& auth_value,
                      const std::vector<std::pair<std::string, std::string>>& extra_headers,
