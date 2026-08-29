@@ -15,8 +15,14 @@ public:
     std::string auth_header() const override { return "x-api-key"; }
     std::string auth_value() const override { return _config.api_key; }
     bool supports_streaming() const override { return true; }
+    bool supports_reasoning() const override { return true; }
     std::vector<std::pair<std::string, std::string>> extra_headers() const override {
-        return { { "anthropic-version", "2023-06-01" } };
+        std::vector<std::pair<std::string, std::string>> h = {
+            { "anthropic-version", "2023-06-01" }
+        };
+        if ( Config::model_requests_1m_context(_config.model))
+            h.push_back({ "anthropic-beta", "context-1m-2025-08-07" });
+        return h;
     }
     void stream_reset() override;
     StreamChunk parse_stream(const std::string& chunk, std::string& buffer, bool& done) override;
@@ -30,6 +36,10 @@ public:
     // Extended-thinking budget (tokens) for an effort level and model. `max` is
     // the model's ceiling (opus ~24k, sonnet ~56k) — a Claude-specific top level.
     static long thinking_budget_for(const std::string& effort, const std::string& model);
+
+    // The model's total output-token ceiling (thinking budget + visible answer).
+    // Exceeding it is a hard 400 from the API, so max_tokens is clamped to it.
+    static long output_cap_for(const std::string& model);
 
 protected:
     bool _thinking_enabled = false;   // off by default (unlike Kimi)

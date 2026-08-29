@@ -1,20 +1,36 @@
 #include "agent/providers/anthropic.hpp"
 
 #include <cctype>
+#include <algorithm>
 #include "throws.hpp"
 #include "logger.hpp"
 
 namespace agent::providers {
 
 // The model's total output-token ceiling (thinking budget + visible answer).
-static long anthropic_output_cap(const std::string& model) {
+//
+// These are per-model API limits, not a policy choice: exceeding one is a hard
+// 400 from Anthropic. The table is matched by family so a new release inherits
+// its family's ceiling instead of silently falling back to the lowest value —
+// the old code returned 32000 for everything that was not "sonnet", which
+// quietly capped newer Opus models far below what they actually support.
+long Anthropic::output_cap_for(const std::string& model) {
     std::string m;
-    for ( char c : model ) m += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return ( m.find("sonnet") != std::string::npos ) ? 64000 : 32000;
+    for ( char c : Config::base_model_name(model) )
+        m += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    auto has = [&](const char* p) { return m.find(p) != std::string::npos; };
+
+    if ( has("claude-opus-5") || has("claude-sonnet-5") || has("claude-fable-5") || has("claude-mythos-5") )
+        return 128000;
+    if ( has("haiku") )  return 64000;
+    if ( has("sonnet") ) return 64000;
+    if ( has("fable") )  return 64000;
+    if ( has("opus") )   return 64000;
+    return 32000; // unknown Anthropic model: the conservative floor
 }
 
 long Anthropic::thinking_budget_for(const std::string& effort, const std::string& model) {
-    long cap = anthropic_output_cap(model); // output ceiling
+    long cap = output_cap_for(model); // output ceiling
     long margin = 8192;        // leave room for the visible answer
     long maxb = cap - margin;
 
@@ -195,29 +211,46 @@ JSON Anthropic::build_request(const Conversation& conv, const JSON& tools_schema
         }
     }
 
-    long cap = anthropic_output_cap(_config.model);
+    const std::string model = request_model();
+    long cap = output_cap_for(model);
     long max_out = _config.max_tokens > 0 ? static_cast<long>(_config.max_tokens) : 8192;
-    if ( max_out > cap ) max_out = cap; // max_tokens alone cannot exceed the ceiling
+    // Report the clamp instead of applying it silently: a user who sets
+    // max_tokens above the model ceiling otherwise gets a short reply with no
+    // hint that their setting was ignored.
+    if ( max_out > cap ) {
+        static std::string warned_for; // once per model, not once per request
+        if ( warned_for != model ) {
+            warned_for = model;
+            logger::warning["anthropic"]
+                << "max_tokens=" << max_out << " exceeds the output ceiling for "
+                << model << " (" << cap << "); using " << cap
+                << ". A longer answer must be continued across turns." << std::endl;
+        }
+        max_out = cap;
+    }
     JSON req = JSON::Object{
-        { "model", _config.model },
+        { "model", model },
         { "max_tokens", static_cast<long long>(max_out) },
         { "messages", messages }
     };
 
     // Extended thinking: budget_tokens must be < max_tokens, so raise max_tokens
-    // above the budget — but the TOTAL (budget + answer) must not exceed the model
+    // above the budget -- but the TOTAL (budget + answer) must not exceed the model
     // ceiling `cap`, or Anthropic rejects the request with a 400. Temperature is
     // left unset (Anthropic requires it to be 1 with thinking; unset defaults to 1).
     if ( _thinking_enabled ) {
-        if ( max_out > cap - 1024 ) max_out = cap - 1024; // leave room for a min budget
-        long budget = thinking_budget_for(_thinking_effort, _config.model);
-        long total = budget + max_out;
-        if ( total > cap ) { total = cap; budget = cap - max_out; }
+        // The requested effort wins over the answer allowance: the previous order
+        // took max_tokens first and left the remainder for thinking, so once
+        // max_tokens reached the ceiling every effort level collapsed to the 1024
+        // minimum. thinking_budget_for() already reserves an answer margin, so
+        // cap - budget is always a usable answer allowance.
+        long budget = thinking_budget_for(_thinking_effort, model);
+        long answer = std::min(max_out, cap - budget);
         req["thinking"] = JSON::Object{
             { "type", "enabled" },
             { "budget_tokens", static_cast<long long>(budget) }
         };
-        req["max_tokens"] = static_cast<long long>(total);
+        req["max_tokens"] = static_cast<long long>(budget + answer);
     }
 
     if ( !system.empty())

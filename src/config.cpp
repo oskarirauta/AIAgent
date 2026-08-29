@@ -2,6 +2,8 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <cstdio>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -14,6 +16,23 @@ namespace agent {
 
 static std::string trim(const std::string& s) {
     return common::trim_ws(s);
+}
+
+static std::string model_annotation_1m = "[1m]";
+
+static std::string strip_model_annotation(const std::string& model, bool* has_1m = nullptr) {
+    std::string out = trim(model);
+    if ( out.size() >= model_annotation_1m.size() ) {
+        std::string tail = out.substr(out.size() - model_annotation_1m.size());
+        for ( char& c : tail )
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if ( tail == model_annotation_1m ) {
+            if ( has_1m ) *has_1m = true;
+            return trim(out.substr(0, out.size() - model_annotation_1m.size()));
+        }
+    }
+    if ( has_1m ) *has_1m = false;
+    return out;
 }
 
 // One place for boolean-ish config values so every flag accepts the same set
@@ -59,6 +78,21 @@ static size_t parse_size(const std::string& value, size_t current, const std::st
                                   << "' (keeping " << current << ")" << std::endl;
         return current;
     }
+}
+
+// Token-valued config keys use the decimal parser ("64K" = 64000), matching what
+// the UI prints and accepts. Byte-ish keys keep the 1024-based parse_size above.
+static size_t parse_token_value(const std::string& value, size_t current, const std::string& key) {
+    size_t n = Config::parse_tokens(value, current);
+    if ( n == current && !common::trim_ws(value).empty()) {
+        // parse_tokens() returns the fallback on bad input; warn like parse_size.
+        std::string t = common::trim_ws(value);
+        bool numeric = !t.empty() && ( std::isdigit(static_cast<unsigned char>(t[0])) || t[0] == '.' );
+        if ( !numeric )
+            logger::warning["config"] << "invalid token value for " << key << ": '" << value
+                                      << "' (keeping " << current << ")" << std::endl;
+    }
+    return n;
 }
 
 size_t Config::parse_size_suffixed(const std::string& value, size_t fallback) {
@@ -110,6 +144,7 @@ std::string Config::default_path() {
 }
 
 std::string Config::default_model_for(const std::string& provider) {
+    if ( provider == "codex" ) return "gpt-5.5";
     if ( provider == "claude" ) return "claude-opus-4-8";
     if ( provider == "anthropic" ) return "claude-opus-4-8";
     if ( provider == "kimi" ) return "kimi-for-coding";     // managed:kimi-code / "K2.7 Code"
@@ -119,7 +154,330 @@ std::string Config::default_model_for(const std::string& provider) {
     return "gpt-4o-mini"; // openai and any other OpenAI-compatible provider
 }
 
+std::string Config::base_model_name(const std::string& model) {
+    return strip_model_annotation(model);
+}
+
+bool Config::model_requests_1m_context(const std::string& model) {
+    bool requested = false;
+    (void)strip_model_annotation(model, &requested);
+    return requested;
+}
+
+// Well-known models per provider, best/most-capable first. Only providers with a
+// closed, curated namespace are listed: Ollama's models are whatever the user
+// pulled locally, and OpenRouter/OpenAI-compatible endpoints are an open
+// namespace, so for those we rely on the provider's live listing instead.
+const std::vector<std::string>& Config::known_models_for(const std::string& provider) {
+    static const std::vector<std::string> anthropic_models = {
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+        "claude-fable-5",
+    };
+    static const std::vector<std::string> moonshot_models = {
+        "kimi-k2-0905-preview",
+        "kimi-k2-turbo-preview",
+        "kimi-k2-0711-preview",
+        "moonshot-v1-128k",
+        "moonshot-v1-32k",
+        "moonshot-v1-8k",
+    };
+    static const std::vector<std::string> kimi_models = {
+        "kimi-for-coding",
+    };
+    static const std::vector<std::string> openai_models = {
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "o3",
+        "o3-mini",
+        "gpt-4-turbo",
+        "gpt-3.5-turbo",
+    };
+    static const std::vector<std::string> codex_models = {
+        "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"
+    };
+    static const std::vector<std::string> openrouter_models = {
+        "openrouter/auto",
+        "openrouter/free",
+    };
+    static const std::vector<std::string> none;
+
+    if ( provider == "claude" || provider == "anthropic" ) return anthropic_models;
+    if ( provider == "moonshot" ) return moonshot_models;
+    if ( provider == "kimi" ) return kimi_models;
+    if ( provider == "openai" ) return openai_models;
+    if ( provider == "codex" ) return codex_models;
+    if ( provider == "openrouter" ) return openrouter_models;
+    return none; // ollama and anything custom: user-defined namespace
+}
+
+namespace {
+
+// Short hand -> canonical *fragment* aliases. The value is matched against the
+// candidate list, so the table stays valid when a model generation is bumped
+// (e.g. "opus" keeps resolving after claude-opus-4-8 becomes -4-9).
+struct ModelAlias { const char* from; const char* to; };
+static const ModelAlias model_aliases[] = {
+    // Anthropic families
+    { "opus",    "claude-opus" },
+    { "sonnet",  "claude-sonnet" },
+    { "haiku",   "claude-haiku" },
+    { "fable",   "claude-fable" },
+    // Moonshot / Kimi
+    { "k2",      "kimi-k2" },
+    { "kimi",    "kimi" },
+    { "turbo",   "kimi-k2-turbo" },
+    // OpenAI
+    { "4o",      "gpt-4o" },
+    { "4o-mini", "gpt-4o-mini" },
+    { "mini",    "gpt-4o-mini" },
+    { "4.1",     "gpt-4.1" },
+    { "gpt4",    "gpt-4o" },
+    { "gpt",     "gpt-4o" },
+    { "3.5",     "gpt-3.5-turbo" },
+    // OpenRouter
+    { "auto",    "openrouter/auto" },
+    { "free",    "openrouter/free" },
+};
+
+// Normalise for comparison: lower-case, and drop the separators people vary on
+// ("claude_opus 4.8" and "claude-opus-4-8" must compare equal).
+std::string normalize_model(const std::string& s) {
+    std::string out;
+    for ( char c : s ) {
+        if ( c == '-' || c == '_' || c == ' ' || c == '.' || c == '/' || c == ':' )
+            continue;
+        out += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return out;
+}
+
+// Levenshtein distance, capped: once every cell of a row exceeds `max_distance`
+// the result can only grow, so bail out early instead of filling the matrix.
+size_t edit_distance(const std::string& a, const std::string& b, size_t max_distance) {
+    if ( a.empty()) return b.size();
+    if ( b.empty()) return a.size();
+    if ( a.size() > b.size() + max_distance || b.size() > a.size() + max_distance )
+        return max_distance + 1;
+
+    std::vector<size_t> prev(b.size() + 1), cur(b.size() + 1);
+    for ( size_t j = 0; j <= b.size(); ++j ) prev[j] = j;
+
+    for ( size_t i = 1; i <= a.size(); ++i ) {
+        cur[0] = i;
+        size_t row_min = cur[0];
+        for ( size_t j = 1; j <= b.size(); ++j ) {
+            size_t cost = ( a[i-1] == b[j-1] ) ? 0 : 1;
+            cur[j] = std::min({ prev[j] + 1, cur[j-1] + 1, prev[j-1] + cost });
+            row_min = std::min(row_min, cur[j]);
+        }
+        if ( row_min > max_distance )
+            return max_distance + 1;
+        prev.swap(cur);
+    }
+    return prev[b.size()];
+}
+
+// The digits of a model name, in order ("claude-opus-4-8" -> "48"). Digits carry
+// the *version*, letters the *family*, so they are compared separately: a curated
+// list inevitably goes stale, and a new release must never be "corrected" into
+// the older model it is one digit away from.
+std::string version_digits(const std::string& s) {
+    std::string out;
+    for ( char c : s )
+        if ( std::isdigit(static_cast<unsigned char>(c))) out += c;
+    return out;
+}
+
+// How well `input` matches `candidate`, higher is better; 0 = no match at all.
+// The tiers are deliberately far apart so a weaker kind of match can never
+// outrank a stronger one, and the score within a tier prefers the shortest
+// candidate (the least "extra" beyond what the user typed).
+size_t match_score(const std::string& input, const std::string& candidate) {
+    std::string in = normalize_model(input);
+    std::string cand = normalize_model(candidate);
+    if ( in.empty() || cand.empty()) return 0;
+
+    auto tighter = [&cand](size_t base) -> size_t {
+        // Within a tier, shorter candidates win (bounded so it never leaks
+        // into the tier below).
+        return base + ( cand.size() < 100 ? 100 - cand.size() : 0 );
+    };
+
+    if ( in == cand ) return tighter(4000);
+    if ( cand.rfind(in, 0) == 0 ) return tighter(3000);          // prefix: "claudeopus" -> "claudeopus48"
+    if ( cand.find(in) != std::string::npos ) return tighter(2000); // substring: "fable" -> "claudefable5"
+
+    // Fuzzy matching is for typos, not for versions. If the user spelled out a
+    // version that differs from the candidate's, they meant a different model:
+    // "claude-opus-5" must stay itself and reach the API, not be rewritten to
+    // "claude-opus-4-8" just because it is two edits away. An input with no
+    // digits at all ("sonet") is a family shorthand and stays fuzzy-matchable.
+    std::string in_digits = version_digits(input);
+    if ( !in_digits.empty() && in_digits != version_digits(candidate))
+        return 0;
+
+    // Fuzzy: allow roughly one typo per four characters, at least one, so short
+    // names do not collapse into each other ("opus" must not match "haiku").
+    size_t budget = std::max<size_t>(1, in.size() / 4);
+    size_t best = edit_distance(in, cand, budget);
+    if ( best <= budget )
+        return tighter(1000 - best * 10);
+
+    // Fuzzy against the candidate's own segments, so a typo in one part of a
+    // longer name still lands ("sonet" -> "claude-sonnet-4-6").
+    std::string lowered = common::to_lower(candidate);
+    std::string segment;
+    for ( size_t i = 0; i <= lowered.size(); ++i ) {
+        char c = ( i < lowered.size()) ? lowered[i] : '-';
+        if ( c == '-' || c == '_' || c == '.' || c == '/' || c == ' ' || c == ':' ) {
+            if ( segment.size() >= 3 ) {
+                size_t d = edit_distance(in, segment, budget);
+                if ( d <= budget )
+                    return tighter(1000 - d * 10);
+            }
+            segment.clear();
+        } else segment += c;
+    }
+    return 0;
+}
+
+} // namespace
+
+Config::ModelMatch Config::resolve_model(const std::string& provider, const std::string& input,
+                                         const std::vector<std::string>& candidates) {
+    ModelMatch result;
+    result.model = common::trim_ws(input);
+    if ( result.model.empty())
+        return result;
+
+    bool wants_1m = false;
+    std::string suffixless = strip_model_annotation(result.model, &wants_1m);
+
+    // Prefer a live listing when the caller has one; fall back to the curated set.
+    const std::vector<std::string>& known =
+        !candidates.empty() ? candidates : known_models_for(provider);
+    if ( known.empty())
+        return result; // nothing to match against (ollama, custom endpoints)
+
+    // An exact name always wins: never rewrite something that already works.
+    for ( const auto& k : known )
+        if ( k == suffixless ) {
+            result.model = wants_1m ? k + "[1m]" : k;
+            return result;
+        }
+
+    // An alias expands the input before matching, so "fable" and "opus" become
+    // the canonical family fragment and then match the real name below.
+    std::string needle = suffixless;
+    std::string norm_in = normalize_model(needle);
+    for ( const auto& alias : model_aliases ) {
+        if ( normalize_model(alias.from) == norm_in ) {
+            needle = alias.to;
+            break;
+        }
+    }
+
+    // Score every candidate; ties keep the curated order (best/newest first).
+    auto score_all = [&known](const std::string& n) {
+        std::vector<std::pair<size_t, std::string>> out;
+        for ( const auto& k : known ) {
+            size_t score = match_score(n, k);
+            if ( score > 0 )
+                out.push_back({ score, k });
+        }
+        return out;
+    };
+    std::vector<std::pair<size_t, std::string>> scored = score_all(needle);
+
+    // The alias table is global, so an expansion can name a family this provider
+    // does not offer ("mini" -> gpt-4o-mini, which no Codex model matches). An
+    // alias must only ever help: when it matches nothing, fall back to what the
+    // user actually typed rather than letting the expansion bury it.
+    if ( scored.empty() && needle != suffixless )
+        scored = score_all(suffixless);
+
+    if ( scored.empty())
+        return result; // unknown: pass it through untouched, the API decides
+
+    std::stable_sort(scored.begin(), scored.end(),
+                     [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    result.model = scored.front().second;
+    if ( wants_1m )
+        result.model += "[1m]";
+    result.corrected = ( result.model != common::trim_ws(input));
+    for ( size_t i = 1; i < scored.size() && i <= 3; ++i )
+        result.alternatives.push_back(scored[i].second);
+    return result;
+}
+
+// Format a token count the way people read it: 8192 -> "8.2K", 200000 -> "200K",
+// 1500000 -> "1.5M". Large raw digit strings are hard to compare at a glance
+// ("128000" vs "1280000"), which is exactly where budget mistakes happen.
+std::string Config::format_tokens(size_t n) {
+    auto strip = [](std::string s) {
+        // "1.0M" reads worse than "1M"; drop a trailing ".0".
+        if ( s.size() > 2 && s[s.size()-2] == '.' && s[s.size()-1] == '0' )
+            s.erase(s.size() - 2);
+        return s;
+    };
+    char buf[32];
+    if ( n >= 1000000 ) {
+        std::snprintf(buf, sizeof(buf), "%.1f", static_cast<double>(n) / 1000000.0);
+        return strip(buf) + "M";
+    }
+    if ( n >= 1000 ) {
+        // Whole thousands print without a decimal: 200000 -> "200K", not "200.0K".
+        if ( n % 1000 == 0 )
+            return std::to_string(n / 1000) + "K";
+        std::snprintf(buf, sizeof(buf), "%.1f", static_cast<double>(n) / 1000.0);
+        return strip(buf) + "K";
+    }
+    return std::to_string(n);
+}
+
+// Parse a token count, accepting the same shorthand format_tokens() prints:
+// "32000", "32K", "1.5M". Token counts are decimal, so K is 1000 (not 1024) --
+// a user asking for "100K tokens" means 100000, and a 1024-based reading would
+// quietly hand them 102400.
+size_t Config::parse_tokens(const std::string& value, size_t fallback) {
+    std::string s = common::trim_ws(value);
+    if ( s.empty()) return fallback;
+    if ( s[0] == '-' ) return fallback; // no negative budgets
+    try {
+        size_t idx = 0;
+        double n = std::stod(s, &idx);
+        if ( n < 0 ) return fallback;
+        std::string suffix = common::trim_ws(s.substr(idx));
+        if ( !suffix.empty()) {
+            char c = static_cast<char>(std::tolower(static_cast<unsigned char>(suffix[0])));
+            if ( c == 'k' ) n *= 1000.0;
+            else if ( c == 'm' ) n *= 1000000.0;
+            else if ( c != 't' ) return fallback; // allow a trailing "tokens"
+        }
+        if ( n < 0 ) return fallback;
+        return static_cast<size_t>(n);
+    } catch ( const std::exception& ) {
+        return fallback;
+    }
+}
+
+size_t Config::parse_tool_limit(const std::string& value, size_t fallback) {
+    std::string s = common::to_lower(common::trim_ws(value));
+    if ( s == "unlimited" || s == "all" )
+        return 0;
+    return parse_tokens(value, fallback);
+}
+
 std::string Config::default_system_prompt_for(const std::string& provider) {
+    if ( provider == "codex" )
+        return "You are Codex, OpenAI's coding agent, assisting with software engineering "
+               "tasks on a Linux system. Be concise and precise.";
     if ( provider == "kimi" )
         return "You are Kimi, an AI assistant built by Moonshot AI, running as a "
                "command-line coding assistant. You help with software engineering "
@@ -133,13 +491,21 @@ std::string Config::default_system_prompt_for(const std::string& provider) {
 }
 
 size_t Config::context_window_for(const std::string& model) {
-    std::string m = common::to_lower(model);
+    bool wants_1m = false;
+    std::string m = common::to_lower(strip_model_annotation(model, &wants_1m));
     auto has = [&](const char* p) { return m.find(p) != std::string::npos; };
     // Explicit 1M-context variants first.
-    if ( has("1m") ) return 1000000;
+    if ( wants_1m ) return 1000000;
+    if ( has("claude-opus-5") || has("claude-sonnet-5") || has("claude-fable-5") || has("claude-mythos-5") )
+        return 1000000;
     if ( has("claude") || has("opus") || has("sonnet") || has("haiku") || has("fable") )
         return 200000;
     if ( has("kimi") || has("moonshot") ) return 256000;
+    if ( has("gpt-5.6") ) return 1050000;
+    if ( has("gpt-5.5") ) return 1000000;
+    if ( has("gpt-5.4-mini") ) return 400000;
+    if ( has("gpt-5.4") ) return 1050000;
+    if ( has("codex") ) return 400000;
     if ( has("gpt-4o") || has("gpt-4.1") || has("o1") || has("o3") || has("gpt-4-turbo") )
         return 128000;
     if ( has("gpt-4") ) return 128000;
@@ -180,6 +546,21 @@ size_t Config::context_budget() const {
         return static_cast<size_t>(w * 0.85);               // leave headroom for the reply
     }
     return context_limit;
+}
+
+// The budget auto-compaction measures against. Normally the configured context
+// budget — but when the context is "unlimited" there is still a hard limit: the
+// model's own window. Falling back to it means auto-compact keeps working as a
+// safety net instead of silently doing nothing in exactly the long sessions it
+// exists for. Returns 0 only when the window is genuinely unknown.
+size_t Config::compaction_budget() const {
+    size_t budget = context_budget();
+    if ( budget > 0 )
+        return budget;
+    size_t window = context_window_for(model);
+    if ( window == 0 )
+        return 0; // unknown model: nothing reliable to measure against
+    return static_cast<size_t>(window * 0.85);
 }
 
 std::string Config::default_home_dir() {
@@ -252,7 +633,7 @@ void Config::load(const std::string& path) {
         else if ( key == "strict" ) strict = parse_bool(value);
         else if ( key == "context_limit" ) {
             if ( common::to_lower(value) == "auto" ) { context_auto = true; }
-            else { context_auto = false; context_limit = parse_size(value, context_limit, key); }
+            else { context_auto = false; context_limit = parse_token_value(value, context_limit, key); }
         }
         else if ( key == "auto_compact" ) auto_compact = parse_bool(value);
         else if ( key == "auto_compact_pct" ) auto_compact_pct = parse_size(value, auto_compact_pct, key);
@@ -263,8 +644,8 @@ void Config::load(const std::string& path) {
         else if ( key == "failover" ) failover = parse_list(value);
         else if ( key == "tools_safe" ) tools_safe = parse_list(value);
         else if ( key == "tools_danger" ) tools_danger = parse_list(value);
-        else if ( key == "max_tokens" ) max_tokens = parse_size(value, max_tokens, key);
-        else if ( key == "tool_call_limit" ) tool_call_limit = parse_size(value, tool_call_limit, key);
+        else if ( key == "max_tokens" ) { max_tokens = parse_token_value(value, max_tokens, key); max_tokens_explicit = true; }
+        else if ( key == "tool_call_limit" ) { tool_call_limit = parse_tool_limit(value, tool_call_limit); tool_call_limit_explicit = true; }
         else if ( key == "advisor" ) advisor = parse_bool(value);
         else if ( key == "advisor_model" ) advisor_model = value;
         else if ( key == "budget_tokens" ) budget_tokens = parse_size(value, budget_tokens, key);
@@ -402,6 +783,8 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
         if ( j.contains("settings") && j["settings"] == JSON::TYPE::OBJECT ) {
             const JSON& s = j["settings"];
             last.has_settings = true;
+            if ( s.contains("settings_version") && s["settings_version"] == JSON::TYPE::INT )
+                last.settings_version = static_cast<int>(static_cast<long long>(s["settings_version"]));
             if ( s.contains("theme") && s["theme"] == JSON::TYPE::STRING )
                 last.theme = s["theme"].to_string();
             if ( s.contains("thinking") && s["thinking"] == JSON::TYPE::STRING )
@@ -432,6 +815,30 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.advisor_model = s["advisor_model"].to_string();
             if ( s.contains("paste_preview") && s["paste_preview"] == JSON::TYPE::INT )
                 last.paste_preview = static_cast<size_t>(static_cast<long long>(s["paste_preview"]));
+            // Budgets the user tunes for a big job: these used to be config-file
+            // only, so a value set in /settings silently reverted to the default
+            // on the next launch.
+            if ( s.contains("tool_call_limit") && s["tool_call_limit"] == JSON::TYPE::INT )
+                last.tool_call_limit = static_cast<size_t>(static_cast<long long>(s["tool_call_limit"]));
+            if ( s.contains("max_tokens") && s["max_tokens"] == JSON::TYPE::INT )
+                last.max_tokens = static_cast<size_t>(static_cast<long long>(s["max_tokens"]));
+
+            // Migrate a settings block written before context_auto/auto_compact
+            // defaulted to on. Applied here, on the loaded state itself, so that
+            // any later save_last_used() persists the migrated values rather than
+            // re-writing the old ones with a current version stamp. A user who
+            // set a real context limit kept it deliberately and is left alone.
+            if ( last.settings_version < 1 ) {
+                if ( !last.context_auto && last.context_limit == 0 ) {
+                    last.context_auto = true;
+                    last.auto_compact = true;
+                    logger::notice["agent"]
+                        << "enabling context auto-budget and auto-compaction (new defaults); "
+                        << "turn them off with /settings context 0 and /settings auto_compact off"
+                        << std::endl;
+                }
+                last.settings_version = Config::SETTINGS_VERSION;
+            }
         }
     } catch ( const std::exception& e ) {
         logger::warning["config"] << "failed to parse state file: " << e.what() << std::endl;
@@ -452,6 +859,7 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
     };
     if ( last.has_settings ) {
         j["settings"] = JSON::Object{
+            { "settings_version", static_cast<long long>(Config::SETTINGS_VERSION) },
             { "theme", last.theme },
             { "thinking", last.thinking },
             { "multiline", last.multiline },
@@ -466,7 +874,9 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "bell", last.bell },
             { "advisor", last.advisor },
             { "advisor_model", last.advisor_model },
-            { "paste_preview", static_cast<long long>(last.paste_preview) }
+            { "paste_preview", static_cast<long long>(last.paste_preview) },
+            { "tool_call_limit", static_cast<long long>(last.tool_call_limit) },
+            { "max_tokens", static_cast<long long>(last.max_tokens) }
         };
     }
 
@@ -522,6 +932,8 @@ void Config::save_settings(const std::string& home_dir) const {
     last.advisor = advisor;
     last.advisor_model = advisor_model;
     last.paste_preview = paste_preview;
+    last.tool_call_limit = tool_call_limit;
+    last.max_tokens = max_tokens;
     write_state(home_dir, last);
 }
 
@@ -548,6 +960,12 @@ void Config::apply_settings(const LastUsed& last) {
     if ( !last.advisor_model.empty())
         advisor_model = last.advisor_model;
     paste_preview = last.paste_preview;
+    // A config-file budget wins over the persisted one; otherwise restore what the
+    // user last set in /settings.
+    if ( !tool_call_limit_explicit )
+        tool_call_limit = last.tool_call_limit;
+    if ( !max_tokens_explicit )
+        max_tokens = last.max_tokens;
 }
 
 void Config::ensure_home_dir() {

@@ -76,6 +76,9 @@ public:
     virtual bool reauthenticate(api::Client& client) { (void)client; return false; }
 
     virtual bool supports_streaming() const { return false; }
+    // Standard capability queries used by diagnostics and model selection.
+    virtual bool supports_tools() const { return true; }
+    virtual bool supports_reasoning() const { return false; }
 
     // Streaming: reset per-turn accumulation, parse one SSE chunk (returning the
     // visible deltas while accumulating content/reasoning/tool_calls internally),
@@ -113,6 +116,7 @@ public:
     virtual std::vector<std::pair<std::string, std::string>> extra_headers() const { return {}; }
 
     const Config& config() const { return _config; }
+    std::string request_model() const { return Config::base_model_name(_config.model); }
 
 protected:
     Provider(const Config& cfg) : _config(cfg) {}

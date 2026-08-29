@@ -7,6 +7,7 @@
 #include "agent/providers/openrouter.hpp"
 #include "agent/providers/kimi.hpp"
 #include "agent/providers/claude.hpp"
+#include "agent/providers/codex.hpp"
 #include "throws.hpp"
 
 namespace agent::providers {
@@ -27,6 +28,8 @@ std::unique_ptr<Provider> create(const Config& cfg) {
         provider = std::make_unique<Kimi>(cfg);
     else if ( cfg.provider == "claude" )
         provider = std::make_unique<Claude>(cfg);
+    else if ( cfg.provider == "codex" )
+        provider = std::make_unique<Codex>(cfg);
     else {
         throws << "unsupported provider: " << cfg.provider << std::endl;
         return nullptr;

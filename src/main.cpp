@@ -33,14 +33,14 @@ static usage_t make_usage(int argc, char **argv) {
     return usage_t{
         { argc, argv },
         { "AI Agent", "\nversion ", agent::VERSION, "author ", "Oskari Rauta", "copyright ", "2026, Oskari Rauta", "\nusage:\n   ", "[options] [prompt]", "\nOptions:",
-          "\nUniversal Linux CLI AI assistant — a provider-agnostic alternative to Kimi Code / Claude Code.\n"
+          "\nUniversal Linux CLI AI assistant -- a provider-agnostic alternative to Claude Code, Kimi Code and others.\n"
           "With no prompt it starts an interactive REPL; type /help there for the in-app commands.\n"
           "Config, data, credentials and memory all live in ~/.local/share/ai-agent (config file there is `config`; override the dir with -d or the config path with -c).\n" },
         {
             { "help", { "h", "help", "show usage help" }},
             { "version", { "v", "version", "show version" }},
             { "config", { "c", "config", "path to config file", usage_t::OPTIONAL }},
-            { "provider", { "p", "provider", "ai provider: openai, ollama, anthropic, moonshot, openrouter, kimi or claude", usage_t::OPTIONAL }},
+            { "provider", { "p", "provider", "ai provider: openai, codex, ollama, anthropic, moonshot, openrouter, kimi or claude", usage_t::OPTIONAL }},
             { "model", { "m", "model", "model name", usage_t::OPTIONAL }},
             { "api_url", { "u", "api-url", "api endpoint url", usage_t::OPTIONAL }},
             { "api_key", { "k", "api-key", "api key / token", usage_t::OPTIONAL }},
@@ -152,8 +152,8 @@ int main(int argc, char **argv) {
     if ( config.provider != "openai" && config.provider != "ollama" &&
          config.provider != "anthropic" && config.provider != "moonshot" &&
          config.provider != "openrouter" &&
-         config.provider != "kimi" && config.provider != "claude" ) {
-        logger::error << "unsupported provider: " << config.provider << ". use openai, ollama, anthropic, moonshot, openrouter, kimi or claude." << std::endl;
+         config.provider != "kimi" && config.provider != "claude" && config.provider != "codex" ) {
+        logger::error << "unsupported provider: " << config.provider << ". use openai, codex, ollama, anthropic, moonshot, openrouter, kimi or claude." << std::endl;
         return 1;
     }
 
@@ -168,6 +168,19 @@ int main(int argc, char **argv) {
         std::string remembered = last_used.model_for(config.provider);
         config.model = !remembered.empty() ? remembered
                                            : agent::Config::default_model_for(config.provider);
+    } else {
+        // A hand-typed -m / config model is forgiving: map a short or slightly
+        // misspelled name onto the provider's real one ("fable" ->
+        // "claude-fable-5"). An exact or unknown name is passed through as is.
+        auto match = agent::Config::resolve_model(config.provider, config.model);
+        if ( match.corrected ) {
+            logger::notice["agent"] << "model \"" << config.model << "\" -> " << match.model
+                                    << ( match.alternatives.empty()
+                                         ? ""
+                                         : "  (also matched: " + common::join_vector(match.alternatives, ", ") + ")" )
+                                    << std::endl;
+            config.model = match.model;
+        }
     }
 
     // Persist the resolved provider/model as the new last-used state.
@@ -180,10 +193,10 @@ int main(int argc, char **argv) {
     }
 
     // API-key providers: if no key was given (-k / config), fall back to the
-    // conventional environment variables, then a generic one. (Kimi/Claude use
-    // OAuth and Ollama needs none.)
+    // conventional environment variables, then a generic one. (Codex/Kimi/Claude
+    // use OAuth and Ollama needs none.)
     if ( config.api_key.empty() && config.provider != "ollama" &&
-         config.provider != "kimi" && config.provider != "claude" ) {
+         config.provider != "kimi" && config.provider != "claude" && config.provider != "codex" ) {
         const char* provider_var =
             config.provider == "openrouter" ? "OPENROUTER_API_KEY" :
             config.provider == "moonshot"  ? "MOONSHOT_API_KEY" :
@@ -199,7 +212,7 @@ int main(int argc, char **argv) {
     }
 
     if ( config.api_key.empty() && config.provider != "ollama" &&
-         config.provider != "kimi" && config.provider != "claude" ) {
+         config.provider != "kimi" && config.provider != "claude" && config.provider != "codex" ) {
         std::string var =
             config.provider == "openrouter" ? "OPENROUTER_API_KEY" :
             config.provider == "moonshot"  ? "MOONSHOT_API_KEY" :
@@ -227,7 +240,7 @@ int main(int argc, char **argv) {
     logger::info["agent"] << "provider: " << config.provider << ", model: " << config.model << std::endl;
     logger::info["agent"] << "home dir: " << config.home_dir << std::endl;
 
-    if ( config.provider == "kimi" || config.provider == "claude" ) {
+    if ( config.provider == "kimi" || config.provider == "claude" || config.provider == "codex" ) {
         agent::api::Client client;
         auto provider = agent::providers::create(config);
         if ( !provider->authenticate(client, usage["login"]) ) {

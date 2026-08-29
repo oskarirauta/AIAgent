@@ -17,6 +17,10 @@ struct ModelPricing {
 
 class Config {
 public:
+    // Schema version of the persisted settings block (state.json). Bumped when a
+    // default changes in a way that an existing state must be migrated to.
+    static constexpr int SETTINGS_VERSION = 1;
+
     std::string provider = "openai";
     std::string model = "gpt-4o-mini";
     std::string api_url = "https://api.openai.com/v1";
@@ -49,10 +53,17 @@ public:
     // history file and lock. Empty = the project's default session.
     std::string session_name;
     size_t context_limit = 0;   // approx token budget for history sent to the model (0 = unlimited)
-    bool context_auto = false;  // derive the budget from the model's known context window
-    size_t max_tokens = 8192;   // cap on a single reply's output tokens (config: max_tokens)
-    size_t tool_call_limit = 50; // per-turn tool-call cap before asking to continue (0 = unlimited)
-    bool auto_compact = false;  // summarise history automatically when it nears the context budget
+    bool context_auto = true;   // derive the budget from the model's known context window
+    // Cap on a single reply's output tokens (config: max_tokens). Providers clamp
+    // this to the model's own ceiling, so a high value means "as much as this
+    // model allows" rather than a hard request for that many tokens.
+    size_t max_tokens = 64000;
+    // Per-turn tool-call cap before asking whether to continue (0 = unlimited).
+    // Sized for real work: a first pass over a new project, or a refactor across
+    // many files, routinely runs well past a hundred calls, and the prompt is a
+    // runaway-loop guard rather than a budget the user should meet routinely.
+    size_t tool_call_limit = 100;
+    bool auto_compact = true;   // summarise history automatically when it nears the context budget
     size_t auto_compact_pct = 80; // trigger threshold as a percentage of context_budget()
     bool workflow_autoresume = false; // a finished workflow starts a turn by itself (bounded; see repl)
     std::string bell = "attention"; // terminal bell policy: never|question|attention|always
@@ -115,6 +126,10 @@ public:
     // last-used state may fill them in.
     bool provider_explicit = false;
     bool model_explicit = false;
+    // Budgets set explicitly in the config file are authoritative: they must not
+    // be overwritten by the value persisted from a previous session.
+    bool max_tokens_explicit = false;
+    bool tool_call_limit_explicit = false;
 
     void load(const std::string& path);
     void apply_cli(const usage_t& usage);
@@ -139,6 +154,11 @@ public:
         size_t context_limit = 0;
         bool context_auto = false;
         bool auto_compact = false;
+        // Schema version of the persisted settings block. Absent/0 means a state
+        // written before context_auto and auto_compact defaulted to on; such a
+        // state is migrated once so an existing user is not left with an
+        // untrimmed context that eventually 400s mid-session.
+        int settings_version = 0;
         bool workflow_autoresume = false;
         bool confirm_tools = true;  // persisted tool mode (confirm/auto/insecure)
         bool insecure = false;
@@ -146,6 +166,8 @@ public:
         bool advisor = false;
         std::string advisor_model;
         size_t paste_preview = 8;
+        size_t tool_call_limit = 100;
+        size_t max_tokens = 64000;
     };
     static LastUsed load_last_used(const std::string& home_dir);
     static void save_last_used(const std::string& home_dir, const std::string& provider, const std::string& model);
@@ -170,9 +192,46 @@ public:
     // "64K" -> 65536. Returns `fallback` (and does not throw) on malformed input.
     static size_t parse_size_suffixed(const std::string& value, size_t fallback);
 
+    // Token counts use DECIMAL K/M ("32K" = 32000, "1.5M" = 1500000), unlike the
+    // 1024-based helper above: a user asking for "100K tokens" means 100000.
+    // format_tokens() prints what parse_tokens() accepts, so a value shown in the
+    // UI can be typed straight back in.
+    static std::string format_tokens(size_t n);
+    static size_t parse_tokens(const std::string& value, size_t fallback);
+    // Tool budgets share the same numeric syntax as token counts, but also
+    // accept "unlimited"/"all" to mean 0.
+    static size_t parse_tool_limit(const std::string& value, size_t fallback);
+
     // Provider-appropriate default model, used when the user did not pass -m and
     // left `model` at its built-in default.
     static std::string default_model_for(const std::string& provider);
+
+    // Model annotations can carry opt-in capability hints without changing the
+    // actual API model name. Example: `claude-opus-4-8[1m]` means "send the
+    // base model name, but treat it as a 1M-context variant".
+    static std::string base_model_name(const std::string& model);
+    static bool model_requests_1m_context(const std::string& model);
+
+    // The curated shortlist of well-known models for a provider, best first.
+    // Used by the /model picker (when the provider has no live listing) and as
+    // the candidate set for resolve_model(). Empty for providers whose models are
+    // user-supplied (ollama) or an open namespace (openrouter, openai-compatible).
+    static const std::vector<std::string>& known_models_for(const std::string& provider);
+
+    // Outcome of resolving a user-typed model name.
+    struct ModelMatch {
+        std::string model;              // the name to actually use
+        bool corrected = false;         // the input was rewritten to `model`
+        std::vector<std::string> alternatives; // other plausible candidates (for a hint)
+    };
+
+    // Map a loosely-typed model name onto a known one: "fable" -> "claude-fable-5",
+    // "sonet" -> "claude-sonnet-4-6". An exact known name is never touched, and an
+    // input with no plausible candidate is returned unchanged (so any model the
+    // provider offers but we do not list still works). `candidates` may carry a
+    // provider's live model listing; the curated list is used when it is empty.
+    static ModelMatch resolve_model(const std::string& provider, const std::string& input,
+                                    const std::vector<std::string>& candidates = {});
 
     // Provider-appropriate default system prompt (identity), used when the user
     // did not override `system_prompt`.
@@ -198,6 +257,12 @@ public:
     // window (with response headroom) in auto mode, else `context_limit`.
     // 0 means no limit.
     size_t context_budget() const;
+
+    // The budget auto-compaction measures against. Same as context_budget(), but
+    // falls back to the model's own window when the context is "unlimited" — so
+    // auto-compact still protects a long session instead of quietly never firing.
+    // 0 only when the model's window is unknown.
+    size_t compaction_budget() const;
 };
 
 } // namespace agent

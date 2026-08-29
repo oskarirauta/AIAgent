@@ -43,8 +43,11 @@ OBJS:= \
 	objs/text_utils.o \
 	objs/signal_handler.o \
 	objs/api_client.o \
+	objs/api_rate_limit.o \
 	objs/provider.o \
 	objs/openai.o \
+	objs/codex_oauth.o \
+	objs/codex_provider.o \
 	objs/ollama.o \
 	objs/anthropic.o \
 	objs/moonshot.o \
@@ -112,9 +115,15 @@ objs/signal_handler.o: src/signal_handler.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/api_client.o: src/api/client.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/api_rate_limit.o: src/api/rate_limit.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/provider.o: src/providers/provider.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/openai.o: src/providers/openai.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/codex_oauth.o: src/auth/codex_oauth.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/codex_provider.o: src/providers/codex.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/ollama.o: src/providers/ollama.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;

@@ -59,7 +59,7 @@ JSON OpenAI::build_request(const Conversation& conv, const JSON& tools_schema) {
     }
 
     JSON req = JSON::Object{
-        { "model", _config.model },
+        { "model", request_model() },
         { "messages", messages }
     };
 

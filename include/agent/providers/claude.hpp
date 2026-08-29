@@ -43,10 +43,9 @@ public:
     // preserved across tool calls (Anthropic::message_to_json replays the
     // stored thinking blocks verbatim).
     std::vector<std::pair<std::string, std::string>> extra_headers() const override {
-        return {
-            { "anthropic-version", "2023-06-01" },
-            { "anthropic-beta", "oauth-2025-04-20" }
-        };
+        auto h = Anthropic::extra_headers();
+        h.push_back({ "anthropic-beta", "oauth-2025-04-20" });
+        return h;
     }
 
     // Prepend the Claude Code identity as the first system block; the OAuth API
