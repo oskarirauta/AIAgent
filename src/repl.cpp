@@ -32,6 +32,8 @@
 #include "agent/tools/tasks_tool.hpp"
 #include "agent/tools/skill_tool.hpp"
 #include "agent/skills.hpp"
+#include "agent/providers/anthropic.hpp" // output_cap_for(): the model's output ceiling
+#include "agent/api/rate_limit.hpp"      // decode 429s / quota headers into plain language
 #include "agent/commands.hpp"
 #include "agent/tools/run_command.hpp"
 
@@ -62,6 +64,58 @@ static std::string current_date_line() {
     if ( std::strftime(buf, sizeof(buf), "%Y-%m-%d (%A)", &tm) == 0 )
         return "";
     return "\n\nThe current date is " + std::string(buf) + ".";
+}
+
+static std::string role_label(Role role) {
+    switch ( role ) {
+        case Role::USER: return "you";
+        case Role::ASSISTANT: return "ai";
+        case Role::TOOL: return "tool";
+        case Role::SYSTEM: return "system";
+    }
+    return "message";
+}
+
+static size_t line_count_for(const std::string& text) {
+    if ( text.empty())
+        return 0;
+    return static_cast<size_t>(std::count(text.begin(), text.end(), '\n')) +
+           ( text.back() == '\n' ? 0 : 1 );
+}
+
+static std::string history_preview(const Message& m) {
+    std::string first = m.content.substr(0, m.content.find('\n'));
+    for ( char& ch : first ) {
+        if ( ch == '\t' || ch == '\r' )
+            ch = ' ';
+    }
+    first = common::trim_ws(first);
+    if ( first.empty() && !m.tool_calls.empty())
+        first = "(tool call)";
+    if ( first.empty())
+        first = "(empty)";
+    if ( first.size() > 90 )
+        first = first.substr(0, 90) + "…";
+    return first;
+}
+
+static std::string format_history_detail(size_t index, const Message& m) {
+    std::string s = "#" + std::to_string(index) + " · " + role_label(m.role) + "\n\n";
+    if ( !m.content.empty())
+        s += m.content;
+    else if ( !m.tool_calls.empty())
+        s += "(assistant tool call)";
+    else
+        s += "(empty)";
+
+    for ( const auto& tc : m.tool_calls ) {
+        s += "\n\n[tool call] " + tc.name;
+        if ( !tc.id.empty())
+            s += " (" + tc.id + ")";
+        if ( !tc.arguments.empty())
+            s += "\n" + tc.arguments;
+    }
+    return s;
 }
 
 Repl::Repl(const Config& config)
@@ -692,6 +746,13 @@ std::string Repl::base_system_prompt() const {
                   "commands (those tools are disabled and will refuse). Wait for the user "
                   "to review and turn plan mode off before you make any changes.";
 
+    system += "\n\n## Project search guidance\n\nWhen you are orienting yourself in a "
+              "codebase, start with `project_map` once, then use `find_symbol` and "
+              "`find_references` for definitions and uses, and `outline_file` for a "
+              "single file's structure. Use `grep` for a narrow substring/regex search "
+              "inside a file or subtree. Avoid shell `grep` over whole project trees — "
+              "it is noisier, slower, and may produce binary-file warnings.";
+
     // Active skills: their full instructions, so they persist across compaction.
     for ( const auto& s : _skills ) {
         if ( !_active_skills.count(s.name))
@@ -971,10 +1032,10 @@ std::string Repl::compact_history(size_t keep_tail) {
 
 std::string Repl::switch_provider(const std::string& name) {
     static const std::vector<std::string> supported =
-        { "openai", "ollama", "anthropic", "moonshot", "openrouter", "kimi", "claude" };
+        { "openai", "codex", "ollama", "anthropic", "moonshot", "openrouter", "kimi", "claude" };
     if ( std::find(supported.begin(), supported.end(), name) == supported.end())
         return "unknown provider: " + name +
-               "  (openai, ollama, anthropic, moonshot, openrouter, kimi, claude)";
+               "  (openai, codex, ollama, anthropic, moonshot, openrouter, kimi, claude)";
     if ( name == _config.provider )
         return "already using " + name;
 
@@ -1009,7 +1070,7 @@ std::string Repl::switch_provider(const std::string& name) {
     if ( np && !nc.thinking.empty())
         np->apply_provider_options(JSON::Object{{ "thinking", nc.thinking }});
 
-    if ( name == "kimi" || name == "claude" ) {
+    if ( name == "kimi" || name == "claude" || name == "codex" ) {
         if ( !np->ready_noninteractive(_client))
             return "not logged in to " + name +
                    " — relaunch with `-p " + name + "` to log in first, then switch back.";
@@ -1335,11 +1396,14 @@ std::string Repl::sessions_command(const std::string& args) {
 // Convert the streamed thinking-region markers for plain (non-TTY) output: \x01
 // (begin) becomes a "💭 " prefix, \x02 (end) is dropped.
 static std::string plain_stream_text(const std::string& s) {
-    std::string out;
-    for ( char c : s ) {
-        if ( c == '\x01' ) out += "\xF0\x9F\x92\xAD ";
-        else if ( c != '\x02' ) out += c;
+    std::string out = agent::sanitize_stream_text(s);
+    size_t pos = 0;
+    while (( pos = out.find('\x01', pos)) != std::string::npos ) {
+        out.replace(pos, 1, "\xF0\x9F\x92\xAD ");
+        pos += 4;
     }
+    while (( pos = out.find('\x02', pos)) != std::string::npos )
+        out.erase(pos, 1);
     return out;
 }
 
@@ -1380,8 +1444,32 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     size_t tools_this_turn = 0;                        // per-turn tool-call budget counter
     size_t next_tool_check = _config.tool_call_limit;  // ask again at each multiple
     size_t failover_idx = 0;                            // next fallback provider to try this turn
+    std::map<std::string, int> repeated_tools;
+    std::mutex repeated_tools_mx;
+
+    auto apply_live_updates = [&]() {
+        if ( !_live_update_cb ) return;
+        size_t applied = 0;
+        for ( const std::string& command : _live_update_cb() ) {
+            std::string note = command;
+            if ( note.rfind("/btw", 0) == 0 ) note.erase(0, 4);
+            else if ( note.rfind("/note", 0) == 0 ) note.erase(0, 5);
+            note = common::trim_ws(note);
+            if ( note.empty()) continue;
+            _conversation.add_user("[Live update from the user during the active turn]\n" + note);
+            ++applied;
+        }
+        if ( applied > 0 && _progress_cb )
+            _progress_cb("checkpoint: applied " + std::to_string(applied) + " btw update" +
+                         ( applied == 1 ? "" : "s" ) + " from the queue");
+    };
 
     while ( true ) {
+
+        // A live /btw update cannot be inserted into an in-flight HTTP request.
+        // Apply it before the next model decision, which is the safe equivalent
+        // of Codex-style turn steering for this request/response architecture.
+        apply_live_updates();
 
         if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
             _conversation.undo_last(); // drop the interrupted exchange from history
@@ -1391,6 +1479,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         _provider->prepare_request(_client);
 
         auto headers = _provider->extra_headers();
+        StreamTextSanitizer stream_sanitizer;
 
         JSON tools = _registry.schema();
         JSON request = _provider->build_request(_conversation, tools);
@@ -1423,16 +1512,41 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                             logger::vverbose["http"] << "STREAM chunk\n" << chunk << std::endl;
                             providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
                             if ( _config.thinking_stream && !sc.reasoning.empty()) {
-                                if ( !showing_thinking ) { stream_cb("\n\x01"); showing_thinking = true; }
+                                if ( !showing_thinking ) {
+                                    std::string marker = stream_sanitizer.push("\n\x01");
+                                    if ( !marker.empty())
+                                        stream_cb(marker);
+                                    showing_thinking = true;
+                                }
                                 produced = true;
-                                stream_cb(sc.reasoning);
+                                std::string reasoning = stream_sanitizer.push(sc.reasoning);
+                                if ( !reasoning.empty())
+                                    stream_cb(reasoning);
                             }
                             if ( !sc.content.empty()) {
-                                if ( showing_thinking ) { stream_cb("\n\x02\n\n"); showing_thinking = false; }
+                                if ( showing_thinking ) {
+                                    std::string marker = stream_sanitizer.push("\n\x02\n\n");
+                                    if ( !marker.empty())
+                                        stream_cb(marker);
+                                    showing_thinking = false;
+                                }
                                 produced = true;
-                                stream_cb(agent::normalize_text(sc.content));
+                                // Normalize AFTER the sanitizer, not before: the
+                                // sanitizer is what reassembles a code point split
+                                // across chunk boundaries, and normalize_text
+                                // matches whole multi-byte sequences. Normalizing
+                                // the raw chunk first means a split "…" or "’"
+                                // never matches, and the held-back tail is not
+                                // re-normalized once the rest arrives — so the raw
+                                // Unicode character leaked through to the display.
+                                std::string content = agent::normalize_text(stream_sanitizer.push(sc.content));
+                                if ( !content.empty())
+                                    stream_cb(content);
                             }
                         }, abort_flag);
+                    std::string tail = agent::normalize_text(stream_sanitizer.finish());
+                    if ( !tail.empty())
+                        stream_cb(tail);
 
                     if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
                         _conversation.undo_last();
@@ -1538,10 +1652,24 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             // Warn when the reply was cut off by the output-token cap (rather than
             // finishing) — otherwise a truncated file/answer looks complete.
             std::string trunc;
-            if ( resp.truncated )
-                trunc = "\n\n⚠ reply truncated at the output-token cap (max_tokens=" +
-                        std::to_string(_config.max_tokens ? _config.max_tokens : 8192) +
-                        "). Raise it with `/settings max_tokens <n>` or ask me to continue.";
+            if ( resp.truncated ) {
+                size_t configured = _config.max_tokens ? _config.max_tokens : 8192;
+                trunc = "\n\n⚠ reply truncated at the output-token cap (" +
+                        std::to_string(configured) + " tokens)";
+                // When the cap is already the model's ceiling, raising the setting
+                // cannot help — say so instead of suggesting a dead end.
+                if ( _config.provider == "claude" || _config.provider == "anthropic" ) {
+                    long ceiling = providers::Anthropic::output_cap_for(_config.model);
+                    if ( static_cast<long>(configured) >= ceiling )
+                        trunc += ", which is the ceiling for " + _config.model +
+                                 ". Ask me to continue — long output has to be split across turns.";
+                    else
+                        trunc += ". Raise it with `/settings max_tokens <n>` (ceiling " +
+                                 std::to_string(ceiling) + ") or ask me to continue.";
+                } else {
+                    trunc += ". Raise it with `/settings max_tokens <n>` or ask me to continue.";
+                }
+            }
             // In the streaming path the reasoning and answer already went to the
             // live callback. Only the non-streaming fallback prepends the reasoning
             // block here (display only — the saved message keeps just the answer).
@@ -1573,6 +1701,13 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             for ( const char* k : { "path", "command", "pattern", "symbol", "query", "url", "name" }) {
                 if ( args.contains(k) && args[k] == JSON::TYPE::STRING ) {
                     std::string v = args[k].to_string();
+                    if ( std::string(k) == "path" && args.contains("offset") && args.contains("limit") ) {
+                        try {
+                            long a = std::stol(args["offset"].to_string());
+                            long n = std::stol(args["limit"].to_string());
+                            if ( a > 0 && n > 0 ) v += " [" + std::to_string(a) + "–" + std::to_string(a + n - 1) + "]";
+                        } catch ( ... ) {}
+                    }
                     for ( char& c : v )
                         if ( c == '\n' || c == '\t' ) c = ' ';
                     if ( v.size() > 48 ) v = v.substr(0, 48) + "…";
@@ -1632,6 +1767,16 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         };
         auto run_one = [&](size_t i) {
             auto t0 = std::chrono::steady_clock::now();
+            std::string call_signature = resp.tool_calls[i].name + ":" +
+                                         resp.tool_calls[i].arguments.dump_minified();
+            int repetitions = 0;
+            {
+                std::lock_guard<std::mutex> lk(repeated_tools_mx);
+                repetitions = ++repeated_tools[call_signature];
+            }
+            if ( repetitions == 3 && _progress_cb )
+                _progress_cb("repeated tool call detected: " + resp.tool_calls[i].name +
+                             " (same arguments used 3 times)");
             try {
                 results[i] = _registry.execute(resp.tool_calls[i].name, resp.tool_calls[i].arguments);
             } catch ( const std::exception& e ) {
@@ -1691,6 +1836,11 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             _conversation.add_tool_result(tc.id, tc.name, result);
         }
 
+        // Tool results form a natural decision boundary. Apply any /btw notes
+        // here, before the continuation request is built, so the next model
+        // decision can steer the remaining work in this same turn.
+        apply_live_updates();
+
         // Interrupted (e.g. Ctrl-C'd a long run_command)? Stop the turn but KEEP
         // the tool results — the command's partial output is already captured, so
         // it stays in context and a follow-up message can reason over it, instead
@@ -1703,6 +1853,11 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         // keep going; a stop ends the turn (the work so far is kept, and a new
         // message continues). Non-interactive runs stop automatically.
         tools_this_turn += resp.tool_calls.size();
+        if ( _progress_cb && ( tools_this_turn == 20 || tools_this_turn == 50 ||
+                               ( tools_this_turn > 50 && tools_this_turn % 25 == 0 ))) {
+            _progress_cb("long tool chain: " + std::to_string(tools_this_turn) +
+                         " calls completed this turn");
+        }
         if ( _config.tool_call_limit > 0 && tools_this_turn >= next_tool_check &&
              !( abort_flag && abort_flag->load(std::memory_order_relaxed))) {
             bool go = _registry.ask_continue(
@@ -1784,24 +1939,61 @@ std::string Repl::handle_command(const std::string& line) {
         return session_command(args);
 
     if ( cmd == "/history" ) {
-        std::string s;
-        int n = 0;
+        std::vector<const Message*> visible;
         for ( const auto& m : _conversation.messages()) {
             if ( m.role == Role::SYSTEM )
                 continue;
-            std::string who = ( m.role == Role::USER ) ? "you" :
-                              ( m.role == Role::ASSISTANT ) ? "ai" : "tool";
-            std::string first = m.content.substr(0, m.content.find('\n'));
-            if ( first.size() > 70 )
-                first = first.substr(0, 70) + "…";
-            if ( first.empty() && !m.tool_calls.empty())
-                first = "(tool call)";
-            s += who + ": " + first + "\n";
-            ++n;
+            visible.push_back(&m);
         }
-        if ( n == 0 )
+        if ( visible.empty())
             return "(no messages yet)";
-        s += "\n" + std::to_string(n) + " message(s) in context";
+
+        if ( !args.empty()) {
+            if ( args == "all" ) {
+                std::string all;
+                for ( size_t i = 0; i < visible.size(); ++i ) {
+                    if ( !all.empty())
+                        all += "\n\n---\n\n";
+                    all += format_history_detail(i + 1, *visible[i]);
+                }
+                return all;
+            }
+            if ( args.rfind("search ", 0) == 0 ) {
+                std::string needle = common::trim_ws(args.substr(7));
+                if ( needle.empty()) return "usage: /history search <text>";
+                std::string folded = common::to_lower(needle);
+                std::string matches;
+                size_t count = 0;
+                for ( size_t i = 0; i < visible.size(); ++i ) {
+                    if ( common::to_lower(visible[i]->content).find(folded) == std::string::npos ) continue;
+                    ++count;
+                    matches += "#" + std::to_string(i + 1) + " · " + role_label(visible[i]->role) +
+                               " · " + history_preview(*visible[i]) + "\n";
+                }
+                if ( count == 0 ) return "no history messages matched: " + needle;
+                matches += "\n" + std::to_string(count) + " match" + ( count == 1 ? "" : "es" ) +
+                           "; open with /history <n>";
+                return matches;
+            }
+            int idx = 0;
+            try { idx = std::stoi(args); } catch ( ... ) { idx = 0; }
+            if ( idx < 1 || idx > static_cast<int>(visible.size()))
+                return "no history item #" + args + " (see /history)";
+            return format_history_detail(static_cast<size_t>(idx), *visible[static_cast<size_t>(idx - 1)]);
+        }
+
+        std::string s;
+        for ( size_t i = 0; i < visible.size(); ++i ) {
+            const Message& m = *visible[i];
+            size_t lines = line_count_for(m.content);
+            s += "#" + std::to_string(i + 1) + " · " + role_label(m.role);
+            if ( lines > 1 )
+                s += " · " + std::to_string(lines) + " lines";
+            else if ( m.content.size() > 120 )
+                s += " · " + std::to_string(m.content.size()) + " chars";
+            s += " · " + history_preview(m) + "\n";
+        }
+        s += "\n" + std::to_string(visible.size()) + " message(s) in context; open with /history <n>";
         return s;
     }
 
@@ -1822,6 +2014,38 @@ std::string Repl::handle_command(const std::string& line) {
                  : ( _config.context_limit == 0 ? std::string("unlimited") : std::to_string(_config.context_limit)));
         if ( _stats.context_tokens.load() > 0 )
             s += "\n  last turn:     " + std::to_string(_stats.context_tokens.load());
+        return s;
+    }
+
+    if ( cmd == "/stats" ) {
+        if ( !args.empty()) return "usage: /stats";
+        std::string s = handle_command("/cost");
+        const auto& hs = _client.last_headers();
+        bool has_quota = false;
+        for ( const auto& h : hs ) {
+            std::string k = common::to_lower(h.first);
+            if ( k.find("ratelimit") != std::string::npos || k.find("rate-limit") != std::string::npos ||
+                 k.find("retry-after") != std::string::npos || k.find("quota") != std::string::npos ) {
+                has_quota = true; break;
+            }
+        }
+        s += "\n\nprovider limits: ";
+        if ( !has_quota ) {
+            s += "not reported by the last response";
+        } else {
+            api::RateLimitInfo info = api::parse_rate_limit(hs, "");
+            if ( info.has_reset ) s += "reset " + api::format_reset_time(info);
+            else s += "reported, reset time unknown";
+            if ( !info.scope.empty()) s += " (" + info.scope + ")";
+        }
+        return s;
+    }
+
+    if ( cmd == "/diagnose" ) {
+        if ( !args.empty()) return "usage: /diagnose";
+        std::string s = handle_command("/status") + "\n\n" + handle_command("/stats");
+        s += "\n\nRun diagnostics: tool-call repetition and long-chain warnings are shown live "
+             "during the turn; use `/raw` to inspect the latest request/response.";
         return s;
     }
 
@@ -2019,7 +2243,7 @@ std::string Repl::handle_command(const std::string& line) {
     if ( cmd == "/provider" ) {
         if ( args.empty())
             return "provider: " + _config.provider +
-                   "\nusage: /provider <openai|ollama|anthropic|moonshot|openrouter|kimi|claude>";
+                   "\nusage: /provider <openai|codex|ollama|anthropic|moonshot|openrouter|kimi|claude>";
         return switch_provider(common::to_lower(common::trim_ws(args)));
     }
 
@@ -2060,7 +2284,8 @@ std::string Repl::handle_command(const std::string& line) {
         else if ( sub == "model" ) {
             if ( rest.empty())
                 return "usage: /advisor model <name>  (e.g. claude-opus-4-8)";
-            _config.advisor_model = rest;
+            // Same forgiving name resolution as /model: "opus" -> claude-opus-4-8.
+            _config.advisor_model = Config::resolve_model(_config.provider, rest).model;
         }
         else return "usage: /advisor <on|off|model <name>>";
 
@@ -2122,6 +2347,16 @@ std::string Repl::handle_command(const std::string& line) {
         const auto& hs = _client.last_headers();
         if ( hs.empty())
             return "no model request has been sent yet this session";
+        std::string out;
+        // Lead with the reset time decoded from whatever headers this provider
+        // sends. /limits normally runs after a SUCCESSFUL request, so this is
+        // "quota replenishes at X", not "you have been blocked" — the
+        // describe_rate_limit() phrasing would be wrong here.
+        api::RateLimitInfo info = api::parse_rate_limit(hs, "");
+        std::string when = api::format_reset_time(info);
+        if ( !when.empty())
+            out += "quota replenishes at " + when +
+                   ( info.scope.empty() ? "" : "  (" + info.scope + ")" ) + "\n\n";
         std::vector<std::pair<std::string, std::string>> hits;
         for ( const auto& h : hs ) {
             const std::string& k = h.first;
@@ -2132,21 +2367,60 @@ std::string Repl::handle_command(const std::string& line) {
                 hits.push_back(h);
         }
         if ( hits.empty())
-            return "the " + _config.provider + " provider returned no rate-limit headers (" +
+            return out + "the " + _config.provider + " provider returned no rate-limit headers (" +
                    std::to_string(hs.size()) + " headers seen). Subscription providers often "
                    "don't expose quota this way.";
-        std::string out = "rate limits (from the last " + _config.provider + " response):\n";
+        out += "rate limits (from the last " + _config.provider + " response):\n";
         for ( const auto& h : hits )
             out += "  " + h.first + ": " + h.second + "\n";
         return out;
     }
 
+    if ( cmd == "/status" ) {
+        std::string context;
+        if ( _config.context_auto ) {
+            size_t b = _config.context_budget();
+            context = b ? "auto (" + std::to_string(b) + " tokens)" : "auto (unlimited)";
+        } else {
+            context = _config.context_limit == 0 ? "unlimited" : std::to_string(_config.context_limit) + " tokens";
+        }
+        std::string tools = !_config.tools_enabled ? "off" :
+            ( _config.insecure ? "insecure" : ( _config.confirm_tools ? "confirm" : "auto" ) );
+        std::string caps = _provider ?
+            ( std::string("streaming=") + ( _provider->supports_streaming() ? "yes" : "no" ) +
+              ", tools=" + ( _provider->supports_tools() ? "yes" : "no" ) +
+              ", reasoning=" + ( _provider->supports_reasoning() ? "yes" : "no" ) ) : "unavailable";
+        size_t window = Config::context_window_for(_config.model);
+        return "status\n"
+               "  provider:       " + _config.provider + "\n"
+               "  model:          " + _config.model + "\n"
+               "  reasoning:      " + ( _config.thinking.empty() ? "off" : _config.thinking ) + "\n"
+               "  stream:         " + ( _config.thinking_stream ? "on" : "off" ) + "\n"
+               "  context:        " + context + "\n"
+               "  model window:   " + ( window ? std::to_string(window) + " tokens" : "unknown" ) + "\n"
+               "  extended ctx:   " + ( Config::model_requests_1m_context(_config.model) ? "1M beta enabled" : "off" ) + "\n"
+               "  capabilities:   " + caps + "\n"
+               "  tools:          " + tools + "\n"
+               "  tool budget:    " + ( _config.tool_call_limit == 0 ? std::string("unlimited") : std::to_string(_config.tool_call_limit) ) + " per turn\n"
+               "  last context:   " + std::to_string(_stats.context_tokens.load()) + " tokens\n"
+               "  session tokens: " + std::to_string(_stats.session_total()) + " (" +
+                   std::to_string(_stats.session_cached.load()) + " cached)";
+    }
+
+    if ( cmd == "/stop" || cmd == "/interrupt" ) {
+        if ( !args.empty()) return "usage: " + cmd;
+        if ( !agent::turn_active.load(std::memory_order_relaxed))
+            return "no active turn";
+        agent::turn_abort.store(true, std::memory_order_relaxed);
+        return "interrupt requested — finishing the current tool call safely";
+    }
+
     if ( cmd == "/info" || cmd == "/about" ) {
         return std::string("agent version ") + agent::VERSION + "\n"
                "A lightweight, local C++ AI assistant for the command line, a\n"
-               "provider-agnostic alternative to tools like Kimi Code and Claude Code.\n"
+               "provider-agnostic alternative to tools like Claude Code, Kimi Code and others.\n"
                "It chats, reads/writes files, runs commands and greps — with per-provider\n"
-               "history and memory, tool-call safety, and subscription auth for Kimi/Claude.\n"
+               "history and memory, tool-call safety, and subscription auth for Codex/Kimi/Claude.\n"
                "\n"
                "provider:  " + _config.provider + "\n"
                "model:     " + _config.model + "\n" +
@@ -2198,19 +2472,37 @@ std::string Repl::handle_command(const std::string& line) {
                 return std::string("multiline: ") + ( _config.multiline ? "on" : "off" );
             }
             if ( key == "max_tokens" ) {
+                // Report the model's ceiling alongside the value: the provider
+                // clamps to it, so a larger number would silently do nothing.
+                auto with_ceiling = [this](size_t v) -> std::string {
+                    std::string s = "max_tokens: " + Config::format_tokens(v);
+                    if ( _config.provider == "claude" || _config.provider == "anthropic" ) {
+                        long ceiling = providers::Anthropic::output_cap_for(_config.model);
+                        std::string c = Config::format_tokens(static_cast<size_t>(ceiling));
+                        if ( static_cast<long>(v) > ceiling )
+                            s += "  (clamped to " + c + " for " + _config.model + ")";
+                        else
+                            s += "  (ceiling " + c + " for " + _config.model + ")";
+                    }
+                    return s + "  — one reply's output, not a session total";
+                };
                 if ( val.empty())
-                    return "max_tokens: " + std::to_string(_config.max_tokens);
-                _config.max_tokens = Config::parse_size_suffixed(val, _config.max_tokens);
+                    return with_ceiling(_config.max_tokens);
+                _config.max_tokens = Config::parse_tokens(val, _config.max_tokens);
                 if ( _config.max_tokens < 256 ) _config.max_tokens = 256;
-                return "max_tokens: " + std::to_string(_config.max_tokens);
+                _config.save_settings(_config.home_dir); // a tuned budget must survive a restart
+                return with_ceiling(_config.max_tokens);
             }
             if ( key == "tool_call_limit" || key == "tool_limit" ) {
-                if ( val.empty())
+                auto show = [this]() -> std::string {
                     return "tool_call_limit: " + std::to_string(_config.tool_call_limit) +
                            ( _config.tool_call_limit == 0 ? " (unlimited)" : " per turn" );
-                _config.tool_call_limit = Config::parse_size_suffixed(val, _config.tool_call_limit);
-                return "tool_call_limit: " + std::to_string(_config.tool_call_limit) +
-                       ( _config.tool_call_limit == 0 ? " (unlimited)" : " per turn" );
+                };
+                if ( val.empty())
+                    return show();
+                _config.tool_call_limit = Config::parse_tool_limit(val, _config.tool_call_limit);
+                _config.save_settings(_config.home_dir); // ...and so must this one
+                return show();
             }
             if ( key == "autoresume" || key == "workflow_autoresume" ) {
                 std::string v = common::to_lower(val);
@@ -2328,18 +2620,33 @@ std::string Repl::handle_command(const std::string& line) {
                                                       : std::vector<std::string>{};
             for ( const auto& mdl : live )
                 if ( mdl != _config.model ) models.push_back(mdl);
+            // No listing endpoint (or it failed): offer the curated shortlist so
+            // the picker is never a one-row menu for a provider we know.
+            if ( models.size() <= 1 )
+                for ( const auto& mdl : Config::known_models_for(_config.provider))
+                    if ( mdl != _config.model ) models.push_back(mdl);
             std::string out;
             for ( const auto& mdl : models )
                 out += mdl + "\n";
             return out;
         }
-        _config.model = args;
+        // A hand-typed name is forgiving: "fable" -> "claude-fable-5". Matched
+        // against the curated shortlist only (no network round-trip on a plain
+        // /model set); anything unknown is passed through untouched.
+        auto match = Config::resolve_model(_config.provider, args);
+        std::string chosen = match.model;
+        _config.model = chosen;
         if ( _provider )
-            _provider->set_model(args);
+            _provider->set_model(chosen);
         // Remember this model for the current provider, so the next session on the
         // same provider resumes it (state.json models[provider]).
-        Config::save_last_used(_config.home_dir, _config.provider, args);
-        return "model set to " + args;
+        Config::save_last_used(_config.home_dir, _config.provider, chosen);
+        if ( match.corrected )
+            return "model set to " + chosen + "  (from \"" + common::trim_ws(args) + "\")" +
+                   ( match.alternatives.empty()
+                     ? ""
+                     : "\nalso matched: " + common::join_vector(match.alternatives, ", ") );
+        return "model set to " + chosen;
     }
 
     if ( cmd == "/tools" ) {
@@ -2426,8 +2733,8 @@ std::string Repl::handle_command(const std::string& line) {
         _config.thinking = common::to_lower(args);
         if ( _provider )
             _provider->apply_provider_options(JSON::Object{{ "thinking", _config.thinking }});
-        bool applies = ( _config.provider == "kimi" || _config.provider == "claude" || _config.provider == "anthropic" );
-        std::string note = applies ? "" : "  (thinking is applied by Kimi and Claude/Anthropic)";
+        bool applies = ( _config.provider == "kimi" || _config.provider == "codex" || _config.provider == "claude" || _config.provider == "anthropic" );
+        std::string note = applies ? "" : "  (thinking is applied by Codex, Kimi and Claude/Anthropic)";
         return "thinking: " + _config.thinking + note;
     }
 
@@ -2562,6 +2869,7 @@ void Repl::run_tty() {
     inline_repl.set_workflows_provider([this] { return _workflows.snapshot(); });
     set_progress_callback([&inline_repl](const std::string& s) { inline_repl.set_activity(s); });
     set_tool_notice_callback([&inline_repl](const std::string& s) { inline_repl.notify_tool(s); });
+    set_live_update_callback([&inline_repl] { return inline_repl.take_live_updates(); });
 
     // ask_user tool: the model can pause and ask the user a question through the
     // interactive terminal. Only available in the interactive REPL.
@@ -2629,6 +2937,7 @@ void Repl::run_tty() {
     _jobs.stop_all();             // don't leave detached children behind
     set_tool_notice_callback(nullptr);
     set_progress_callback(nullptr);
+    set_live_update_callback(nullptr);
     _registry.remove("ask_user"); // its callback captured the now-dead inline_repl
 
     // Persist UI/behaviour settings changed this session (theme, multiline,

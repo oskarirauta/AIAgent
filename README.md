@@ -9,8 +9,8 @@ Philosophy: **Support enough — not everything.**
 ## Features
 
 - Chat with LLMs from the command line
-- Providers: OpenAI, Ollama, Anthropic, Moonshot, **OpenRouter**, and native **Kimi** and **Claude** (subscription) providers
-- **Kimi** and **Claude** authenticate against the same subscriptions the official CLIs use — no API-key billing and no separate app to install
+- Providers: OpenAI, Ollama, Anthropic, Moonshot, **OpenRouter**, and native **Codex**, **Kimi** and **Claude** subscription providers
+- **Codex**, **Kimi** and **Claude** authenticate against the same subscriptions the official CLIs use — no API-key billing and no separate app to install
 - Built-in tools the model can call: `read_file`, `write_file`, `edit_file`,
   `run_command` (foreground or **background** — dev servers/watchers via `/jobs`),
   `list_directory`, `grep`, `find_symbol`, `find_references`, `outline_file`,
@@ -69,6 +69,7 @@ tools_enabled: true
 provider.kimi.model: kimi-for-coding
 provider.kimi.thinking: on          # off | on | low | medium | high | xhigh | max
 provider.claude.model: claude-opus-4-8
+provider.codex.model: gpt-5.5
 
 # Fallback providers: if a request fails hard (persistent 429/5xx or a network
 # error) before anything streamed, retry the turn on the next one that's logged in.
@@ -89,7 +90,71 @@ provider.claude.model: claude-opus-4-8
 # sent to the model provider. On by default; the local transcript still shows the
 # real output. Toggle for a session in /settings ("redact secrets").
 # redact_secrets: true
+
+# Output and context limits (see "Token limits" below).
+# max_tokens:      64K    # cap on a SINGLE reply; clamped to the model's ceiling
+# context_limit:   auto   # auto = 85% of the model's context window; 0 = unlimited
+# auto_compact:    true   # summarise older history before the budget is hit
+# tool_call_limit: 100    # runaway-loop guard: pause after N tool calls in one turn
 ```
+
+### Token limits
+
+Three separate limits are easy to confuse, so they are worth keeping apart:
+
+| Limit | What it bounds | Default |
+|-------|----------------|---------|
+| `max_tokens` | **One reply's output.** Not cumulative. | `64K` |
+| `context_limit` | **Input**: how much history is sent per request. | `auto` (85% of the window) |
+| `tool_call_limit` | Tool calls in a single turn, before asking to continue. | `100` |
+| the model's own ceiling | Hard API limit on output tokens per reply. | 128K (Claude `-5`), 64K (Claude 4.x) |
+
+Token values accept and display **decimal** shorthand — `32K` is 32000 and
+`1.5M` is 1500000 — so what the UI shows can be typed straight back in. (The
+`K`/`M` suffix on byte-ish settings is still 1024-based; only token counts are
+decimal, because "100K tokens" should mean 100000.)
+
+`max_tokens` is clamped to the model's ceiling — asking for more is not an error,
+but it cannot buy more than the model allows, and the agent says so instead of
+silently shortening the reply. When a reply does hit the cap it is marked
+`⚠ reply truncated at the output-token cap`; ask the model to continue and it
+picks up where it stopped. **A long task is not one huge reply** — a large
+refactor or a workflow run spends millions of tokens across many
+request/response round-trips, and no single one of them approaches these limits.
+
+`tool_call_limit` is a runaway-loop guard, not a work budget: a first pass over a
+new project, or a refactor touching many files, can legitimately make hundreds of
+tool calls. At the limit the agent asks whether to continue rather than stopping.
+Set it to `0` to never be asked.
+
+#### Context and auto-compaction
+
+`context_limit: auto` sends at most ~85% of the model's context window each turn,
+trimming the oldest history to fit; `auto_compact` summarises older turns once
+~80% of that budget is used, so a long session keeps its thread instead of
+losing the earliest turns outright.
+
+With `context_limit: 0` ("unlimited") nothing is trimmed and the whole history is
+sent every turn — which eventually fails when it outgrows the model's window.
+Auto-compaction still protects that case: it measures against the model's own
+window when no explicit budget is set. On a 200K-window model it therefore
+compacts at roughly 136K tokens whether the context is `auto` or `unlimited`.
+
+#### 1M context (Anthropic)
+
+Some Anthropic models can serve a 1M-token context, but only when the request
+opts in with a beta header. Append **`[1m]`** to the model name to ask for it:
+
+```bash
+./agent -p claude -m 'claude-sonnet-4-6[1m]'
+./agent -p claude -m 'sonnet[1m]'          # shorthands resolve, the tag is kept
+```
+
+The tag is an *annotation*, not part of the model name: the API still receives
+`claude-sonnet-4-6`, plus the `anthropic-beta: context-1m-2025-08-07` header, and
+the context budget is computed from a 1M window. Models whose 1M context is
+standard (the `-5` generation) need no tag. Quote the name in a shell — `[…]` is
+a glob pattern.
 
 Most UI/behaviour options are also editable live in the interactive `/settings`
 menu (theme, bell, tool mode, redact secrets, context budget, …). The single-prompt
@@ -168,7 +233,31 @@ only the on-screen echo is trimmed. The preview length is the **preview** row in
 `/settings` (default 8; `0` echoes everything), persisted across sessions as
 `paste_preview`.
 
-If `model` is not set (via config or `-m`), each provider falls back to a sensible default (e.g. `claude-opus-4-8`, `kimi-for-coding`, `gpt-4o-mini`, `llama3`, `openrouter/free`).
+If `model` is not set (via config or `-m`), each provider falls back to a sensible default (e.g. `gpt-5.5` for Codex, `claude-opus-4-8`, `kimi-for-coding`, `gpt-4o-mini`, `llama3`, `openrouter/free`).
+
+#### Forgiving model names
+
+Model names you type (`-m`, `model:` in the config, `/model`, `/advisor model`)
+are matched against the models the provider is known to offer, so you rarely have
+to remember the exact string:
+
+```bash
+./agent -p claude -m fable      # -> claude-fable-5
+./agent -p claude -m opus       # -> claude-opus-4-8
+./agent -p claude -m sonet      # -> claude-sonnet-4-6  (typo)
+./agent -p openai -m 4o         # -> gpt-4o
+./agent -p moonshot -m k2       # -> kimi-k2-0905-preview
+```
+
+Matching runs in order: an **exact** name is never rewritten; then family
+shorthands (`opus`, `sonnet`, `haiku`, `fable`, `k2`, `4o`, …), then a prefix or
+substring, then a fuzzy match that tolerates roughly one typo per four
+characters. When several models match, the best (newest/most capable) one wins
+and the others are listed in the message. A rewrite is always reported
+(`model "fable" -> claude-fable-5`), and a name that matches nothing is passed to
+the API **unchanged** — so a model the agent does not know about still works.
+Providers with a user-defined namespace (Ollama) are never second-guessed;
+`/model` matches against the provider's live listing where one exists.
 
 ### Data directory
 
@@ -229,6 +318,18 @@ Tool use works with thinking on either model (the signed thinking blocks are rep
 
 Neither provider opens a browser for you — the URL is printed so you can open it yourself (handy over SSH / on headless machines). Use `--login` to force a fresh login (e.g. to switch accounts).
 
+## Codex provider
+
+The native Codex provider uses your ChatGPT/Codex subscription through the Responses API; it is separate from the API-key-based `openai` provider. On first use AIAgent starts the same headless-friendly device-code flow as Codex CLI: open the printed URL, enter the displayed code, and approve access.
+
+```sh
+./agent -p codex
+# Force a fresh account login and exit:
+./agent -p codex --login
+```
+
+Credentials are shared with Codex CLI at `${CODEX_HOME:-~/.codex}/auth.json`, refreshed automatically, and kept mode `0600`. An existing `codex login` is therefore picked up without another prompt. Default model: `gpt-5.5`; use `/model` to select another available Codex model and `/thinking` for reasoning effort.
+
 ## OpenRouter provider
 
 [OpenRouter](https://openrouter.ai) is an OpenAI-compatible gateway to many models. Get a key from `openrouter.ai/settings/keys`, then:
@@ -261,7 +362,9 @@ have a free tier or free trial you can try immediately:
 ```
 
 `/model` fetches the provider's live model list where available (and Ollama's
-locally-installed models), so you can pick from a menu after connecting.
+locally-installed models), so you can pick from a menu after connecting; for
+providers without a listing endpoint it offers a curated shortlist. Typing a name
+directly is forgiving — see [Forgiving model names](#forgiving-model-names).
 
 ## Usage
 
@@ -272,6 +375,7 @@ locally-installed models), so you can pick from a menu after connecting.
 # Pick a provider / model
 ./agent -p kimi
 ./agent -p claude -m claude-opus-4-8
+./agent -p codex -m gpt-5.5
 ./agent -p openrouter                 # free via openrouter/free (export OPENROUTER_API_KEY)
 
 # Single prompt, then exit
@@ -302,7 +406,7 @@ If you launch without `-p`, the last provider is reused; without `-m`, that prov
 - Transcript is printed to the terminal's normal buffer — scroll and select/copy with your terminal/mouse as usual.
 - A dim separator divides the transcript from the input; a status line shows provider · model · directory · tool mode.
 - Line editing: Left/Right, Home/End (or Ctrl-A / Ctrl-E), Up/Down for history, Backspace/Delete.
-- **Enter** sends; **Alt+Enter** inserts a newline for multi-line prompts (shown inline as a `↵` glyph).
+- **Enter** sends; **Ctrl-J** (or Alt+Enter) inserts a newline for multi-line prompts (shown inline as a `↵` glyph).
 - **Paste** (bracketed): small pastes are inserted inline; large ones collapse into an atomic `[paste #N: L lines]` box in the input, and expand into a framed block in the transcript. Boxes and newline glyphs behave as single units for cursor movement and deletion.
 - Messages are marked so speakers are easy to tell apart: `›` (you), `●` (AI), `⚙` (a command).
 - **Ctrl-C** interrupts the current turn (or quits when idle); **Ctrl-D** or `/exit` / `/quit` leaves.
@@ -313,15 +417,19 @@ Slash commands run locally (never sent to the model):
 |---------|--------|
 | `/help` | List the commands. |
 | `/about` | App description, version and current provider/model (alias `/info`). |
+| `/status` | Active provider, model, context, tools and token status. |
+| `/stats` | Session usage, estimated cost and provider limits. |
+| `/diagnose` | Combined runtime and provider diagnostic report. |
+| `/stop` | Request the active turn to stop safely (alias `/interrupt`). |
 | `/settings` | Open the interactive settings menu (↑/↓ select, ←/→ change, Enter edit/apply, Esc close). |
 | `/settings <key> <value>` | Set a value directly: `context` (`auto`, `64K`, or `0` = unlimited), `multiline` (`on`/`off`), `model`, `tools`, `strict`, `thinking`. |
-| `/model [name]` | Show or change the active model. |
+| `/model [name]` | Show or change the active model. Short or misspelled names are resolved (`fable` → `claude-fable-5`). |
 | `/tools <confirm\|auto\|insecure>` | Change the tool confirmation mode. |
 | `/thinking <on\|off\|low\|medium\|high\|xhigh\|max>` | Set the thinking level (alias `/effort`; applied by Kimi). |
 | `/theme <dark\|light\|warm\|cool\|rose>` | Switch the colour theme. |
 | `/memories [name]` | List this provider's memory files, or view one. |
 | `/context` | Visual context usage: a composition bar plus system / conversation / memory token estimates and the limit. |
-| `/history` | List the messages in the current context. |
+| `/history [n\|all\|search <text>]` | Browse, open and search messages in the current context. |
 | `/retry` | Re-run your last message. |
 | `/undo` | Remove the last exchange from history. |
 | `/clear` | Clear the conversation history (context). |
@@ -329,7 +437,8 @@ Slash commands run locally (never sent to the model):
 
 ### Input
 
-Enter (CR) submits; **Ctrl-J** or **Alt+Enter** inserts a newline. Turn on
+Enter (CR) always submits — in both modes — and **Ctrl-J** (or Alt+Enter) inserts
+a newline. Turn on
 `multiline` (config `multiline: on` or `/settings multiline on`) to see long or
 multi-line prompts wrapped across several lines instead of one horizontally
 scrolling line — ↑/↓ then move between the input lines (and fall back to history
@@ -393,8 +502,8 @@ src/
   repl_inline.cpp/hpp   # Inline (ANSI/termios) REPL renderer + line editor
   syntax_highlighter.*  # Fenced-code / markdown highlighting
   api/client.cpp/hpp    # libcurl HTTP client
-  auth/                 # OAuth flows + token storage (Kimi device-code, Claude auth-code)
-  providers/            # OpenAI, Ollama, Anthropic, Moonshot, Kimi, Claude adapters
+  auth/                 # OAuth flows + token storage (Codex/Kimi device-code, Claude auth-code)
+  providers/            # OpenAI, Codex, Ollama, Anthropic, Moonshot, Kimi, Claude adapters
   tools/                # Built-in tools + confirmation/danger-list policy (registry)
 ```
 

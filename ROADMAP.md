@@ -7,8 +7,8 @@ deliberately left out.
 
 ## Done
 
-- **Providers**: OpenAI, Ollama, Anthropic, Moonshot, Kimi, Claude — with
-  subscription OAuth (Bearer token) for Kimi and Claude, not pay-as-you-go API keys.
+- **Providers**: OpenAI, Codex, Ollama, Anthropic, Moonshot, Kimi, Claude — with
+  subscription OAuth (Bearer token) for Codex, Kimi and Claude, not pay-as-you-go API keys.
 - **Streaming everywhere**: every turn streams (even with tools). Content,
   reasoning and tool calls are assembled from the stream (`stream_reset` /
   `parse_stream` → `StreamChunk` / `stream_result`).
@@ -119,7 +119,7 @@ deliberately left out.
   run unattended (≥4s), the terminal bell rings once — the agent is blocked on
   you. And a turn that ran ≥8s ends with a one-line digest ("● done in Ns · N
   tool calls") plus a bell, so a long unattended turn announces its completion.
-- **Per-turn tool-call budget**: `tool_call_limit` (default 50; config +
+- **Per-turn tool-call budget**: `tool_call_limit` (default 100; config +
   /settings "tool budget"; 0 = unlimited) caps how many tools a single turn runs
   before asking to continue — a runaway-loop guard so `/tools auto` can be left
   unattended. On the cap it raises a continue/stop confirm (via the existing

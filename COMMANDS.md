@@ -12,9 +12,9 @@ Removes your last message and its reply, then sends the message again — useful
 
 Removes the most recent user message and everything after it (the reply and any tool results) from the context. The removed message text is returned so you can edit and resend it.
 
-### `/history`
+### `/history [n|all|search <text>]`
 
-Shows each non-system message as `you/ai/tool: <first line>`, so you can see what the model currently has in context.
+With no argument, lists each non-system message with an index, role and preview. In the interactive UI, press Enter on a row to open the full message. `/history <n>` opens one full message; `/history all` dumps the whole visible context; `/history search <text>` lists matching messages.
 
 ### `/clear`  — alias `/reset`
 
@@ -46,6 +46,28 @@ Summarises the older part of the conversation into a briefing, keeping the last 
 ### `/cost [budget <usd>|tokens <n>]`
 
 Shows session input/output (and cached) tokens and, when the model is priced (`price.<model>:` in config), the estimated cost. `/cost budget <usd>` and `/cost tokens <n>` set a one-shot 80%/100% warning threshold.
+
+
+## Session
+
+### `/status`
+
+Shows the provider, model, reasoning/stream settings, context budget, tool mode and latest token counts in one compact diagnostic view.
+
+### `/stats`
+
+Shows session token usage, estimated cost and any rate-limit/reset information reported by the latest provider response.
+
+### `/diagnose`
+
+Combines runtime status, usage, context and provider-limit information. Use `/raw` for the exact latest request and response.
+
+### `/stop`  — alias `/interrupt`
+
+Interrupts the current model request or tool operation at its next safe boundary. Work and tool results already collected are kept in the context.
+
+
+## Context & cost
 
 ### `/memories [name]`
 
@@ -79,24 +101,24 @@ Hands the whole terminal to your $SHELL (for `git push` with a password, a quick
 
 ## Context & cost
 
-### `/queue [drop <n|all>]`
+### `/queue [drop <n|all>|edit <n|live:n> <text>|promote n]`
 
-Lists messages you typed while a turn was running (they auto-send when it finishes). `/queue drop <n|all>` removes queued entries.
+Lists messages and commands typed while a turn was running, including their queue type (`message`, `command`, `shell`, or `live note`). They run when the current turn finishes. `/queue drop <n|all>` removes entries; `/queue edit <n|live:n> <text>` changes one before it runs; `/queue promote n` moves a queued message to the front.
 
 
 ## Providers & models
 
 ### `/provider [name]`
 
-Switches the active provider (openai, ollama, anthropic, moonshot, openrouter, kimi, claude), carrying the conversation over and restoring that provider's remembered model. Subscription providers must already be logged in.
+Switches the active provider (openai, codex, ollama, anthropic, moonshot, openrouter, kimi, claude), carrying the conversation over and restoring that provider's remembered model. Subscription providers must already be logged in.
 
 ### `/model [name]`
 
-With no argument shows the current model. With a name switches to it and remembers it for this provider across sessions.
+With no argument shows the current model. With a name switches to it and remembers it for this provider across sessions. The name is forgiving: a family shorthand or a small typo is resolved to the provider's real model (`fable` → `claude-fable-5`, `sonet` → `claude-sonnet-4-6`), while a name that matches nothing is sent to the API unchanged.
 
 ### `/thinking <off|on|low|medium|high|xhigh|max>`  — alias `/effort`
 
-Controls extended thinking / reasoning effort. Honoured by claude, anthropic, kimi, openai and openrouter (mapped to each API's field). Persisted across sessions.
+Controls extended thinking / reasoning effort. Honoured by codex, claude, anthropic, kimi, openai and openrouter (mapped to each API's field). Persisted across sessions.
 
 ### `/stream <off|on|collapse>`
 

@@ -55,7 +55,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
     if ( sp != std::string::npos ) cmd = cmd.substr(0, sp);
     static const std::set<std::string> immediate = {
         // read-only displays / menus
-        "/about", "/info", "/help", "/theme", "/settings", "/workflows",
+        "/about", "/info", "/status", "/stats", "/diagnose", "/stop", "/interrupt", "/help", "/theme", "/settings", "/workflows",
         "/trust", "/history", "/memories", "/tasks", "/skills", "/pins",
         "/context", "/cost", "/changes", "/mcp", "/paste", "/raw", "/limits", "/jobs",
         "/sessions",
@@ -70,6 +70,25 @@ static bool command_runs_immediately(const std::string& trimmed) {
         "/effort", "/thinking", "/stream", "/model", "/autoresume", "/bell"
     };
     return immediate.count(cmd) > 0;
+}
+
+static std::string pending_kind_label(InlineRepl::PendingKind kind) {
+    switch ( kind ) {
+    case InlineRepl::PendingKind::LiveNote: return "btw";
+    case InlineRepl::PendingKind::Shell: return "shell";
+    case InlineRepl::PendingKind::Command: return "command";
+    default: return "message";
+    }
+}
+
+static std::string queue_preview(std::string text, size_t limit) {
+    for ( char& ch : text )
+        if ( ch == '\n' || ch == '\r' || ch == '\t' )
+            ch = ' ';
+    text = common::trim_ws(text);
+    if ( text.size() > limit )
+        text = text.substr(0, limit) + "…";
+    return text;
 }
 
 static void wr(const std::string& s) {
@@ -285,11 +304,7 @@ size_t InlineRepl::next_char(size_t pos) const {
 }
 
 int InlineRepl::display_width(const std::string& s) const {
-    int w = 0;
-    for ( unsigned char c : s )
-        if ( (c & 0xC0) != 0x80 ) // count only UTF-8 lead bytes
-            ++w;
-    return w;
+    return static_cast<int>(split_cells(s).size());
 }
 
 // ── styling ─────────────────────────────────────────────────────────────
@@ -309,9 +324,10 @@ std::string InlineRepl::style_spans(const std::string& line, Language lang) cons
         else if ( sp.color_pair == _highlighter.color_for_type()) color = _theme.type;
         else if ( sp.color_pair == _highlighter.color_for_fence()) color = _theme.dim;
 
-        bool styled = !color.empty() || sp.bold;
+        bool styled = !color.empty() || sp.bold || sp.underline;
         if ( styled ) {
             if ( sp.bold ) out += "\033[1m";
+            if ( sp.underline ) out += "\033[4m";
             out += color;
         }
         out += sp.text;
@@ -321,7 +337,7 @@ std::string InlineRepl::style_spans(const std::string& line, Language lang) cons
     return out;
 }
 
-void InlineRepl::emit_styled_line(const std::string& line) {
+int InlineRepl::emit_styled_line(const std::string& line) {
     // Each reply line is left-padded 2 columns (matching the "> " on user
     // messages); combined with the wrap width below this leaves a 2-column right
     // margin. The very first line of a reply gets the AI marker instead of pad.
@@ -334,18 +350,27 @@ void InlineRepl::emit_styled_line(const std::string& line) {
         }
         return "  ";
     };
+    auto wrapped_rows = [this](const std::string& text, int prefix_cells = 2) -> int {
+        int cols = term_cols();
+        if ( cols < 1 )
+            cols = 1;
+        int cells = prefix_cells + static_cast<int>(split_cells(text).size());
+        return std::max(1, ( cells + cols - 1 ) / cols);
+    };
 
     // Thinking region: dim, no syntax highlighting, word-wrapped like prose.
     if ( _reply_dim ) {
         int width = term_cols() - 4;
         if ( width < 8 ) width = 8;
         std::vector<std::string> segs = word_wrap(line, width);
+        int rows = 0;
         for ( size_t i = 0; i < segs.size(); ++i ) {
             wr(next_prefix() + _theme.dim + segs[i] + Theme::reset);
             if ( i + 1 < segs.size())
                 wr("\n");
+            rows += wrapped_rows(segs[i]);
         }
-        return;
+        return rows;
     }
 
     std::string trimmed = common::trim_ws(line);
@@ -359,25 +384,28 @@ void InlineRepl::emit_styled_line(const std::string& line) {
             _code_lang = Language::none;
         }
         wr(next_prefix() + _theme.dim + line + "\033[0m");
-        return;
+        return wrapped_rows(line);
     }
 
     if ( _in_code ) {
         // Code is left unwrapped (breaking at spaces would be wrong); the
         // terminal soft-wraps it so a copy stays faithful.
         wr(next_prefix() + style_spans(line, _code_lang));
-        return;
+        return wrapped_rows(line);
     }
 
     // Prose: word-wrap so lines don't break mid-word, within the padded width.
     int width = term_cols() - 4;
     if ( width < 8 ) width = 8;
     std::vector<std::string> segs = word_wrap(line, width);
+    int rows = 0;
     for ( size_t i = 0; i < segs.size(); ++i ) {
         wr(next_prefix() + style_spans(segs[i], Language::markdown));
         if ( i + 1 < segs.size())
             wr("\n");
+        rows += wrapped_rows(segs[i]);
     }
+    return rows;
 }
 
 // ── transcript output ───────────────────────────────────────────────────
@@ -631,17 +659,24 @@ void InlineRepl::emit_reply_line(const std::string& raw_line) {
         return;
     }
 
+    int spacer_lines = 0;
     if ( !_reply_has_content ) {
         wr("\n");                 // the single blank line before the reply
         _reply_has_content = true;
+        spacer_lines = 1;
     } else {
-        for ( int i = 0; i < _pending_blanks; ++i )
+        for ( int i = 0; i < _pending_blanks; ++i ) {
             wr("\n");
+            ++spacer_lines;
+        }
     }
     _pending_blanks = 0;
 
-    emit_styled_line(line);
+    int printed = emit_styled_line(line);
     wr("\n");
+
+    if ( _turn_running )
+        _live_cursor_up += printed + spacer_lines;
 }
 
 void InlineRepl::flush_lines() {
@@ -660,7 +695,8 @@ void InlineRepl::route_stream_chunk(const std::string& chunk) {
     // the transient preview instead of _line_buf, so it is shown live but never
     // committed. \x02 (answer begins) drops the preview. Everything else is the
     // answer and flows into _line_buf as usual.
-    for ( char ch : chunk ) {
+    std::string clean = sanitize_stream_text(chunk);
+    for ( char ch : clean ) {
         if ( ch == '\x01' ) { _stream_in_think = true; continue; }
         if ( ch == '\x02' ) { _stream_in_think = false; _think_preview.clear(); continue; }
         if ( _stream_in_think )
@@ -726,14 +762,16 @@ std::string InlineRepl::status_line() const {
         std::string activity;
         bool streamed;
         size_t queued;
+        size_t live_updates;
         std::string next_queued;
         {
             std::lock_guard<std::mutex> lk(_mx);
             activity = _activity;
             streamed = _turn_streamed;
             queued = _pending.size();
+            live_updates = _live_updates.size();
             if ( queued > 0 )
-                next_queued = _pending.front();
+                next_queued = _pending.front().text;
         }
         std::string what = !activity.empty() ? activity : ( streamed ? "responding" : "thinking");
         // The status MUST stay one line (erase_live assumes it). A multi-line
@@ -772,9 +810,23 @@ std::string InlineRepl::status_line() const {
         // can see WHAT is waiting, not just how many.
         std::string qclip;
         if ( queued > 0 ) {
-            for ( char& c : next_queued )
-                if ( c == '\n' || c == '\r' || c == '\t' ) c = ' '; // flatten CR too — the status is one line
-            qclip = clip(next_queued, 24);
+            PendingKind next_kind = PendingKind::Message;
+            {
+                std::lock_guard<std::mutex> lk(_mx);
+                if ( !_pending.empty()) next_kind = _pending.front().kind;
+            }
+            std::string labelled = pending_kind_label(next_kind) + ": " + queue_preview(next_queued, 80);
+            qclip = clip(labelled, 30);
+        }
+        std::string btw_suffix;
+        if ( live_updates > 0 )
+            btw_suffix = " · " + std::to_string(live_updates) + " btw";
+        int tool_count = _turn_tool_count.load(std::memory_order_relaxed);
+        std::string tool_suffix;
+        if ( tool_count > 0 ) {
+            tool_suffix = " · " + std::to_string(tool_count) + " tools";
+            if ( _config.tool_call_limit > 0 )
+                tool_suffix += "/" + std::to_string(_config.tool_call_limit);
         }
 
         // Everything must fit ONE terminal row: draw_live prints this verbatim and
@@ -788,9 +840,14 @@ std::string InlineRepl::status_line() const {
         bool q_suffix = queued > 0, q_preview = queued > 0;
 
         auto qwidth = [&]() -> int {
-            if ( !q_suffix ) return 0;
-            int w = 3 + static_cast<int>(std::to_string(queued).size()) + 7; // " · N queued"
-            if ( q_preview ) w += 3 + display_width(qclip) + 1;              // ": “…”"
+            int w = 0;
+            if ( !tool_suffix.empty())
+                w += display_width(tool_suffix);
+            if ( !btw_suffix.empty())
+                w += display_width(btw_suffix);
+            if ( !q_suffix ) return w;
+            w += 3 + static_cast<int>(std::to_string(queued).size()) + 7; // " · N queued"
+            if ( q_preview ) w += 3 + display_width(qclip) + 1;              // ": "...""
             return w;
         };
         auto room = [&]() { return cols - fixed - static_cast<int>(hint.size()) - qwidth(); };
@@ -798,6 +855,8 @@ std::string InlineRepl::status_line() const {
         if ( room() < 12 ) hint.clear();
         if ( room() < 12 ) q_preview = false;
         if ( room() < 12 ) q_suffix = false;
+        if ( room() < 12 ) tool_suffix.clear();
+        if ( room() < 12 ) btw_suffix.clear();
         what = clip(what, std::max(1, room()));
 
         // Pre-styled: a bright spinner + label stands out against the dim idle
@@ -806,6 +865,10 @@ std::string InlineRepl::status_line() const {
                       + _theme.accent + what + " " + secs_s + Theme::reset;
         if ( !hint.empty())
             s += _theme.dim + hint + Theme::reset;
+        if ( !btw_suffix.empty())
+            s += _theme.dim + btw_suffix + Theme::reset;
+        if ( !tool_suffix.empty())
+            s += _theme.dim + tool_suffix + Theme::reset;
         if ( q_suffix ) {
             s += _theme.dim + " · " + Theme::reset + _theme.warn +
                  std::to_string(queued) + " queued" + Theme::reset;
@@ -873,7 +936,62 @@ void InlineRepl::notify_quiet(const std::string& line) {
 
 void InlineRepl::notify_tool(const std::string& line) {
     _turn_tool_count.fetch_add(1, std::memory_order_relaxed);
-    notify_quiet(line);
+    std::lock_guard<std::mutex> lk(_mx);
+    // The prefix identifies the operation and its target (for example
+    // "read_file src/repl_inline.cpp"). Result sizes and timings are allowed to
+    // differ without forcing a new visible row.
+    size_t sep = line.find(" · ");
+    std::string shown_key = sep == std::string::npos ? line : line.substr(0, sep);
+    std::string key = shown_key;
+    std::string range;
+    size_t rb = shown_key.rfind(']');
+    size_t lb = shown_key.rfind(" [");
+    if ( lb != std::string::npos && rb == shown_key.size() - 1 ) {
+        range = shown_key.substr(lb + 2, rb - lb - 2);
+        key = shown_key.substr(0, lb);
+    }
+    if ( !_tool_rollup_key.empty() && key != _tool_rollup_key )
+        flush_tool_rollup_locked();
+    if ( _tool_rollup_key.empty()) {
+        _tool_rollup_key = key;
+        _tool_rollup_text = line;
+        _tool_rollup_count = 1;
+        if ( !range.empty()) _tool_rollup_ranges.push_back(range);
+    } else {
+        ++_tool_rollup_count;
+        if ( !range.empty() && std::find(_tool_rollup_ranges.begin(), _tool_rollup_ranges.end(), range) == _tool_rollup_ranges.end())
+            _tool_rollup_ranges.push_back(range);
+    }
+}
+
+void InlineRepl::flush_tool_rollup_locked() {
+    if ( _tool_rollup_count <= 0 ) return;
+    if ( _tool_rollup_count == 1 )
+        _notices.push({ _tool_rollup_text, false });
+    else {
+        std::string text = _tool_rollup_key + " · " + std::to_string(_tool_rollup_count) + " calls";
+        if ( !_tool_rollup_ranges.empty()) {
+            text += " · ranges ";
+            for ( size_t i = 0; i < _tool_rollup_ranges.size() && i < 4; ++i )
+                text += ( i ? ", " : "") + _tool_rollup_ranges[i];
+            if ( _tool_rollup_ranges.size() > 4 ) text += ", …";
+        }
+        _notices.push({ text, false });
+    }
+    _tool_rollup_key.clear();
+    _tool_rollup_text.clear();
+    _tool_rollup_ranges.clear();
+    _tool_rollup_count = 0;
+}
+
+std::vector<std::string> InlineRepl::take_live_updates() {
+    std::vector<std::string> out;
+    std::lock_guard<std::mutex> lk(_mx);
+    while ( !_live_updates.empty()) {
+        out.push_back(std::move(_live_updates.front()));
+        _live_updates.pop_front();
+    }
+    return out;
 }
 
 bool InlineRepl::enqueue_prompt(const std::string& text) {
@@ -881,14 +999,20 @@ bool InlineRepl::enqueue_prompt(const std::string& text) {
     if ( _auto_since_user >= 2 )
         return false; // chain guard: results still fold in on the next user message
     ++_auto_since_user;
-    _pending.push_back(text);
+    _pending.push_back({ PendingKind::Message, text });
     return true;
+}
+
+void InlineRepl::enqueue_pending(std::string text, PendingKind kind) {
+    std::lock_guard<std::mutex> lk(_mx);
+    _pending.push_back({ kind, std::move(text) });
 }
 
 void InlineRepl::drain_notices() {
     std::vector<Notice> lines;
     {
         std::lock_guard<std::mutex> lk(_mx);
+        flush_tool_rollup_locked();
         while ( !_notices.empty()) {
             lines.push_back(_notices.front());
             _notices.pop();
@@ -1721,9 +1845,14 @@ void InlineRepl::on_enter() {
         // starts work (clear, undo, compact, model/provider switch, …) queues so
         // it runs when the turn finishes, instead of interleaving with the output.
         if ( _turn_running && !command_runs_immediately(trimmed)) {
-            {
+            PendingKind kind = trimmed.rfind("/btw", 0) == 0 || trimmed.rfind("/note", 0) == 0
+                ? PendingKind::LiveNote : ( trimmed[0] == '!' ? PendingKind::Shell : PendingKind::Command );
+            if ( kind == PendingKind::LiveNote ) {
                 std::lock_guard<std::mutex> lk(_mx);
-                _pending.push_back(trimmed);
+                _live_updates.push_back(trimmed);
+                _notices.push({ "btw update queued for the next checkpoint", false });
+            } else {
+                enqueue_pending(trimmed, kind);
             }
             tcflush(STDIN_FILENO, TCIFLUSH);
             draw_live();
@@ -1739,11 +1868,8 @@ void InlineRepl::on_enter() {
 
     if ( _turn_running ) {
         // A turn is in flight — queue this one to auto-send when it finishes.
-        {
-            std::lock_guard<std::mutex> lk(_mx);
-            _pending.push_back(line);
-            _auto_since_user = 0; // real user input resets the auto-resume guard
-        }
+        enqueue_pending(line, PendingKind::Message);
+        { std::lock_guard<std::mutex> lk(_mx); _auto_since_user = 0; } // real user input resets the auto-resume guard
         _input.clear();
         _cursor = 0;
         _input_window_start = 0;
@@ -1800,6 +1926,33 @@ void InlineRepl::start_turn(const std::string& line, const std::string& display,
     _worker = std::thread([this, line]() {
         std::string reply = _callback(
             line,
+            // ── Stream ingress ────────────────────────────────────────────────
+            // The ONLY place raw reply text enters the inline REPL. Everything
+            // downstream (route_stream_chunk and the two drain loops) relies on
+            // an invariant established here:
+            //
+            //   Chunks arriving on this callback contain only COMPLETE UTF-8
+            //   code points — never a multi-byte character split in half.
+            //
+            // The guarantee comes from upstream, not from this file: _callback is
+            // Repl::process_turn (wired in repl.cpp), which pushes every provider
+            // chunk through a stateful StreamTextSanitizer. That class buffers a
+            // trailing partial sequence until the continuation bytes arrive, so a
+            // character split across two HTTP chunks is reassembled before it ever
+            // reaches us. cURL splits on arbitrary byte boundaries, so without
+            // that pass this queue WOULD receive half characters.
+            //
+            // Consequence: the consumers may use the cheap, stateless
+            // sanitize_stream_text(), which strips terminal control bytes but is
+            // byte-preserving above 0x20 (it deliberately does not validate UTF-8;
+            // see the note on that function). Two rules follow, and both are
+            // pinned by tests in test_suite.cpp:
+            //
+            //   1. Do not add UTF-8 validation to sanitize_stream_text() — it
+            //      would drop the very continuation bytes this design keeps.
+            //   2. If a NEW producer is ever wired to this callback, it must do
+            //      its own StreamTextSanitizer pass first, or feed raw chunks
+            //      through one here before pushing.
             [this](const std::string& chunk) {
                 std::lock_guard<std::mutex> lk(_mx);
                 _out_chunks.push(chunk);
@@ -1914,7 +2067,7 @@ void InlineRepl::poll_worker() {
             if ( collapse )
                 route_stream_chunk(c);
             else
-                _line_buf += c;
+                _line_buf += sanitize_stream_text(c);
         }
         flush_lines();
         draw_live();
@@ -1953,7 +2106,7 @@ void InlineRepl::finish_turn() {
             if ( collapse )
                 route_stream_chunk(_out_chunks.front());
             else
-                _line_buf += _out_chunks.front();
+                _line_buf += sanitize_stream_text(_out_chunks.front());
             _out_chunks.pop();
         }
         reply = _turn_reply;
@@ -2098,9 +2251,9 @@ std::string InlineRepl::budget_warning() {
 bool InlineRepl::maybe_auto_compact() {
     if ( !_config.auto_compact )
         return false;
-    size_t budget = _config.context_budget();
+    size_t budget = _config.compaction_budget();
     if ( budget == 0 )
-        return false; // no known budget (unlimited / unknown window) — nothing to measure against
+        return false; // unknown model window — nothing reliable to measure against
     long ctx = _stats.context_tokens.load(std::memory_order_relaxed);
     if ( ctx <= 0 )
         return false; // no usage reported yet
@@ -2180,32 +2333,66 @@ void InlineRepl::queue_command(const std::string& line) {
     std::istringstream iss(line);
     std::string cmd, sub, arg;
     iss >> cmd >> sub >> arg;
+    std::string edit_text;
+    if ( common::to_lower(sub) == "edit" ) {
+        std::getline(iss, edit_text);
+        edit_text = common::trim_ws(edit_text);
+    }
 
-    // Bare /queue opens a scrollable menu of the pending messages with a drop
+    // Bare /queue opens a scrollable menu of the pending items with a drop
     // action; each drop refreshes the list in place.
     if ( sub.empty()) {
         std::vector<std::string> rows, keys;
+        size_t msg_count = 0, btw_count = 0, shell_count = 0, cmd_count = 0, item_count = 0;
         {
             std::lock_guard<std::mutex> lk(_mx);
+            item_count = _live_updates.size() + _pending.size();
+            for ( size_t i = 0; i < _live_updates.size(); ++i ) {
+                if ( i == 0 ) { rows.push_back("── live updates ──"); keys.push_back(""); }
+                ++btw_count;
+                rows.push_back("L" + std::to_string(i + 1) + ".  live note  ·  " + queue_preview(_live_updates[i], 92));
+                keys.push_back("live:" + std::to_string(i + 1));
+            }
             for ( size_t i = 0; i < _pending.size(); ++i ) {
-                std::string p = _pending[i];
-                for ( char& ch : p )
-                    if ( ch == '\n' || ch == '\t' ) ch = ' ';
-                if ( p.size() > 100 ) p = p.substr(0, 100) + "…";
-                rows.push_back(std::to_string(i + 1) + ". " + p);
-                keys.push_back(std::to_string(i + 1));
+                if ( i == 0 ) { rows.push_back("── pending work ──"); keys.push_back(""); }
+                switch ( _pending[i].kind ) {
+                case PendingKind::Message: ++msg_count; break;
+                case PendingKind::LiveNote: ++btw_count; break;
+                case PendingKind::Shell: ++shell_count; break;
+                case PendingKind::Command: ++cmd_count; break;
+                }
+                std::string kind = pending_kind_label(_pending[i].kind);
+                std::string p = queue_preview(_pending[i].text, 92);
+                rows.push_back("#" + std::to_string(i + 1) + ".  " + kind + "  ·  " + p);
+                keys.push_back("pending:" + std::to_string(i + 1));
             }
         }
         if ( rows.empty()) {
             render_command(line, "queue is empty");
             return;
         }
+        auto counted = [](size_t n, const char* singular, const char* plural) {
+            return std::to_string(n) + " " + ( n == 1 ? singular : plural );
+        };
         ListMenu m;
-        m.title = "queue · runs after the current turn";
+        m.title = "queue · " + counted(item_count, "item", "items") +
+                  " (" + counted(msg_count, "message", "messages") +
+                  ", " + counted(btw_count, "btw", "btws") +
+                  ", " + counted(cmd_count, "command", "commands") +
+                  ", " + counted(shell_count, "shell", "shells") + ")";
         m.rows = std::move(rows);
         m.keys = std::move(keys);
+        m.actions.push_back({ 'p', "/queue promote ", "promote" });
         m.actions.push_back({ 'd', "/queue drop ", "drop" });
         m.reopen_cmd = "/queue";
+        std::string hint = "↑↓ move · p promote · d drop · esc close";
+        if ( btw_count > 0 )
+            hint += " · btw waits for next checkpoint";
+        if ( cmd_count + shell_count > 0 )
+            hint += " · commands/shells run when idle";
+        m.hint = hint;
+        if ( btw_count == 0 && msg_count == 0 )
+            m.hint += " · no messages yet";
         open_list_menu(std::move(m));
         return;
     }
@@ -2213,26 +2400,104 @@ void InlineRepl::queue_command(const std::string& line) {
     std::string result;
     {
         std::lock_guard<std::mutex> lk(_mx);
-        if ( common::to_lower(sub) == "drop" ) {
-            if ( common::to_lower(arg) == "all" ) {
-                size_t n = _pending.size();
-                _pending.clear();
-                result = "dropped " + std::to_string(n) + " queued message(s)";
+        if ( common::to_lower(sub) == "promote" ) {
+            if ( arg.rfind("pending:", 0) == 0 ) arg = arg.substr(8);
+            int n = 0;
+            try { n = std::stoi(arg); } catch ( ... ) { n = 0; }
+            if ( n < 1 || n > static_cast<int>(_pending.size()))
+                result = "no queued item #" + arg + " (see /queue)";
+            else if ( _pending[n - 1].kind != PendingKind::Message )
+                result = "only message items can be promoted";
+            else {
+                PendingItem item = std::move(_pending[n - 1]);
+                _pending.erase(_pending.begin() + ( n - 1 ));
+                _pending.push_front(std::move(item));
+                result = "promoted queued item #" + std::to_string(n);
+            }
+        } else if ( common::to_lower(sub) == "edit" ) {
+            if ( edit_text.empty()) {
+                result = "usage: /queue edit <n|live:n> <text>";
+            } else if ( arg.rfind("live:", 0) == 0 ) {
+                if ( arg.rfind("pending:", 0) == 0 ) arg = arg.substr(8);
+                int n = 0;
+                try { n = std::stoi(arg.substr(5)); } catch ( ... ) { n = 0; }
+                if ( n < 1 || n > static_cast<int>(_live_updates.size()))
+                    result = "no live note #" + arg.substr(5) + " (see /queue)";
+                else {
+                    _live_updates[n - 1] = edit_text;
+                    result = "updated live note #" + std::to_string(n);
+                }
             } else {
                 int n = 0;
                 try { n = std::stoi(arg); } catch ( ... ) { n = 0; }
                 if ( n < 1 || n > static_cast<int>(_pending.size()))
-                    result = _pending.empty() ? "queue is empty"
-                                              : "no queued message #" + arg + " (see /queue)";
+                    result = "no queued item #" + arg + " (see /queue)";
                 else {
-                    std::string dropped = _pending[n - 1];
-                    if ( dropped.size() > 60 ) dropped = dropped.substr(0, 60) + "…";
+                    _pending[n - 1].text = edit_text;
+                    result = "updated queued item #" + std::to_string(n);
+                }
+            }
+        } else if ( common::to_lower(sub) == "drop" ) {
+            auto count_kind = [](InlineRepl::PendingKind k) {
+                switch ( k ) {
+                case InlineRepl::PendingKind::Message: return "message";
+                case InlineRepl::PendingKind::LiveNote: return "btw";
+                case InlineRepl::PendingKind::Shell: return "shell";
+                case InlineRepl::PendingKind::Command: return "command";
+                }
+                return "item";
+            };
+            if ( common::to_lower(arg) == "all" ) {
+                size_t n = _pending.size() + _live_updates.size(), msg = 0, btw = _live_updates.size(), shell = 0, cmd = 0;
+                for ( const auto& p : _pending ) {
+                    switch ( p.kind ) {
+                    case PendingKind::Message: ++msg; break;
+                    case PendingKind::LiveNote: ++btw; break;
+                    case PendingKind::Shell: ++shell; break;
+                    case PendingKind::Command: ++cmd; break;
+                    }
+                }
+                _pending.clear();
+                _live_updates.clear();
+                result = "dropped all queued items";
+                if ( n > 0 ) {
+                    result += " (" + std::to_string(n) + " total: " +
+                              std::to_string(msg) + " message(s), " +
+                              std::to_string(btw) + " btw, " +
+                              std::to_string(cmd) + " command(s), " +
+                              std::to_string(shell) + " shell(s))";
+                }
+                if ( btw > 0 )
+                    result += " · btw updates wait for the next checkpoint";
+            } else {
+                if ( arg.rfind("live:", 0) == 0 ) {
+                    int n = 0;
+                    try { n = std::stoi(arg.substr(5)); } catch ( ... ) { n = 0; }
+                    if ( n < 1 || n > static_cast<int>(_live_updates.size()) )
+                        result = _live_updates.empty() ? "queue is empty" : "no live note #" + arg.substr(5) + " (see /queue)";
+                    else {
+                        std::string dropped = queue_preview(_live_updates[n - 1], 60);
+                        _live_updates.erase(_live_updates.begin() + ( n - 1 ));
+                        result = "dropped live note #" + std::to_string(n) + ": " + dropped;
+                    }
+                    render_command(line, result);
+                    return;
+                }
+                if ( arg.rfind("pending:", 0) == 0 ) arg = arg.substr(8);
+                int n = 0;
+                try { n = std::stoi(arg); } catch ( ... ) { n = 0; }
+                if ( n < 1 || n > static_cast<int>(_pending.size()))
+                    result = _pending.empty() ? "queue is empty"
+                                              : "no queued item #" + arg + " (see /queue)";
+                else {
+                    std::string kind = count_kind(_pending[n - 1].kind);
+                    std::string dropped = queue_preview(_pending[n - 1].text, 60);
                     _pending.erase(_pending.begin() + ( n - 1 ));
-                    result = "dropped #" + arg + ": " + dropped;
+                    result = "dropped #" + arg + " [" + kind + "]: " + dropped;
                 }
             }
         } else {
-            result = "usage: /queue [drop <n|all>]";
+            result = "usage: /queue [drop <n|all>|edit <n|live:n> <text>]";
         }
     }
     render_command(line, result);
@@ -2284,7 +2549,7 @@ void InlineRepl::render_confirm_dialog(const tools::ConfirmRequest& req) {
     wr("\033[?25l"); // hide the cursor while the menu is up
 
     if ( !req.danger.empty())
-        wr("\n" + _theme.danger + "⚠ dangerous command — " + req.danger + Theme::reset + "\n");
+        wr("\n" + _theme.danger + "⚠ dangerous command — review carefully: " + req.danger + Theme::reset + "\n");
     wr("\n" + _theme.warn + "? " + req.tool + " wants to run:" + Theme::reset + "\n");
     wr(_theme.warn + req.summary + Theme::reset + "\n");
 
@@ -2301,6 +2566,7 @@ void InlineRepl::render_confirm_dialog(const tools::ConfirmRequest& req) {
         }
     }
     wr("\n" + _theme.dim + "Select with ↑/↓ and press Enter (Esc denies). Letters do nothing." + Theme::reset + "\n");
+    wr(_theme.dim + "Choices are recorded in the transcript; dangerous commands always ring." + Theme::reset + "\n");
 
     _confirm_selection = 0;   // Deny
     _confirm_menu_lines = 0;
@@ -2453,18 +2719,12 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
             ln = common::trim_ws(ln);
             if ( !ln.empty() && seen.insert(ln).second ) models.push_back(ln);
         }
-        // Fall back to a curated shortlist when the provider offers no listing.
-        static const std::map<std::string, std::vector<std::string>> curated = {
-            { "claude",     { "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-fable-5" }},
-            { "anthropic",  { "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-fable-5" }},
-            { "openrouter", { "openrouter/auto", "openrouter/free" }},
-        };
-        if ( models.size() <= 1 ) {
-            auto it = curated.find(_config.provider);
-            if ( it != curated.end())
-                for ( const auto& mdl : it->second )
-                    if ( seen.insert(mdl).second ) models.push_back(mdl);
-        }
+        // Fall back to the curated shortlist when the provider offers no listing.
+        // The list itself lives in Config so /model, the picker and the name
+        // resolver all agree on what "known" means.
+        if ( models.size() <= 1 )
+            for ( const auto& mdl : agent::Config::known_models_for(_config.provider))
+                if ( seen.insert(mdl).second ) models.push_back(mdl);
         ListMenu m;
         m.title = "model · " + _config.provider + ( models.size() > 1 ? "" : "  (type /model <name>)" );
         m.rows = models;
@@ -2619,9 +2879,25 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
 
             ListMenu m;
             m.title = base.substr(1); // drop the leading '/'
-            for ( const auto& row : all )
-                if ( !common::trim_ws(row).empty())
-                    m.rows.push_back(row);
+            for ( const auto& row : all ) {
+                std::string clean = common::trim_ws(row);
+                if ( clean.empty())
+                    continue;
+                m.rows.push_back(row);
+                if ( base == "/history" ) {
+                    size_t pos = 1;
+                    if ( clean.size() > 1 && clean[0] == '#' ) {
+                        while ( pos < clean.size() && std::isdigit(static_cast<unsigned char>(clean[pos])) )
+                            ++pos;
+                    }
+                    if ( clean.size() > 1 && clean[0] == '#' && pos > 1 )
+                        m.keys.push_back(clean.substr(1, pos - 1));
+                    else
+                        m.keys.push_back("");
+                }
+            }
+            if ( base == "/history" && m.keys.size() == m.rows.size())
+                m.drill_cmd = "/history ";
             // Nothing selectable — just show the text.
             if ( m.rows.empty()) {
                 render_command(trimmed, text);
@@ -2647,27 +2923,26 @@ void InlineRepl::drain_pending() {
     // answer flushes in a single round instead of one message per turn. Stops
     // early if a command starts a turn or opens the interactive menu.
     while ( true ) {
-        std::string next;
+        PendingItem item;
         bool is_command = false;
         std::vector<std::string> parts; // consecutive user messages merged into one turn
         {
             std::lock_guard<std::mutex> lk(_mx);
             if ( _pending.empty())
                 break;
-            next = _pending.front();
+            item = std::move(_pending.front());
             _pending.pop_front();
-            is_command = !next.empty() && ( next[0] == '/' || next[0] == '!' );
+            is_command = item.kind != PendingKind::Message;
             if ( !is_command ) {
-                parts.push_back(next);
-                while ( !_pending.empty() && !_pending.front().empty() &&
-                        _pending.front()[0] != '/' && _pending.front()[0] != '!' ) {
-                    parts.push_back(_pending.front());
+                parts.push_back(std::move(item.text));
+                while ( !_pending.empty() && _pending.front().kind == PendingKind::Message ) {
+                    parts.push_back(std::move(_pending.front().text));
                     _pending.pop_front();
                 }
             }
         }
         if ( is_command ) {
-            run_command_line(next);
+            run_command_line(item.text);
             if ( _turn_running || _in_settings )
                 return;
         } else {
@@ -2781,11 +3056,13 @@ void InlineRepl::open_settings_menu() {
     _settings_rows.clear();
     auto add = [&](std::string key, std::string label, std::string value, std::string group,
                    std::string desc, std::vector<std::string> opts = {}, bool number = false,
-                   long lo = 0, long hi = 0, long step = 1, std::string unit = "", std::string zero = "") {
+                   long lo = 0, long hi = 0, long step = 1, std::string unit = "", std::string zero = "",
+                   bool tokens = false) {
         SettingRow r;
         r.key = std::move(key); r.label = std::move(label); r.value = std::move(value);
         r.group = std::move(group); r.desc = std::move(desc); r.options = std::move(opts);
         r.is_number = number; r.num_min = lo; r.num_max = hi; r.num_step = step;
+        r.is_tokens = tokens;
         r.unit = std::move(unit); r.zero_label = std::move(zero);
         _settings_rows.push_back(std::move(r));
     };
@@ -2810,8 +3087,9 @@ void InlineRepl::open_settings_menu() {
         "in confirm mode, also confirm safe read-only shell commands", { "off", "on" });
     add("tool_call_limit", "tool budget",
         std::to_string(_config.tool_call_limit), TOOLS,
-        "pause to ask after this many tool calls in one turn", {}, true,
-        0, 500, 10, "per turn", "unlimited");
+        "runaway-loop guard: pause and ask after this many tool calls in one turn "
+        "(a big refactor can legitimately use hundreds)", {}, true,
+        0, 2000, 50, "per turn", "unlimited");
     add("redact_secrets", "redact secrets", _config.redact_secrets ? "on" : "off", TOOLS,
         "mask credentials in tool output before it is sent to the model", { "off", "on" });
     if ( _config.provider == "claude" )
@@ -2820,11 +3098,15 @@ void InlineRepl::open_settings_menu() {
 
     add("context", "context",
         first_word(cur.count("context") ? cur["context"] : "unlimited"), CTX,
-        "token budget before older turns are trimmed (auto / a number / 0)");
+        "INPUT budget: how much history is sent each turn. auto = 85% of the "
+        "model's window (recommended) · unlimited sends everything until the API refuses");
     add("auto_compact", "auto-compact", _config.auto_compact ? "on" : "off", CTX,
-        "summarise older history automatically as it nears the budget", { "off", "on" });
+        "summarise older turns when the input budget is ~80% used — needs a "
+        "context budget, so it does nothing while context is unlimited", { "off", "on" });
     add("max_tokens", "max reply", std::to_string(_config.max_tokens), CTX,
-        "cap on a single reply's output tokens", {}, true, 256, 200000, 1024, "tokens");
+        "OUTPUT cap for a SINGLE reply (not a session total); clamped to the "
+        "model's own ceiling, so higher than that has no effect",
+        {}, true, 1000, 200000, 4000, "", "", true);
     add("autoresume", "workflow resume", _config.workflow_autoresume ? "on" : "off", CTX,
         "when a background workflow finishes, feed its results to the model automatically",
         { "off", "on" });
@@ -2845,7 +3127,9 @@ void InlineRepl::open_settings_menu() {
         "bell: always · attention (workflow/tool/?) · question · ask_user (model asks you) · never — a dangerous command always rings unless never",
         { "never", "ask_user", "question", "attention", "always" });
     add("multiline", "multiline", _config.multiline ? "on" : "off", UI,
-        "Enter inserts a newline; Alt+Enter sends the message", { "off", "on" });
+        "wrap long/multi-line input across lines (↑↓ move between them) · "
+        "Enter always sends, Ctrl-J (or Alt+Enter) inserts a newline",
+        { "off", "on" });
     add("paste_preview", "paste preview",
         std::to_string(_config.paste_preview), UI,
         "lines of a large paste to echo in the transcript", {}, true, 0, 200, 1, "lines", "all");
@@ -2869,7 +3153,10 @@ std::string InlineRepl::setting_display_value(const SettingRow& row) const {
     try { v = std::stol(row.value); } catch ( ... ) { v = row.num_min; }
     if ( v == 0 && !row.zero_label.empty())
         return row.zero_label;
-    std::string s = std::to_string(v);
+    // Token budgets get thousands/millions shorthand: "64K" and "1.5M" are far
+    // easier to compare at a glance than "64000" and "1500000".
+    std::string s = row.is_tokens ? agent::Config::format_tokens(static_cast<size_t>(v))
+                                  : std::to_string(v);
     if ( !row.unit.empty()) s += " " + row.unit;
     return s;
 }
@@ -3087,10 +3374,10 @@ void InlineRepl::draw_list_menu(bool redraw) {
     int cols = term_cols() - 3;
     if ( cols < 8 ) cols = 8;
     int vh = menu_view_rows();
-
     if ( _list_detail ) {
-        out += _theme.command + "  " + _list.title + Theme::reset + "   " +
-               _theme.dim + "↑↓ scroll · esc back" + Theme::reset + "\r\n";
+        std::string title = clip_cells(_list.title, std::max(4, cols - 14));
+        out += _theme.command + "╭─ " + title + " " + _theme.dim + "· detail" +
+               _theme.command + " ─╮" + Theme::reset + "\r\n";
         lines++;
         int total = static_cast<int>(_list_detail_rows.size());
         if ( _list_detail_top > std::max(0, total - vh)) _list_detail_top = std::max(0, total - vh);
@@ -3105,6 +3392,8 @@ void InlineRepl::draw_list_menu(bool redraw) {
                    std::to_string(total) + Theme::reset + "\r\n";
             lines++;
         }
+        out += _theme.dim + "╰─ ↑↓ scroll · esc back ─╯" + Theme::reset + "\r\n";
+        lines++;
     } else {
         std::string hint = _list.hint;
         if ( hint.empty()) {
@@ -3114,8 +3403,9 @@ void InlineRepl::draw_list_menu(bool redraw) {
             for ( const auto& a : _list.actions )
                 hint += std::string(" · ") + a.key + " " + a.label;
         }
-        out += _theme.command + "  " + _list.title + Theme::reset + "   " +
-               _theme.dim + hint + Theme::reset + "\r\n";
+        std::string title = clip_cells(_list.title, std::max(4, cols - 14));
+        out += _theme.command + "╭─ " + title + " " + _theme.dim + "· menu" +
+               _theme.command + " ─╮" + Theme::reset + "\r\n";
         lines++;
 
         int total = static_cast<int>(_list.rows.size());
@@ -3138,6 +3428,8 @@ void InlineRepl::draw_list_menu(bool redraw) {
                    std::to_string(total) + Theme::reset + "\r\n";
             lines++;
         }
+        out += _theme.dim + "╰─ " + clip_cells(hint, std::max(4, cols - 6)) + " ─╯" + Theme::reset + "\r\n";
+        lines++;
     }
     wr(out);
     _list_lines = lines;

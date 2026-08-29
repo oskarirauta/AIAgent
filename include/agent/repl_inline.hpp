@@ -75,6 +75,7 @@ public:
     // A tool-execution notice: notify_quiet plus a per-turn counter for the
     // end-of-turn digest. Thread-safe (parallel tool batches).
     void notify_tool(const std::string& line);
+    std::vector<std::string> take_live_updates();
 
     // Queue a synthetic prompt (workflow auto-resume). Thread-safe; it joins the
     // SAME pending queue as user messages, so it runs through the normal turn
@@ -105,6 +106,8 @@ public:
 
     // Last-resort restore from the signal handler before a forced exit.
     static void emergency_teardown();
+
+    enum class PendingKind { Message, Command, Shell, LiveNote };
 
 private:
     // Terminal / raw mode.
@@ -156,7 +159,7 @@ private:
     // user messages, not alternating speakers.
     void echo_user_multi(const std::vector<std::string>& parts);
     void begin_reply();
-    void emit_styled_line(const std::string& line); // one committed, styled line
+    int emit_styled_line(const std::string& line); // one committed, styled line; returns physical lines printed
     std::string style_spans(const std::string& line, Language lang) const;
 
     // Turn lifecycle (worker thread + main-thread event loop).
@@ -194,7 +197,8 @@ private:
         std::string group;                // section header this row sits under
         std::string desc;                 // one-line help shown under the selected row
         std::string unit;                 // suffix for a numeric value ("tokens", "lines")
-        bool is_number = false;           // adjustable with ←/→ (and editable with Enter)
+        bool is_number = false;           // adjustable with <-/-> (and editable with Enter)
+        bool is_tokens = false;           // format the value as 32K / 1.5M rather than raw digits
         long num_min = 0, num_max = 0, num_step = 1;
         std::string zero_label;           // shown instead of "0" (e.g. "all", "unlimited")
     };
@@ -361,11 +365,22 @@ private:
     int _settings_selection = 0;
     int _settings_menu_lines = 0;
     std::vector<SettingRow> _settings_rows;
-    std::deque<std::string> _pending;      // prompts queued while a turn is running (guarded by _mx)
+    struct PendingItem {
+        PendingKind kind = PendingKind::Message;
+        std::string text;
+    };
+    std::deque<PendingItem> _pending;      // prompts queued while a turn is running (guarded by _mx)
+    std::deque<std::string> _live_updates; // /btw notes consumed at model checkpoints
+    void enqueue_pending(std::string text, PendingKind kind = PendingKind::Message);
     void queue_command(const std::string& line); // /queue [drop <n|all>] — inspect/edit _pending
     int _auto_since_user = 0;              // auto-resume chain guard (guarded by _mx)
     struct Notice { std::string text; bool bell; };
     std::queue<Notice> _notices;           // async notices (guarded by _mx)
+    std::string _tool_rollup_key;          // consecutive tool notices are folded in the UI
+    std::string _tool_rollup_text;
+    std::vector<std::string> _tool_rollup_ranges;
+    int _tool_rollup_count = 0;
+    void flush_tool_rollup_locked();
     void drain_notices();                  // print queued notices above the live block
 
     // While true, draw_live() is a no-op: the main loop is feeding a burst of
