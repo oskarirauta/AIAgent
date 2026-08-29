@@ -358,6 +358,102 @@ std::string normalize_text(std::string s) {
     return s;
 }
 
+// Stateless variant: strips terminal control bytes but passes every byte >= 0x20
+// through, including UTF-8 continuation bytes (0x80-0xFF). That byte-preserving
+// property is load-bearing for the inline REPL, which feeds chunks that have
+// ALREADY been through StreamTextSanitizer upstream (Repl::process_turn) — so a
+// code point is never split by the time it gets here, and this filter must not
+// try to validate UTF-8 or it would drop the very bytes the stateful pass kept.
+// Use StreamTextSanitizer instead for any NEW consumer of raw provider chunks.
+std::string sanitize_stream_text(std::string s) {
+    std::string out;
+    out.reserve(s.size());
+    for ( unsigned char c : s ) {
+        if ( c == '\n' || c == '\t' || c == '\x01' || c == '\x02' ||
+             ( c >= 0x20 && c != 0x7f )) {
+            out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
+
+void StreamTextSanitizer::reset() {
+    _pending.clear();
+}
+
+static bool utf8_cont(unsigned char c) {
+    return ( c & 0xC0 ) == 0x80;
+}
+
+static size_t utf8_len(unsigned char c) {
+    if ( c < 0x80 ) return 1;
+    if ( ( c & 0xE0 ) == 0xC0 ) return 2;
+    if ( ( c & 0xF0 ) == 0xE0 ) return 3;
+    if ( ( c & 0xF8 ) == 0xF0 ) return 4;
+    return 0;
+}
+
+static bool utf8_valid_lead(unsigned char c) {
+    // Exclude overlong / out-of-range lead bytes.
+    if ( c < 0x80 ) return true;
+    if ( c >= 0xC2 && c <= 0xDF ) return true;
+    if ( c >= 0xE0 && c <= 0xEF ) return true;
+    return c >= 0xF0 && c <= 0xF4;
+}
+
+std::string StreamTextSanitizer::push(std::string chunk) {
+    if ( chunk.empty() && _pending.empty())
+        return "";
+    _pending += chunk;
+    std::string out;
+    size_t i = 0;
+    while ( i < _pending.size()) {
+        unsigned char c = static_cast<unsigned char>(_pending[i]);
+        if ( c == '\n' || c == '\t' || c == '\x01' || c == '\x02' ||
+             ( c >= 0x20 && c != 0x7f && c < 0x80 )) {
+            out += static_cast<char>(c);
+            ++i;
+            continue;
+        }
+        if ( c < 0x20 || c == 0x7f ) {
+            ++i;
+            continue;
+        }
+        if ( !utf8_valid_lead(c) ) {
+            ++i; // stray continuation / invalid lead byte — drop it
+            continue;
+        }
+        size_t need = utf8_len(c);
+        if ( need == 0 ) {
+            ++i;
+            continue;
+        }
+        if ( i + need > _pending.size())
+            break; // incomplete code point — wait for more bytes
+        bool ok = true;
+        for ( size_t j = 1; j < need; ++j ) {
+            if ( !utf8_cont(static_cast<unsigned char>(_pending[i + j]))) {
+                ok = false;
+                break;
+            }
+        }
+        if ( !ok ) {
+            ++i; // malformed sequence: drop the lead byte and keep scanning
+            continue;
+        }
+        out.append(_pending, i, need);
+        i += need;
+    }
+    _pending.erase(0, i);
+    return out;
+}
+
+std::string StreamTextSanitizer::finish() {
+    std::string out = push("");
+    _pending.clear(); // drop any trailing incomplete bytes
+    return out;
+}
+
 // Single left-to-right pass equivalent to normalize_text (the replacements emit
 // only ASCII, so pass order is irrelevant), additionally recording for each output
 // byte the source index it came from. `index_map` ends with a sentinel = s.size(),

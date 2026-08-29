@@ -9,6 +9,27 @@ namespace agent {
 // Useful for models and terminals that have trouble with non-ASCII characters.
 std::string normalize_text(std::string s);
 
+// Sanitize streamed model text before it is shown live. Keeps printable text,
+// newlines, tabs, and the internal \x01/\x02 thinking markers, while stripping
+// terminal control bytes that can corrupt the live render. Byte-preserving above
+// 0x20: safe only for chunks already reassembled by StreamTextSanitizer.
+std::string sanitize_stream_text(std::string s);
+
+// Stateful stream sanitizer: buffers incomplete UTF-8 code points across chunks
+// so the live view never prints half a multibyte character. Use this at the
+// boundary where raw provider/HTTP chunks first arrive. Callers that also
+// normalize text must normalize the OUTPUT of push()/finish(), never the input —
+// normalize_text matches whole multi-byte sequences and would miss a split one.
+class StreamTextSanitizer {
+public:
+    std::string push(std::string chunk);
+    std::string finish();
+    void reset();
+
+private:
+    std::string _pending;
+};
+
 // Like normalize_text but records the source-byte index each output byte came
 // from (index_map has out.size()+1 entries, last = s.size()). Lets a caller match
 // against the normalized view yet edit the original bytes. See edit_file.

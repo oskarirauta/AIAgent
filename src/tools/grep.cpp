@@ -1,12 +1,14 @@
 #include "agent/tools/grep.hpp"
 
 #include <fstream>
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <vector>
 #include <algorithm>
 #include <regex>
 #include "common.hpp"
+#include "agent/gitignore.hpp"
 
 namespace agent::tools {
 
@@ -40,6 +42,17 @@ bool json_truthy(const JSON& v) {
     return v.to_bool();
 }
 
+bool ignored_dir(const std::string& name) {
+    static const std::vector<std::string> skip = {
+        ".git", ".svn", ".hg", "node_modules", "objs", "build", "dist",
+        "target", ".cache", "vendor", "third_party", ".venv", "venv", "__pycache__"
+    };
+    for ( const auto& s : skip )
+        if ( name == s )
+            return true;
+    return false;
+}
+
 } // namespace
 
 JSON Grep::parameters() const {
@@ -48,7 +61,7 @@ JSON Grep::parameters() const {
         { "properties", JSON::Object{
             { "path", JSON::Object{
                 { "type", "string" },
-                { "description", "path to the file to search" }
+                { "description", "path to the file or directory subtree to search" }
             }},
             { "pattern", JSON::Object{
                 { "type", "string" },
@@ -77,28 +90,6 @@ std::string Grep::execute(const JSON& args) {
     bool ignore_case = args.contains("ignore_case") && json_truthy(args["ignore_case"]);
     bool literal = args.contains("literal") && json_truthy(args["literal"]);
 
-    std::ifstream ifd(path, std::ios::in | std::ios::binary);
-    if ( !ifd.is_open())
-        return std::string("error: cannot open file: ") + path;
-
-    // Read directly into one buffer, capped, so a huge file can't be slurped into
-    // memory without bound (and to avoid the stringstream double-copy).
-    constexpr size_t MAX_FILE_BYTES = 32u * 1024 * 1024;
-    std::string content;
-    ifd.seekg(0, std::ios::end);
-    std::streamoff fsz = ifd.tellg();
-    ifd.seekg(0, std::ios::beg);
-    bool file_truncated = false;
-    size_t to_read = ( fsz > 0 ) ? static_cast<size_t>(fsz) : 0;
-    if ( to_read > MAX_FILE_BYTES ) { to_read = MAX_FILE_BYTES; file_truncated = true; }
-    content.resize(to_read);
-    if ( to_read )
-        ifd.read(&content[0], static_cast<std::streamsize>(to_read));
-
-    if ( looks_binary(content))
-        return "error: " + path + " appears to be a binary file; not searched.";
-
-    // Compile the regex up front so an invalid pattern is a clear error.
     std::regex re;
     if ( !literal ) {
         auto flags = std::regex::ECMAScript;
@@ -112,58 +103,134 @@ std::string Grep::execute(const JSON& args) {
     }
 
     std::string needle = ignore_case ? common::to_lower(pattern) : pattern;
-
     std::ostringstream ss;
-    std::string line;
-    long lineno = 0;
     size_t matches = 0;
     bool capped = false;
 
-    // Iterate lines in-place over `content` (no istringstream copy of the whole file).
-    for ( size_t lpos = 0; lpos <= content.size(); ) {
-        size_t nl = content.find('\n', lpos);
-        size_t linelen = ( nl == std::string::npos ? content.size() : nl ) - lpos;
-        line.assign(content, lpos, linelen);
-        if ( !line.empty() && line.back() == '\r' ) line.pop_back();
-        lpos = ( nl == std::string::npos ) ? content.size() + 1 : nl + 1; // advance before any continue
-        ++lineno;
-        bool hit;
-        if ( literal ) {
-            hit = ignore_case ? ( common::to_lower(line).find(needle) != std::string::npos)
-                              : ( line.find(pattern) != std::string::npos);
-        } else {
-            // Bound the subject length: a pathological pattern on a very long line
-            // can backtrack catastrophically with no timeout. Matching the first
-            // MAX_REGEX_CHARS is enough for a line-oriented search.
-            hit = line.size() > MAX_REGEX_CHARS
-                ? std::regex_search(line.substr(0, MAX_REGEX_CHARS), re)
-                : std::regex_search(line, re);
+    auto scan_file = [&](const std::filesystem::path& file, bool skip_binary_error, bool& file_truncated) {
+        if ( matches >= MAX_MATCHES || capped ) { capped = true; return; }
+        constexpr size_t MAX_FILE_BYTES = 32u * 1024 * 1024;
+        std::ifstream ifd(file, std::ios::in | std::ios::binary);
+        if ( !ifd.is_open()) {
+            if ( !skip_binary_error )
+                ss << "error: cannot open file: " << file.string() << "\n";
+            return;
         }
-        if ( !hit )
-            continue;
 
-        std::string shown = line;
-        if ( shown.size() > MAX_LINE_CHARS )
-            shown = shown.substr(0, MAX_LINE_CHARS) + " …[truncated]";
+        std::string content;
+        ifd.seekg(0, std::ios::end);
+        std::streamoff fsz = ifd.tellg();
+        ifd.seekg(0, std::ios::beg);
+        size_t to_read = ( fsz > 0 ) ? static_cast<size_t>(fsz) : 0;
+        file_truncated = to_read > MAX_FILE_BYTES;
+        if ( file_truncated )
+            to_read = MAX_FILE_BYTES;
+        content.resize(to_read);
+        if ( to_read )
+            ifd.read(&content[0], static_cast<std::streamsize>(to_read));
 
-        std::string entry = std::to_string(lineno) + ": " + shown + "\n";
-        if ( matches >= MAX_MATCHES ||
-             static_cast<size_t>(ss.tellp()) + entry.size() > MAX_TOTAL_BYTES ) {
-            capped = true;
-            break;
+        if ( looks_binary(content)) {
+            if ( !skip_binary_error )
+                ss << "error: " << file.string() << " appears to be a binary file; not searched.\n";
+            return;
         }
-        ss << entry;
-        ++matches;
+
+        std::string line;
+        long lineno = 0;
+        for ( size_t lpos = 0; lpos <= content.size(); ) {
+            size_t nl = content.find('\n', lpos);
+            size_t linelen = ( nl == std::string::npos ? content.size() : nl ) - lpos;
+            line.assign(content, lpos, linelen);
+            if ( !line.empty() && line.back() == '\r' ) line.pop_back();
+            lpos = ( nl == std::string::npos ) ? content.size() + 1 : nl + 1;
+            ++lineno;
+            bool hit;
+            if ( literal ) {
+                hit = ignore_case ? ( common::to_lower(line).find(needle) != std::string::npos)
+                                  : ( line.find(pattern) != std::string::npos);
+            } else {
+                hit = line.size() > MAX_REGEX_CHARS
+                    ? std::regex_search(line.substr(0, MAX_REGEX_CHARS), re)
+                    : std::regex_search(line, re);
+            }
+            if ( !hit )
+                continue;
+
+            std::string shown = line;
+            if ( shown.size() > MAX_LINE_CHARS )
+                shown = shown.substr(0, MAX_LINE_CHARS) + " …[truncated]";
+
+            std::string entry = file.string() + ":" + std::to_string(lineno) + ": " + shown + "\n";
+            if ( matches >= MAX_MATCHES ||
+                 static_cast<size_t>(ss.tellp()) + entry.size() > MAX_TOTAL_BYTES ) {
+                capped = true;
+                return;
+            }
+            ss << entry;
+            ++matches;
+        }
+    };
+
+    std::error_code ec;
+    std::filesystem::path root(path);
+    if ( std::filesystem::is_regular_file(root, ec)) {
+        bool truncated = false;
+        scan_file(root, false, truncated);
+        std::string big = truncated ? " (searched the first 32 MB of a larger file)" : "";
+        if ( matches == 0 && ss.str().empty())
+            return "no matches for " + (literal ? ("\"" + pattern + "\"") : ("/" + pattern + "/")) +
+                   " in " + path + big;
+        std::string out = ss.str();
+        if ( out.rfind("error:", 0) == 0 )
+            return out;
+        if ( matches == 0 )
+            return "no matches for " + (literal ? ("\"" + pattern + "\"") : ("/" + pattern + "/")) +
+                   " in " + path + big;
+        std::string header = std::to_string(matches) + (matches == 1 ? " match" : " matches") +
+                             (capped ? " (stopped at limit)" : "") + big + ":\n";
+        return header + out;
     }
 
-    std::string big = file_truncated ? " (searched the first 32 MB of a larger file)" : "";
+    if ( !std::filesystem::is_directory(root, ec))
+        return "error: path does not exist: " + path;
+
+    agent::GitIgnore gi;
+    gi.load(path);
+    std::filesystem::recursive_directory_iterator it(
+        root, std::filesystem::directory_options::skip_permission_denied, ec), end;
+    for ( ; it != end && !capped; it.increment(ec)) {
+        if ( ec ) break;
+        const auto& entry = *it;
+        std::error_code dec;
+        std::string rel = entry.path().lexically_relative(root).generic_string();
+        if ( entry.is_directory(dec)) {
+            if ( ignored_dir(entry.path().filename().string()) || gi.ignored(rel, true))
+                it.disable_recursion_pending();
+            continue;
+        }
+        if ( entry.is_regular_file(dec)) {
+            if ( gi.ignored(rel, false))
+                continue;
+            bool truncated = false;
+            scan_file(entry.path(), true, truncated);
+        }
+    }
+
+    if ( matches == 0 && ss.str().empty())
+        return "no matches for " + (literal ? ("\"" + pattern + "\"") : ("/" + pattern + "/")) +
+               " under " + path;
+
+    std::string out = ss.str();
+    if ( out.rfind("error:", 0) == 0 )
+        return out;
+
     if ( matches == 0 )
         return "no matches for " + (literal ? ("\"" + pattern + "\"") : ("/" + pattern + "/")) +
-               " in " + path + big;
+               " under " + path;
 
     std::string header = std::to_string(matches) + (matches == 1 ? " match" : " matches") +
-                         (capped ? " (stopped at limit)" : "") + big + ":\n";
-    return header + ss.str();
+                         (capped ? " (stopped at limit)" : "") + " under " + path + ":\n";
+    return header + out;
 }
 
 } // namespace agent::tools

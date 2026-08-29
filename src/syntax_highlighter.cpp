@@ -231,38 +231,97 @@ std::vector<StyledSpan> SyntaxHighlighter::highlight_javascript(const std::strin
 std::vector<StyledSpan> SyntaxHighlighter::highlight_markdown(const std::string& line) const {
     std::vector<StyledSpan> spans;
     size_t i = 0;
+
+    auto is_space = [](char ch) {
+        return std::isspace(static_cast<unsigned char>(ch));
+    };
+
+    auto is_word = [](char ch) {
+        return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+    };
+
+    auto push_plain = [&](size_t start, size_t end) {
+        if ( end > start )
+            spans.push_back({ line.substr(start, end - start), 0, false, false });
+    };
+
+    auto push_link = [&](size_t start, size_t text_start, size_t text_end, size_t url_start, size_t url_end) {
+        // Keep the complete Markdown spelling intact in the rendered text.
+        // Splitting out only the label and URL used to drop `[`, `](` and `)`
+        // from the live display, even though history replay showed the source.
+        push_plain(start, text_start);
+        if ( url_end + 1 > start )
+            spans.push_back({ line.substr(text_start, url_end + 1 - text_start), 0, false, true });
+    };
+
     while ( i < line.size()) {
         char c = line[i];
+
+        // Block-style list markers at the start of a line or after a space.
+        if ( i == 0 || line[i - 1] == ' ' ) {
+            if ( ( c == '-' || c == '+' || c == '*' ) && i + 1 < line.size() && line[i + 1] == ' ' ) {
+                spans.push_back({ line.substr(i, 2), _keyword_pair, true, false });
+                i += 2;
+                continue;
+            }
+            if ( std::isdigit(static_cast<unsigned char>(c)) ) {
+                size_t j = i;
+                while ( j < line.size() && std::isdigit(static_cast<unsigned char>(line[j])) ) ++j;
+                if ( j + 1 < line.size() && line[j] == '.' && line[j + 1] == ' ' ) {
+                    spans.push_back({ line.substr(i, j - i + 2), _keyword_pair, true, false });
+                    i = j + 2;
+                    continue;
+                }
+            }
+        }
+
+        // Task list checkbox: [ ] or [x]. Keep it visibly distinct but not "button-like".
+        if ( c == '[' && i + 2 < line.size() && line[i + 2] == ']' ) {
+            if ( line[i + 1] == ' ' || line[i + 1] == 'x' || line[i + 1] == 'X' ) {
+                spans.push_back({ line.substr(i, 3), _keyword_pair, line[i + 1] != ' ', true });
+                i += 3;
+                continue;
+            }
+        }
+
+        // Markdown links: make them look copyable, not clickable.
+        if ( c == '[' ) {
+            size_t text_start = i + 1;
+            size_t close = line.find(']', text_start);
+            if ( close != std::string::npos && close + 1 < line.size() && line[close + 1] == '(' ) {
+                size_t url_start = close + 2;
+                size_t url_end = line.find(')', url_start);
+                if ( url_end != std::string::npos ) {
+                    push_link(i, text_start, close, url_start, url_end);
+                    i = url_end + 1;
+                    continue;
+                }
+            }
+        }
+
         if ( c == '#' ) {
             size_t start = i;
             while ( i < line.size() && line[i] == '#' ) i++;
             if ( i < line.size() && line[i] == ' ' ) {
                 while ( i < line.size()) i++;
-                spans.push_back({ line.substr(start), _keyword_pair, true });
+                spans.push_back({ line.substr(start), _keyword_pair, true, false });
                 return spans;
             }
-            spans.push_back({ line.substr(start, i - start), 0, false });
+            spans.push_back({ line.substr(start, i - start), 0, false, false });
             continue;
         }
         if ( c == '`' ) {
             size_t start = i;
             int count = 0;
             while ( i < line.size() && line[i] == '`' ) { i++; count++; }
-            // Inline code: colour the whole `...` span (delimiters AND content),
-            // like bold/italic below -- the content is the part the reader needs
-            // set apart, not just the backticks. Consuming the whole span also
-            // stops snake_case content (e.g. `some_long_name`) from being
-            // re-read as `_italic_` by the emphasis branch. Find the matching
-            // closing run of the same length.
             size_t end = line.find(std::string(count, '`'), i);
             if ( end != std::string::npos ) {
                 end += count;
-                spans.push_back({ line.substr(start, end - start), _fence_pair, false });
+                spans.push_back({ line.substr(start, end - start), _fence_pair, false, false });
                 i = end;
                 continue;
             }
-            // No closing backtick on this line: just style the delimiters.
-            spans.push_back({ line.substr(start, count), _fence_pair, false });
+            spans.push_back({ line.substr(start, count), _fence_pair, false, false });
             continue;
         }
         if ( c == '*' ) {
@@ -272,55 +331,47 @@ std::vector<StyledSpan> SyntaxHighlighter::highlight_markdown(const std::string&
             size_t end = line.find(std::string(count, '*'), i);
             if ( end != std::string::npos ) {
                 end += count;
-                spans.push_back({ line.substr(start, end - start), _string_pair, count == 2 });
+                spans.push_back({ line.substr(start, end - start), _string_pair, count == 2, false });
                 i = end;
                 continue;
             }
-            spans.push_back({ line.substr(start, i - start), 0, false });
+            spans.push_back({ line.substr(start, i - start), 0, false, false });
             continue;
         }
-        // `_` emphasis, CommonMark-style word boundaries only: an underscore
-        // opens emphasis only at a word EDGE (start of line / after non-word)
-        // with text right after it, and closes only at a word edge again. An
-        // INTRAWORD underscore (some_long_name) is never emphasis, so
-        // snake_case identifiers render intact — both worlds.
         if ( c == '_' ) {
             size_t start = i;
             int count = 0;
             while ( i < line.size() && line[i] == '_' && count < 2 ) { i++; count++; }
-            auto word = [](char ch) {
-                return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
-            };
-            bool open_ok = ( start == 0 || !word(line[start - 1])) &&
+            bool open_ok = ( start == 0 || !is_word(line[start - 1])) &&
                            i < line.size() &&
-                           !std::isspace(static_cast<unsigned char>(line[i])) && line[i] != '_';
+                           !is_space(line[i]) && line[i] != '_';
             if ( open_ok ) {
                 size_t end = line.find(std::string(count, '_'), i);
                 while ( end != std::string::npos ) {
                     char after = ( end + count < line.size()) ? line[end + count] : '\0';
-                    bool close_ok = !std::isspace(static_cast<unsigned char>(line[end - 1])) &&
-                                    ( after == '\0' || !word(after));
+                    bool close_ok = !is_space(line[end - 1]) &&
+                                    ( after == '\0' || !is_word(after));
                     if ( close_ok )
                         break;
                     end = line.find(std::string(count, '_'), end + 1);
                 }
                 if ( end != std::string::npos ) {
                     end += count;
-                    spans.push_back({ line.substr(start, end - start), _string_pair, count == 2 });
+                    spans.push_back({ line.substr(start, end - start), _string_pair, count == 2, false });
                     i = end;
                     continue;
                 }
             }
-            // Mid-word or unclosed: ordinary text.
-            spans.push_back({ line.substr(start, count), 0, false });
+            spans.push_back({ line.substr(start, count), 0, false, false });
             continue;
         }
+
         size_t start = i;
-        while ( i < line.size() && line[i] != '#' && line[i] != '`' && line[i] != '*' && line[i] != '_' )
+        while ( i < line.size() && line[i] != '#' && line[i] != '`' && line[i] != '*' && line[i] != '_' && line[i] != '[' )
             i++;
-        spans.push_back({ line.substr(start, i - start), 0, false });
+        push_plain(start, i);
     }
-    if ( spans.empty()) spans.push_back({ "", 0, false });
+    if ( spans.empty()) spans.push_back({ "", 0, false, false });
     return spans;
 }
 

@@ -17,6 +17,7 @@ struct StyledSpan {
     std::string text;
     int color_pair = 0; // 0 = default
     bool bold = false;
+    bool underline = false;
 };
 
 class SyntaxHighlighter {
