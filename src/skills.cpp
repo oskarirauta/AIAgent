@@ -58,31 +58,38 @@ void parse_skill(const std::string& raw, const std::string& stem,
     }
 }
 
+void scan_file(const std::filesystem::path& path, const std::string& source,
+               const std::string& fallback_stem, std::map<std::string, Skill>& out) {
+    std::error_code ec;
+    if ( !std::filesystem::is_regular_file(path, ec) || path.extension() != ".md" ) return;
+    if ( std::filesystem::file_size(path, ec) > MAX_SKILL_BYTES ) return;
+    std::ifstream ifd(path, std::ios::in | std::ios::binary);
+    if ( !ifd.is_open() ) return;
+    std::stringstream ss; ss << ifd.rdbuf();
+    Skill s;
+    parse_skill(ss.str(), fallback_stem.empty() ? path.stem().string() : fallback_stem,
+                s.name, s.description, s.content);
+    if ( common::trim_ws(s.content).empty() ) return;
+    s.source = source;
+    s.path = path.string();
+    out[s.name] = s;
+}
+
 void scan_dir(const std::string& dir, const std::string& source,
               std::map<std::string, Skill>& out) {
     std::error_code ec;
     if ( !std::filesystem::is_directory(dir, ec))
         return;
     for ( const auto& e : std::filesystem::directory_iterator(dir, ec)) {
-        std::error_code fe;
-        if ( !e.is_regular_file(fe))
-            continue;
-        if ( e.path().extension() != ".md" )
-            continue;
-        if ( std::filesystem::file_size(e.path(), fe) > MAX_SKILL_BYTES )
-            continue;
-        std::ifstream ifd(e.path(), std::ios::in | std::ios::binary);
-        if ( !ifd.is_open())
-            continue;
-        std::stringstream ss; ss << ifd.rdbuf();
-
-        Skill s;
-        parse_skill(ss.str(), e.path().stem().string(), s.name, s.description, s.content);
-        if ( common::trim_ws(s.content).empty())
-            continue;
-        s.source = source;
-        s.path = e.path().string();
-        out[s.name] = s; // project (scanned second) overrides user with same name
+        if ( e.is_regular_file() ) {
+            scan_file(e.path(), source, e.path().stem().string(), out);
+        } else if ( e.is_directory() ) {
+            // Also accept the common skills/<name>/SKILL.md layout.
+            auto p = e.path() / "SKILL.md";
+            if ( !std::filesystem::exists(p, ec) ) p = e.path() / "skill.md";
+            if ( std::filesystem::exists(p, ec) )
+                scan_file(p, source, e.path().filename().string(), out);
+        }
     }
 }
 
@@ -92,6 +99,7 @@ std::vector<Skill> load_skills(const std::string& home_dir, const std::string& p
     std::map<std::string, Skill> byname;
     scan_dir(home_dir + "/skills", "user", byname);
     scan_dir(project_dir + "/.agent/skills", "project", byname);
+    scan_dir(project_dir + "/.agents/skills", "project", byname);
 
     std::vector<Skill> out;
     out.reserve(byname.size());

@@ -731,6 +731,9 @@ std::string Repl::base_system_prompt() const {
     }
     if ( !project.empty())
         system += project;
+    std::string project_memory = load_project_memory(std::filesystem::current_path().string());
+    if ( !project_memory.empty())
+        system += project_memory;
 
     // User-pinned notes: kept verbatim so they survive compaction.
     if ( !_pins.empty()) {
@@ -1414,6 +1417,11 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     deliver_workflow_results();
 
     _conversation.add_user(prompt);
+    // Persist the prompt before making the network request.  A failed/aborted
+    // turn otherwise reaches the outer save callback too late, making the
+    // conversation appear to forget the user's last message after a 400 or
+    // network failure.
+    save_conversation();
     _registry.begin_turn(); // reset any "allow for the rest of this turn" grant
 
     // "ultracode" / "ultrathink": for this one turn, raise the Anthropic thinking
@@ -1473,6 +1481,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
 
         if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
             _conversation.undo_last(); // drop the interrupted exchange from history
+            save_conversation();
             return "";
         }
 
@@ -1550,6 +1559,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
 
                     if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
                         _conversation.undo_last();
+                        save_conversation();
                         return "";
                     }
                     resp = _provider->stream_result();
@@ -1560,6 +1570,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                     std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body, abort_flag);
                     if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
                         _conversation.undo_last();
+                        save_conversation();
                         return "";
                     }
                     _last_response = response_str; // for /raw (the raw JSON body)
@@ -1616,7 +1627,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                 if ( _progress_cb )
                     _progress_cb("provider busy — retrying in " + std::to_string(ms / 1000.0).substr(0, 3) + "s");
                 for ( long slept = 0; slept < ms; slept += 100 ) {
-                    if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) { _conversation.undo_last(); return ""; }
+                    if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) { _conversation.undo_last(); save_conversation(); return ""; }
                     struct timespec ts { 0, 100L * 1000 * 1000 };
                     nanosleep(&ts, nullptr);
                 }
@@ -2124,6 +2135,12 @@ std::string Repl::handle_command(const std::string& line) {
         if ( content.empty())
             return "no such memory: " + args;
         return "── " + args + " ──\n" + content;
+    }
+    if ( cmd == "/roadmap" ) {
+        std::string roadmap = load_project_roadmap(std::filesystem::current_path().string());
+        if ( roadmap.empty())
+            return "no ROADMAP.md found in the current project";
+        return roadmap;
     }
 
     if ( cmd == "/undo" ) {

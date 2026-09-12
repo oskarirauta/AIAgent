@@ -8,6 +8,7 @@ namespace agent {
 // A named, reusable instruction set beyond AGENTS.md: a markdown file with
 // optional frontmatter (name, description) and an instructions body. Loaded
 // from <home>/skills/*.md (user) and <cwd>/.agent/skills/*.md (project).
+// The conventional <name>/SKILL.md layout and .agents/skills are accepted too.
 struct Skill {
     std::string name;        // slug (frontmatter `name:` or the filename stem)
     std::string description; // one-line summary, shown to the user and the model

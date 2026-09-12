@@ -10,11 +10,6 @@
 namespace agent::providers {
 
 namespace {
-bool is_supported_model(const std::string& model) {
-    const auto& models = Config::known_models_for("codex");
-    return std::find(models.begin(), models.end(), Config::base_model_name(model)) != models.end();
-}
-
 long json_long(const JSON& v) {
     if ( v == JSON::TYPE::INT ) return static_cast<long>(static_cast<long long>(v));
     if ( v == JSON::TYPE::FLOAT ) return static_cast<long>(static_cast<long double>(v));
@@ -36,8 +31,6 @@ JSON responses_tool(const JSON& tool) {
 Codex::Codex(const Config& cfg) : Provider(cfg) {
     if ( _config.api_url == Config().api_url )
         _config.api_url = "https://chatgpt.com/backend-api/codex";
-    if ( !is_supported_model(_config.model))
-        _config.model = Config::default_model_for("codex");
     _token = auth::load_codex_token();
 }
 
@@ -95,8 +88,9 @@ void Codex::prepare_request(api::Client& client) {
     if ( !_token ) _token = auth::load_codex_token();
     if ( !_token )
         throws << "Codex login required — run `codex login` first" << std::endl;
-    if ( !is_supported_model(_config.model))
-        _config.model = Config::default_model_for("codex");
+    // ChatGPT-backed Codex model availability is account-dependent.  Do not
+    // silently replace a user-selected model from the curated picker: doing so
+    // turns the server's useful 400 into a misleading request for another model.
     if ( auth::codex_token_needs_refresh(*_token) && !refresh_now(client))
         throws << "Codex session could not be refreshed — run `codex login` again" << std::endl;
 }

@@ -134,8 +134,7 @@ static void test_codex_provider() {
     std::cout << "codex Responses API provider" << std::endl;
     check(agent::Config::default_model_for("codex") == "gpt-5.5", "codex default model is gpt-5.5");
     const auto& codex_models = agent::Config::known_models_for("codex");
-    check(codex_models.size() == 3 && codex_models[0] == "gpt-5.5" &&
-          codex_models[1] == "gpt-5.4" && codex_models[2] == "gpt-5.4-mini",
+    check(codex_models.size() == 1 && codex_models[0] == "gpt-5.5",
           "codex model shortlist matches the ChatGPT account list");
 
     agent::Config cfg; cfg.provider = "codex"; cfg.model = "gpt-5.5";
@@ -924,6 +923,7 @@ static void test_skills() {
     std::filesystem::remove_all(home); std::filesystem::remove_all(proj);
     std::filesystem::create_directories(home + "/skills");
     std::filesystem::create_directories(proj + "/.agent/skills");
+    std::filesystem::create_directories(proj + "/.agents/skills/build");
 
     { std::ofstream o(home + "/skills/review.md");
       o << "---\nname: code-review\ndescription: careful review\n---\nDo a careful review.\n"; }
@@ -931,16 +931,21 @@ static void test_skills() {
       o << "Just some plain instructions.\n"; }
     { std::ofstream o(proj + "/.agent/skills/review.md");
       o << "---\nname: code-review\ndescription: project review\n---\nProject-specific review.\n"; }
+    { std::ofstream o(proj + "/.agents/skills/build/SKILL.md");
+      o << "---\ndescription: build guidance\n---\nBuild the project and run tests.\n"; }
 
     auto skills = agent::load_skills(home, proj);
-    check(skills.size() == 2, "two distinct skills loaded (project override merged by name)");
+    check(skills.size() == 3, "skills loaded from flat and SKILL.md layouts");
     const agent::Skill* cr = nullptr; const agent::Skill* pl = nullptr;
-    for ( const auto& s : skills ) { if ( s.name == "code-review" ) cr = &s; if ( s.name == "plain" ) pl = &s; }
+    const agent::Skill* build = nullptr;
+    for ( const auto& s : skills ) { if ( s.name == "code-review" ) cr = &s; if ( s.name == "plain" ) pl = &s; if ( s.name == "build" ) build = &s; }
     check(cr && cr->description == "project review", "project skill overrides user by name");
     check(cr && cr->source == "project", "override marked as project source");
     check(cr && cr->content.find("Project-specific review") != std::string::npos, "frontmatter stripped, body kept");
     check(pl && pl->name == "plain" && pl->description.empty(), "no-frontmatter skill named from filename");
     check(pl && pl->content.find("plain instructions") != std::string::npos, "plain body loaded");
+    check(build && build->description == "build guidance" && build->content.find("run tests") != std::string::npos,
+          "nested SKILL.md loaded with directory name");
 
     std::string got;
     agent::tools::SkillTool tool([]() { return std::string("desc"); },
@@ -1301,6 +1306,8 @@ static void test_project_instructions() {
 
     check(agent::project_instructions_file(dir).empty(), "no file when none present");
     check(agent::load_project_instructions(dir).empty(), "empty block when none present");
+    check(agent::load_project_memory(dir).empty(), "no project memory when none present");
+    check(agent::load_project_roadmap(dir).empty(), "no roadmap when none present");
 
     {
         std::ofstream ofd(dir + "/AGENTS.md");
@@ -1310,6 +1317,13 @@ static void test_project_instructions() {
     std::string block = agent::load_project_instructions(dir);
     check(block.find("Use tabs. Run make test") != std::string::npos, "content included");
     check(block.find("Project instructions (from AGENTS.md)") != std::string::npos, "block is labelled");
+
+    { std::ofstream ofd(dir + "/MEMORY.md"); ofd << "Build uses the C++17 profile.\n"; }
+    { std::ofstream ofd(dir + "/ROADMAP.md"); ofd << "- Add diagnostics\n"; }
+    check(agent::load_project_memory(dir).find("Build uses the C++17") != std::string::npos,
+          "project MEMORY.md is loaded");
+    check(agent::load_project_roadmap(dir).find("Add diagnostics") != std::string::npos,
+          "ROADMAP.md is available on request");
 
     // AGENTS.md wins over .ai-agent.md when both exist.
     {
@@ -1943,11 +1957,11 @@ static void test_model_resolution() {
     check(!Config::known_models_for("claude").empty(), "claude has a curated shortlist");
     check(Config::known_models_for("ollama").empty(), "ollama has no curated shortlist");
     check(!Config::known_models_for("codex").empty(), "codex has a curated shortlist");
-    check(Config::resolve_model("codex", "5.4").model == "gpt-5.4", "codex shorthand resolves");
+    check(Config::resolve_model("codex", "5.4").model == "5.4", "unlisted Codex model remains explicit");
     // The alias table is global: "mini"/"gpt" expand to gpt-4o names that Codex
     // does not offer. An alias must never bury the user's own input, so an
     // expansion that matches nothing falls back to what was typed.
-    check(Config::resolve_model("codex", "mini").model == "gpt-5.4-mini",
+    check(Config::resolve_model("codex", "mini").model == "mini",
           "an alias that misses falls back to the typed name");
     check(Config::resolve_model("codex", "gpt").model == "gpt-5.5",
           "a generic alias still lands on this provider's model");

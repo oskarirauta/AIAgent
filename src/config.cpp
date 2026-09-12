@@ -197,9 +197,10 @@ const std::vector<std::string>& Config::known_models_for(const std::string& prov
         "gpt-4-turbo",
         "gpt-3.5-turbo",
     };
-    static const std::vector<std::string> codex_models = {
-        "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"
-    };
+    // ChatGPT-backed Codex exposes an account-scoped catalogue.  Keep only the
+    // model currently advertised by the compatible endpoint in the picker;
+    // users can still pass any future/entitled slug explicitly with -m.
+    static const std::vector<std::string> codex_models = { "gpt-5.5" };
     static const std::vector<std::string> openrouter_models = {
         "openrouter/auto",
         "openrouter/free",

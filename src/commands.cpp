@@ -64,6 +64,9 @@ const std::vector<CommandDoc>& command_catalog() {
     { "/memories", "", "[name]", "Context & cost", "list or view this provider's memories",
       "Long-term memory is per provider. With no argument, lists the memory files; "
       "with a name, prints that file's content." },
+    { "/roadmap", "", "", "Context & cost", "show the project's roadmap",
+      "Displays ROADMAP.md from the current project when present. It is loaded only "
+      "on request, so planning notes do not consume context on every turn." },
     { "/tasks", "", "", "Context & cost", "show the agent's todo list",
       "Shows the todo list the model maintains for multi-step work (via the "
       "update_tasks tool), with ✓/▸/○ status glyphs." },

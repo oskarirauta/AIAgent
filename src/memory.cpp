@@ -5,6 +5,7 @@
 #include <sstream>
 #include <vector>
 #include <algorithm>
+#include <cctype>
 #include "common.hpp"
 #include "logger.hpp"
 
@@ -121,6 +122,38 @@ std::string load_project_instructions(const std::string& dir) {
     logger::info["memory"] << "loaded project instructions from " << name
                            << " (" << content.size() << " chars)" << std::endl;
     return "\n\n## Project instructions (from " + name + ")\n\n" + content + "\n";
+}
+
+namespace {
+std::string load_named_project_markdown(const std::string& dir,
+                                        const std::vector<std::string>& names,
+                                        const std::string& heading) {
+    for ( const auto& name : names ) {
+        std::error_code ec;
+        std::string path = dir + "/" + name;
+        if ( !std::filesystem::is_regular_file(path, ec) ) continue;
+        std::ifstream ifd(path, std::ios::in);
+        if ( !ifd.is_open() ) continue;
+        std::stringstream ss; ss << ifd.rdbuf();
+        std::string content = ss.str();
+        const size_t cap = 64 * 1024;
+        if ( content.size() > cap ) content = content.substr(0, cap) + "\n\n[project file truncated]";
+        while ( !content.empty() && std::isspace(static_cast<unsigned char>(content.back())) ) content.pop_back();
+        if ( content.empty() ) return "";
+        logger::info["memory"] << "loaded project " << heading << " from " << name << std::endl;
+        return "\n\n## " + heading + " (from " + name + ")\n\n" + content + "\n";
+    }
+    return "";
+}
+}
+
+std::string load_project_memory(const std::string& dir) {
+    return load_named_project_markdown(dir, { ".agent/MEMORY.md", ".agents/MEMORY.md", "MEMORY.md" },
+                                       "Project memory");
+}
+
+std::string load_project_roadmap(const std::string& dir) {
+    return load_named_project_markdown(dir, { "ROADMAP.md" }, "Roadmap");
 }
 
 std::vector<MemoryFile> list_memories(const std::string& home_dir, const std::string& provider) {

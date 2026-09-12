@@ -17,6 +17,13 @@ std::string project_instructions_file(const std::string& dir);
 // conventions, etc. without repeating them each session.
 std::string load_project_instructions(const std::string& dir);
 
+// Load optional project memory (MEMORY.md, .agent/MEMORY.md or
+// .agents/MEMORY.md), capped like project instructions.
+std::string load_project_memory(const std::string& dir);
+
+// Read the project's ROADMAP.md for the explicit /roadmap command.
+std::string load_project_roadmap(const std::string& dir);
+
 struct MemoryFile {
     std::string name;
     size_t bytes = 0;

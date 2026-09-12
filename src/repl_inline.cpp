@@ -56,7 +56,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
     static const std::set<std::string> immediate = {
         // read-only displays / menus
         "/about", "/info", "/status", "/stats", "/diagnose", "/stop", "/interrupt", "/help", "/theme", "/settings", "/workflows",
-        "/trust", "/history", "/memories", "/tasks", "/skills", "/pins",
+        "/trust", "/history", "/memories", "/roadmap", "/tasks", "/skills", "/pins",
         "/context", "/cost", "/changes", "/mcp", "/paste", "/raw", "/limits", "/jobs",
         "/sessions",
         // /shell jumps the queue by design, but never RUNS mid-turn: a full
@@ -1375,7 +1375,7 @@ const std::vector<std::string>& slash_commands() {
     static const std::vector<std::string> cmds = {
         "/help", "/about", "/info", "/settings", "/provider", "/model", "/btw", "/note",
         "/tools", "/strict", "/thinking", "/effort", "/theme", "/stream", "/bell",
-        "/memories", "/context", "/cost", "/history", "/retry", "/undo", "/tasks",
+        "/memories", "/roadmap", "/context", "/cost", "/history", "/retry", "/undo", "/tasks",
         "/pin", "/pins", "/unpin", "/queue", "/trust", "/skills", "/skill", "/plan",
         "/changes", "/export", "/compact", "/clear", "/reset", "/mcp", "/advisor",
         "/autoresume", "/paste", "/raw", "/limits", "/jobs", "/workflows",
@@ -2861,7 +2861,7 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         size_t sp = base.find_first_of(" \t");
         if ( sp != std::string::npos ) base = base.substr(0, sp);
         static const std::set<std::string> readers = {
-            "/history", "/memories", "/tasks", "/skills"
+            "/history", "/memories", "/roadmap", "/tasks", "/skills"
         };
         if ( readers.count(base)) {
             std::string text = _command_cb ? _command_cb(trimmed) : "";
