@@ -199,7 +199,7 @@ Repl::Repl(const Config& config)
     sync_skill_tool();    // expose use_skill when any exist
     connect_mcp();
 
-    if ( !_config.tool_profile.empty() && _config.tool_profile != "full" ) {
+    if ( !_config.tool_profile.empty() ) {
         _registry.apply_profile(_config.tool_profile);
         _config.plan_mode = _registry.plan_mode();
     }

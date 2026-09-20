@@ -130,8 +130,8 @@ private:
     ConfirmMode _mode = ConfirmMode::confirm;
     bool _strict = false;
     bool _plan_mode = false;
-    std::string _active_profile = "full";
-    std::set<std::string> _disabled_groups;
+    std::string _active_profile = "code";
+    std::set<std::string> _disabled_groups = { "web", "workflow" };
     std::set<std::string> _disabled_tools;
 
     // Session-scoped approvals granted via "allow session" / "allow similar".

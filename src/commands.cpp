@@ -125,11 +125,11 @@ const std::vector<CommandDoc>& command_catalog() {
       "`/tools <confirm|auto|insecure>` sets confirmation mode. `/tools list` lists all tools "
       "with estimated schema tokens. `/tools group <name> <on|off>` enables/disables a group. "
       "`/tools profile <name>` switches profile." },
-    { "/profile", "", "[full|code|research|review|minimal]", "Tools & safety", "select active tool profile",
+    { "/profile", "", "[code|full|research|review|minimal]", "Tools & safety", "select active tool profile",
       "Switches tool profile to restrict active tools and reduce schema tokens sent on "
-      "every turn. full: all tools. code: disables web and workflow tools. research: read-only "
-      "exploration with web search. review: read-only audit (no web/mutations). minimal: read, "
-      "edit, and run command only." },
+      "every turn. code (default): disables web and workflow tools for coding tasks. "
+      "full: all tools active. research: read-only exploration with web search. "
+      "review: read-only audit (no web/mutations). minimal: read, edit, and run command only." },
     { "/plan", "", "[on|off]", "Tools & safety", "read-only planning mode",
       "Blocks every mutating tool (write_file, edit_file, run_command, non-read-only "
       "MCP tools) so the model investigates and proposes a plan instead of acting. "

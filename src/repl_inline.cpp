@@ -909,7 +909,7 @@ std::string InlineRepl::status_line() const {
     std::string tools = !_config.tools_enabled ? "tools off"
                         : _config.insecure ? "tools: insecure"
                         : (_config.confirm_tools ? "tools: confirm" : "tools: auto");
-    if ( !_config.tool_profile.empty() && _config.tool_profile != "full" )
+    if ( !_config.tool_profile.empty() && _config.tool_profile != "code" )
         tools += " [" + _config.tool_profile + "]";
     else if ( _config.plan_mode )
         tools += " · plan";
@@ -2918,7 +2918,7 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         };
         m.keys = { "full", "code", "research", "review", "minimal" };
         m.select_cmd = "/profile ";
-        m.current = _config.tool_profile.empty() ? "full" : _config.tool_profile;
+        m.current = _config.tool_profile.empty() ? "code" : _config.tool_profile;
         open_list_menu(std::move(m));
         return;
     }

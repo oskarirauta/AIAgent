@@ -139,9 +139,9 @@ Whether to stream the model's reasoning live. `collapse` streams it then hides i
 
 With no argument, shows active tool confirmation mode, profile, and enabled groups. `/tools <confirm|auto|insecure>` sets confirmation mode. `/tools list` lists all tools with estimated schema tokens. `/tools group <name> <on|off>` enables/disables a group. `/tools profile <name>` switches profile.
 
-### `/profile [full|code|research|review|minimal]`
+### `/profile [code|full|research|review|minimal]`
 
-Switches tool profile to restrict active tools and reduce schema tokens sent on every turn. full: all tools. code: disables web and workflow tools. research: read-only exploration with web search. review: read-only audit (no web/mutations). minimal: read, edit, and run command only.
+Switches tool profile to restrict active tools and reduce schema tokens sent on every turn. code (default): disables web and workflow tools for coding tasks. full: all tools active. research: read-only exploration with web search. review: read-only audit (no web/mutations). minimal: read, edit, and run command only.
 
 ### `/plan [on|off]`
 

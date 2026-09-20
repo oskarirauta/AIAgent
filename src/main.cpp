@@ -54,6 +54,7 @@ static usage_t make_usage(int argc, char **argv) {
             { "session", { "n", "session", "named session within this project (parallel conversations; default when unset)", usage_t::OPTIONAL }},
             { "steal_lock", { "S", "steal-lock", "take over this project's session even if another agent has it locked" }},
             { "prompt", { "P", "prompt", "single prompt mode, exit after answer", usage_t::OPTIONAL }},
+            { "profile", { "", "profile", "tool profile: full, code (default), research, review, minimal", usage_t::OPTIONAL }},
             { "output_format", { "o", "output-format", "single-prompt output: text (default) or json", usage_t::OPTIONAL }},
             { "dump_commands", { "", "dump-commands", "print the slash-command reference as Markdown (regenerates COMMANDS.md) and exit" }}
         }

@@ -125,7 +125,7 @@ bool Registry::apply_profile(const std::string& profile) {
     if ( p == "audit" ) p = "review";
     if ( p == "coding" ) p = "code";
 
-    if ( p == "full" || p == "all" || p == "default" ) {
+    if ( p == "full" || p == "all" ) {
         _active_profile = "full";
         _disabled_groups.clear();
         _disabled_tools.clear();
@@ -134,7 +134,7 @@ bool Registry::apply_profile(const std::string& profile) {
         return true;
     }
 
-    if ( p == "code" ) {
+    if ( p == "code" || p == "default" ) {
         _active_profile = "code";
         _disabled_groups.clear();
         _disabled_tools.clear();

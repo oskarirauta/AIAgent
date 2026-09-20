@@ -1948,11 +1948,12 @@ static void test_tool_groups() {
     r.add(std::make_unique<agent::tools::WorkflowTool>(nullptr));
     r.add(std::make_unique<agent::tools::SkillTool>(nullptr, nullptr));
 
-    check(r.is_group_enabled("core"), "core enabled by default");
-    check(r.is_group_enabled("web"), "web enabled by default");
-    check(r.is_group_enabled("workflow"), "workflow enabled by default");
-    check(r.is_group_enabled("skills"), "skills enabled by default");
-    check(r.disabled_groups().empty(), "no disabled groups initially");
+    r.apply_profile("full");
+    check(r.is_group_enabled("core"), "core enabled in full");
+    check(r.is_group_enabled("web"), "web enabled in full");
+    check(r.is_group_enabled("workflow"), "workflow enabled in full");
+    check(r.is_group_enabled("skills"), "skills enabled in full");
+    check(r.disabled_groups().empty(), "no disabled groups in full profile");
 
     auto has_tool = [](const JSON& s, const std::string& name) {
         for ( size_t i = 0; i < s.size(); ++i ) {
@@ -2007,9 +2008,16 @@ static void test_tool_profiles() {
     r.add(std::make_unique<agent::tools::WorkflowTool>(nullptr));
     r.add(std::make_unique<agent::tools::SkillTool>(nullptr, nullptr));
 
-    check(r.active_profile() == "full", "default profile is full");
+    check(r.active_profile() == "code", "default profile is code");
+    check(!r.is_group_enabled("web"), "web group disabled in default code profile");
+    check(!r.is_group_enabled("workflow"), "workflow group disabled in default code profile");
     auto profiles = agent::tools::Registry::available_profiles();
     check(profiles.size() == 5, "5 profiles available");
+
+    check(r.apply_profile("full"), "apply_profile full succeeds");
+    check(r.active_profile() == "full", "active profile is full");
+    check(r.is_group_enabled("web"), "web group enabled in full profile");
+    check(r.is_group_enabled("workflow"), "workflow group enabled in full profile");
 
     check(r.apply_profile("code"), "apply_profile code succeeds");
     check(r.active_profile() == "code", "active profile is code");

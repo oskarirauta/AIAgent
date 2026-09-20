@@ -16,7 +16,7 @@ Philosophy: **Support enough — not everything.**
   `list_directory`, `grep`, `find_symbol`, `find_references`, `outline_file`,
   `project_map`, `web_search`, `fetch_url`, `update_tasks`, and **`ask_user`** (the
   model can pause and ask you a decision). Plus **MCP** servers and **skills**.
-- **Tool profiles** (`full`, `code`, `research`, `review`, `minimal`) to limit token overhead
+- **Tool profiles** (`code` by default, `full`, `research`, `review`, `minimal`) to limit token overhead
 - **Inline REPL** that prints to the terminal's normal buffer, so native scrollback and mouse copy work across the whole conversation
 - Streaming responses (with reasoning/thinking) and lightweight syntax highlighting
 - Layered **tool-call safety**: per-call confirmation with *once / this-session / all-similar* choices, a **danger list** that warns on risky shell commands (every stage of a compound command is checked), a read-only **`/plan`** mode, and an `--insecure` escape hatch
@@ -438,7 +438,7 @@ Slash commands run locally (never sent to the model):
 | `/settings` | Open the interactive settings menu (↑/↓ select, ←/→ change, Enter edit/apply, Esc close). |
 | `/settings <key> <value>` | Set a value directly: `context` (`auto`, `64K`, or `0` = unlimited), `multiline` (`on`/`off`), `model`, `tools`, `strict`, `thinking`. |
 | `/model [name]` | Show or change the active model. Short or misspelled names are resolved (`fable` → `claude-fable-5`). |
-| `/profile [name]` | Switch tool profile (`full`, `code`, `research`, `review`, `minimal`) to limit active tools and token cost. |
+| `/profile [name]` | Switch tool profile (`code` default, `full`, `research`, `review`, `minimal`) to limit active tools and token cost. |
 | `/tools [mode\|list\|group\|profile]` | Tool safety mode (`confirm`, `auto`, `insecure`), `list`, `group <name> <on\|off>`, or profile. |
 | `/thinking <on\|off\|low\|medium\|high\|xhigh\|max>` | Set the thinking level (alias `/effort`; applied by Kimi, Claude, Codex, Gemini). |
 | `/theme <dark\|light\|warm\|cool\|rose>` | Switch the colour theme. |

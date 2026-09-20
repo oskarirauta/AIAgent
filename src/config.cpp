@@ -745,6 +745,7 @@ void Config::load(const std::string& path) {
         else if ( key == "web_search_url" ) web_search_url = value;
         else if ( key == "prompt_cache" ) prompt_cache = parse_bool(value);
         else if ( key == "parallel_tools" ) parallel_tools = parse_bool(value);
+        else if ( key == "tool_profile" || key == "profile" ) tool_profile = common::to_lower(trim(value));
         else if ( key == "mcp_config" ) mcp_config = expand_tilde(value);
         else if ( key == "budget_usd" ) {
             try { budget_usd = std::stod(common::trim_ws(value)); }
@@ -850,6 +851,8 @@ void Config::apply_cli(const usage_t& usage) {
         tool_mode_explicit = true; // an explicit CLI mode wins over saved state
     if ( usage["steal_lock"] )
         steal_lock = true;
+    if ( usage["profile"] )
+        tool_profile = common::to_lower(usage["profile"].stringValue());
     if ( usage["session"] )
         session_name = sanitize_session_name(usage["session"].stringValue());
     // paste thresholds and oauth host/client id are config-file only (see load()).
