@@ -46,6 +46,9 @@ public:
 
     // Helpers
     static long output_cap_for(const std::string& model);
+    long output_token_cap(const std::string& model) const override {
+        return Gemini::output_cap_for(model);
+    }
     static long thinking_budget_for(const std::string& effort, const std::string& model);
 
 private:

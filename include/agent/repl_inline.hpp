@@ -107,6 +107,8 @@ public:
     void set_workflows_provider(std::function<std::vector<WorkflowRun>()> fn) { _wf_provider = std::move(fn); }
     void set_tools_provider(std::function<std::vector<ToolItem>()> fn) { _tools_provider = std::move(fn); }
     void set_mcp_provider(std::function<std::vector<McpServerItem>()> fn) { _mcp_provider = std::move(fn); }
+    using capability_checker_t = std::function<bool(const std::string&)>;
+    void set_capability_checker(capability_checker_t fn) { _cap_checker = std::move(fn); }
     // Multi-level workflows drill-down: runs → steps → one step's content. Public so
     // the navigation can be driven directly (dispatch + tests); run_id >= 0 opens
     // straight into that run's steps.
@@ -382,6 +384,7 @@ private:
     int _wf_run_id = -1;               // the run whose steps are shown at level 1
     std::function<std::vector<ToolItem>()> _tools_provider;
     std::function<std::vector<McpServerItem>()> _mcp_provider;
+    capability_checker_t _cap_checker;
 
     bool _in_settings = false;
     bool _settings_editing = false;    // typing a free-text value into the selected row

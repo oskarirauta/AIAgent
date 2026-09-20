@@ -137,6 +137,15 @@ size_t Conversation::estimate_message_tokens(const Message& m, const std::string
     return static_cast<size_t>(chars / chars_per_tok) + overhead;
 }
 
+size_t Conversation::estimate_text_tokens(const std::string& text, const std::string& provider) {
+    std::string prov = common::to_lower(common::trim_ws(provider));
+    double chars_per_tok = 4.0;
+    if ( prov == "gemini" ) chars_per_tok = 3.5;
+    else if ( prov == "claude" || prov == "anthropic" ) chars_per_tok = 3.8;
+    else if ( prov == "openai" || prov == "codex" ) chars_per_tok = 4.0;
+    return static_cast<size_t>(text.size() / chars_per_tok);
+}
+
 size_t Conversation::estimate_tokens(const std::string& provider) const {
     size_t total = 0;
     for ( const auto& m : _messages )

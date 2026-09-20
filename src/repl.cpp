@@ -191,18 +191,9 @@ Repl::Repl(const Config& config)
     _conversation.load(conversation_path());
     _conversation.set_system(base_system_prompt());
 
-    // Expose the advisor tool if it was left enabled and the provider supports it.
-    sync_advisor_tool();
-    sync_workflow_tool();
-    sync_web_search_tool();
     reload_skills();      // discover skills on disk
-    sync_skill_tool();    // expose use_skill when any exist
     connect_mcp();
-
-    if ( !_config.tool_profile.empty() ) {
-        _registry.apply_profile(_config.tool_profile);
-        _config.plan_mode = _registry.plan_mode();
-    }
+    sync_effective_tools();
 
     // Snapshot files before write_file overwrites them, for /changes + revert.
     _registry.set_pre_run_callback([this](const std::string& n, const JSON& a) {
@@ -520,6 +511,7 @@ void Repl::register_mcp_tools() {
             }, /*read_only=*/true));
         _mcp_tool_names.push_back(reg);
     }
+    _registry.apply_profile(_config.tool_profile);
 }
 
 std::string Repl::mcp_command(const std::string& args) {
@@ -617,6 +609,15 @@ void Repl::sync_web_search_tool() {
         _registry.add(std::make_unique<tools::FetchUrl>());
     else if ( !want && _registry.has("fetch_url"))
         _registry.remove("fetch_url");
+}
+
+void Repl::sync_effective_tools() {
+    sync_advisor_tool();
+    sync_workflow_tool();
+    sync_web_search_tool();
+    sync_skill_tool();
+    _registry.apply_profile(_config.tool_profile);
+    _config.plan_mode = _registry.plan_mode();
 }
 
 void Repl::sync_workflow_tool() {
@@ -723,8 +724,35 @@ void Repl::deliver_workflow_results() {
         std::string note = "Workflow #" + std::to_string(r.id) + " (" + r.name +
                            ") finished with status: " + r.status + ".\n";
         for ( size_t i = 0; i < r.steps.size(); ++i ) {
-            note += "\nStep " + std::to_string(i + 1) + " [" + r.steps[i].status + "]: " +
-                    r.steps[i].task + "\nResult: " + r.steps[i].result + "\n";
+            const auto& step = r.steps[i];
+            std::string res = common::trim_ws(step.result);
+
+            // Compact large step results to avoid unexpected token spikes in the prompt
+            static const size_t max_lines = 12;
+            static const size_t max_chars = 800;
+            if ( res.size() > max_chars || std::count(res.begin(), res.end(), '\n') > static_cast<long>(max_lines) ) {
+                std::vector<std::string> lines;
+                std::istringstream iss(res);
+                std::string line;
+                while ( std::getline(iss, line) )
+                    lines.push_back(line);
+
+                if ( lines.size() > max_lines ) {
+                    std::string head, tail;
+                    for ( size_t h = 0; h < 4 && h < lines.size(); ++h )
+                        head += lines[h] + "\n";
+                    for ( size_t t = lines.size() > 4 ? lines.size() - 4 : lines.size(); t < lines.size(); ++t )
+                        tail += lines[t] + ( t + 1 < lines.size() ? "\n" : "" );
+                    size_t omitted_lines = lines.size() - (4 + (lines.size() > 8 ? 4 : lines.size() - 4));
+                    res = head + "  [... " + std::to_string(omitted_lines) + " lines omitted from workflow log ...]\n" + tail;
+                } else if ( res.size() > max_chars ) {
+                    res = res.substr(0, 350) + "\n  [... " + std::to_string(res.size() - 700) +
+                          " bytes omitted ...]\n" + res.substr(res.size() - 350);
+                }
+            }
+
+            note += "\nStep " + std::to_string(i + 1) + " [" + step.status + "]: " +
+                    step.task + "\nResult: " + res + "\n";
         }
         _conversation.add_user(note);
     }
@@ -1201,8 +1229,7 @@ std::string Repl::switch_provider(const std::string& name) {
     _workflow_autoresume.store(_config.workflow_autoresume, std::memory_order_relaxed);
     _provider = std::move(np);
     _conversation.set_system(base_system_prompt());
-    sync_advisor_tool();  // advisor tool follows the provider (claude-only)
-    sync_workflow_tool(); // workflow tool follows the provider (claude-only)
+    sync_effective_tools(); // sync tools, advisor, workflows and profile for new provider
     save_conversation();
     Config::save_last_used(_config.home_dir, _config.provider, _config.model);
 
@@ -1523,12 +1550,11 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     save_conversation();
     _registry.begin_turn(); // reset any "allow for the rest of this turn" grant
 
-    // "ultracode" / "ultrathink": for this one turn, raise the Anthropic thinking
+    // "ultracode" / "ultrathink": for this one turn, raise thinking
     // effort to max. The keyword is intentionally kept in the prompt (the model
     // reacts to it — e.g. by orchestrating a workflow), and the previous effort is
     // restored afterwards on every exit path via the guard below.
-    bool anthropic_based = ( _config.provider == "claude" || _config.provider == "anthropic" );
-    bool ultra = anthropic_based && _provider && has_ultra_keyword(prompt);
+    bool ultra = _provider && _provider->supports_reasoning() && has_ultra_keyword(prompt);
     std::string saved_effort = _config.thinking;
     if ( ultra )
         _provider->apply_provider_options(JSON::Object{ { "thinking", "max" } });
@@ -1637,7 +1663,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                     _provider->prepare_stream_request(request); // e.g. stream_options.include_usage
                     _last_request = request.dump(); // for /raw
                     std::string body = request.dump_minified();
-                    estimated_request_tokens = body.size() / 4;
+                    estimated_request_tokens = _provider ? _provider->estimate_tokens(body) : (body.size() / 4);
                     std::string buffer;
                     bool done = false;
                     _provider->stream_reset();
@@ -1695,7 +1721,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                 } else {
                     _last_request = request.dump(); // for /raw
                     std::string body = request.dump_minified();
-                    estimated_request_tokens = body.size() / 4;
+                    estimated_request_tokens = _provider ? _provider->estimate_tokens(body) : (body.size() / 4);
                     std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body, abort_flag);
                     if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
                         _conversation.undo_last();
@@ -1768,9 +1794,10 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         if ( failed_over )
             continue;
 
-        long actual_in = resp.input_tokens > 0 ? resp.input_tokens : static_cast<long>(estimated_request_tokens);
+        bool reported = (resp.input_tokens > 0);
+        long actual_in = reported ? resp.input_tokens : static_cast<long>(estimated_request_tokens);
         long r_tok = resp.reasoning_tokens > 0 ? resp.reasoning_tokens : static_cast<long>(resp.thinking.size() / 4);
-        _stats.record(actual_in, resp.output_tokens, resp.cached_input_tokens, resp.cache_creation_input_tokens, r_tok);
+        _stats.record(actual_in, resp.output_tokens, resp.cached_input_tokens, resp.cache_creation_input_tokens, r_tok, reported);
         ++model_round_trips;
         turn_input_tokens += actual_in;
         turn_output_tokens += resp.output_tokens;
@@ -1861,8 +1888,8 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                         std::to_string(configured) + " tokens)";
                 // When the cap is already the model's ceiling, raising the setting
                 // cannot help — say so instead of suggesting a dead end.
-                if ( _config.provider == "claude" || _config.provider == "anthropic" ) {
-                    long ceiling = providers::Anthropic::output_cap_for(_config.model);
+                long ceiling = _provider ? _provider->output_token_cap(_config.model) : 0;
+                if ( ceiling > 0 ) {
                     if ( static_cast<long>(configured) >= ceiling )
                         trunc += ", which is the ceiling for " + _config.model +
                                  ". Ask me to continue — long output has to be split across turns.";
@@ -2231,8 +2258,11 @@ std::string Repl::handle_command(const std::string& line) {
         s += "  limit:         " + ( _config.context_auto
                  ? ( _config.context_budget() ? "auto (" + std::to_string(_config.context_budget()) + ")" : "auto (unlimited)" )
                  : ( _config.context_limit == 0 ? std::string("unlimited") : std::to_string(_config.context_limit)));
-        if ( _stats.context_tokens.load() > 0 )
-            s += "\n  last turn:     " + std::to_string(_stats.context_tokens.load());
+        if ( _stats.context_tokens.load() > 0 ) {
+            bool reported = _stats.context_is_reported.load();
+            s += "\n  last turn:     " + std::string(reported ? "" : "~") + std::to_string(_stats.context_tokens.load()) +
+                 (reported ? " tokens (reported)" : " tokens (estimated)");
+        }
         long last_cached = _stats.last_cached.load();
         if ( last_cached > 0 ) {
             int disc = _config.provider_pricing_rules(_config.provider, _config.model).discount_pct();
@@ -2313,7 +2343,9 @@ std::string Repl::handle_command(const std::string& line) {
         auto rules = _config.provider_pricing_rules(_config.provider, _config.model);
         int read_pct = static_cast<int>(rules.cache_read_ratio * 100.0 + 0.5);
 
-        std::string s = "session usage (" + _config.provider + " · " + _config.model + "):\n";
+        bool sess_reported = _stats.session_is_reported.load(std::memory_order_relaxed);
+        std::string s = "session usage (" + _config.provider + " · " + _config.model +
+                        (sess_reported ? "" : " · estimated") + "):\n";
         s += "  input:   " + std::to_string(in) + " tokens";
         if ( cached > 0 )
             s += " (" + std::to_string(cached) + " cached, billed at " + std::to_string(read_pct) + "%)";
@@ -2659,8 +2691,12 @@ std::string Repl::handle_command(const std::string& line) {
                "  tools:          " + tools + "\n"
                "  tool profile:   " + _registry.active_profile() + "\n"
                "  tool budget:    " + ( _config.tool_call_limit == 0 ? std::string("unlimited") : std::to_string(_config.tool_call_limit) ) + " per turn\n"
-               "  last context:   " + std::to_string(_stats.context_tokens.load()) + " tokens\n"
-               "  session tokens: " + std::to_string(_stats.session_total()) + " (" +
+               "  last context:   " + ( _stats.context_is_reported.load()
+                   ? ( std::to_string(_stats.context_tokens.load()) + " tokens\n" )
+                   : ( "~" + std::to_string(_stats.context_tokens.load()) + " tokens (estimated)\n" ) ) +
+               "  session tokens: " + ( _stats.session_is_reported.load() ? "" : "~" ) +
+                   std::to_string(_stats.session_total()) +
+                   ( _stats.session_is_reported.load() ? "" : " (estimated)" ) + " (" +
                    std::to_string(_stats.session_cached.load()) + " cached" +
                    ( _stats.session_cache_creation.load() > 0 ? ", " + std::to_string(_stats.session_cache_creation.load()) + " created" : "" ) + ")" +
                ( [](const TokenStats& st) {
@@ -2739,8 +2775,8 @@ std::string Repl::handle_command(const std::string& line) {
                 // clamps to it, so a larger number would silently do nothing.
                 auto with_ceiling = [this](size_t v) -> std::string {
                     std::string s = "max_tokens: " + Config::format_tokens(v);
-                    if ( _config.provider == "claude" || _config.provider == "anthropic" ) {
-                        long ceiling = providers::Anthropic::output_cap_for(_config.model);
+                    long ceiling = _provider ? _provider->output_token_cap(_config.model) : 0;
+                    if ( ceiling > 0 ) {
                         std::string c = Config::format_tokens(static_cast<size_t>(ceiling));
                         if ( static_cast<long>(v) > ceiling )
                             s += "  (clamped to " + c + " for " + _config.model + ")";
@@ -2939,7 +2975,7 @@ std::string Repl::handle_command(const std::string& line) {
                    common::join_vector(_registry.available_profiles(), ", ");
         }
         _config.tool_profile = _registry.active_profile();
-        _config.plan_mode = _registry.plan_mode();
+        sync_effective_tools();
         _conversation.set_system(base_system_prompt());
         _config.save_settings(_config.home_dir);
 
@@ -3137,10 +3173,7 @@ std::string Repl::handle_command(const std::string& line) {
         _config.thinking = common::to_lower(args);
         if ( _provider )
             _provider->apply_provider_options(JSON::Object{{ "thinking", _config.thinking }});
-        bool applies = ( _provider ? _provider->supports_reasoning()
-                                   : ( _config.provider == "kimi" || _config.provider == "codex" ||
-                                       _config.provider == "claude" || _config.provider == "anthropic" ||
-                                       _config.provider == "gemini" || _config.provider == "openai" ) );
+        bool applies = _provider && _provider->supports_reasoning();
         std::string note = applies ? "" : "  (thinking is not supported by provider " + _config.provider + ")";
         return "thinking: " + _config.thinking + note;
     }
@@ -3288,6 +3321,7 @@ void Repl::run_tty() {
         }
         return out;
     });
+    inline_repl.set_capability_checker([this](const std::string& cap) { return provider_supports(cap); });
     set_progress_callback([&inline_repl](const std::string& s) { inline_repl.set_activity(s); });
     set_tool_notice_callback([&inline_repl](const std::string& s) { inline_repl.notify_tool(s); });
     set_live_update_callback([&inline_repl] { return inline_repl.take_live_updates(); });

@@ -87,6 +87,19 @@ public:
     virtual bool supports_tools() const { return true; }
     virtual bool supports_reasoning() const { return false; }
 
+    // Model output cap / ceiling (e.g. Anthropic 8192, Sonnet 3.7 64k). 0 if no fixed ceiling.
+    virtual long output_token_cap(const std::string& model) const { (void)model; return 0; }
+
+    // Model context window size in tokens.
+    virtual size_t context_window_for(const std::string& model) const {
+        return Config::context_window_for(model);
+    }
+
+    // Estimate tokens for serialized request text:
+    virtual size_t estimate_tokens(const std::string& text) const {
+        return Conversation::estimate_text_tokens(text, _config.provider);
+    }
+
     // Streaming: reset per-turn accumulation, parse one SSE chunk (returning the
     // visible deltas while accumulating content/reasoning/tool_calls internally),
     // and assemble the full Response once the stream is done. Providers that can

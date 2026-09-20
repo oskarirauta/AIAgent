@@ -40,6 +40,9 @@ public:
     // The model's total output-token ceiling (thinking budget + visible answer).
     // Exceeding it is a hard 400 from the API, so max_tokens is clamped to it.
     static long output_cap_for(const std::string& model);
+    long output_token_cap(const std::string& model) const override {
+        return Anthropic::output_cap_for(model);
+    }
 
 protected:
     bool _thinking_enabled = false;   // off by default (unlike Kimi)

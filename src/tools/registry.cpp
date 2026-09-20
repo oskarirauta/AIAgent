@@ -42,20 +42,25 @@ void Registry::register_defaults() {
 }
 
 void Registry::add(std::unique_ptr<Tool> tool) {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     _tools[tool->name()] = std::move(tool);
     _schema_dirty = true;
 }
 
 void Registry::remove(const std::string& name) {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
+    _disabled_tools.erase(name);
     if ( _tools.erase(name) > 0 )
         _schema_dirty = true;
 }
 
 void Registry::set_confirm_callback(confirm_cb_t cb) {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     _confirm_cb = std::move(cb);
 }
 
 void Registry::set_group_enabled(const std::string& group, bool enabled) {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     if ( enabled ) {
         if ( _disabled_groups.erase(group) > 0 )
             _schema_dirty = true;
@@ -66,10 +71,12 @@ void Registry::set_group_enabled(const std::string& group, bool enabled) {
 }
 
 bool Registry::is_group_enabled(const std::string& group) const {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     return _disabled_groups.find(group) == _disabled_groups.end();
 }
 
 void Registry::set_tool_enabled(const std::string& name, bool enabled) {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     if ( enabled ) {
         if ( _disabled_tools.erase(name) > 0 )
             _schema_dirty = true;
@@ -80,6 +87,7 @@ void Registry::set_tool_enabled(const std::string& name, bool enabled) {
 }
 
 bool Registry::is_tool_enabled(const std::string& name) const {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     if ( _disabled_tools.find(name) != _disabled_tools.end() )
         return false;
     auto it = _tools.find(name);
@@ -92,6 +100,7 @@ bool Registry::is_tool_enabled(const std::string& name) const {
 }
 
 std::vector<Registry::ToolInfo> Registry::list_tools() const {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     std::vector<ToolInfo> out;
     for ( const auto& [name, tool] : _tools ) {
         if ( !tool ) continue;
@@ -121,6 +130,7 @@ std::vector<std::string> Registry::available_groups() {
 }
 
 bool Registry::apply_profile(const std::string& profile) {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     std::string p = common::to_lower(common::trim_ws(profile));
     if ( p == "audit" ) p = "review";
     if ( p == "coding" ) p = "code";
@@ -196,6 +206,7 @@ bool Registry::apply_profile(const std::string& profile) {
 }
 
 JSON Registry::schema() const {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     if ( !_schema_dirty )
         return _cached_schema;
 
@@ -760,6 +771,7 @@ bool Registry::classify_safe(const std::string& command) {
 // ── execution with confirmation policy ──────────────────────────────────
 
 std::string Registry::execute(const std::string& name, const JSON& args) {
+    std::unique_lock<std::recursive_mutex> lk(_mx);
     auto it = _tools.find(name);
     if ( it == _tools.end())
         throws << "unknown tool: " << name << std::endl;
@@ -803,6 +815,7 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
     std::string exact_key = is_shell ? command : summary;
 
     auto run = [&]() -> std::string {
+        if ( lk.owns_lock()) lk.unlock();
         if ( _pre_run_cb )
             _pre_run_cb(name, args);
         if ( _activity_cb )
@@ -811,7 +824,7 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
             // execute() runs concurrently for read-only tool batches, and the
             // logger is not thread-safe — interleaved writes corrupt its state.
             static std::mutex log_mx;
-            std::lock_guard<std::mutex> lk(log_mx);
+            std::lock_guard<std::mutex> lk_log(log_mx);
             logger::info["tool"] << "executing " << name << std::endl;
         }
         std::string result = tool->execute(args);
@@ -867,22 +880,30 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
     req.can_similar = danger.empty();
 
     std::string note;
-    Decision d = _confirm_cb(req, note);
+    auto cb = _confirm_cb;
+    lk.unlock(); // release lock before interactive confirmation prompt
+    Decision d = cb(req, note);
     switch ( d ) {
         case Decision::deny:
             logger::info["tool"] << "user declined " << name << std::endl;
             return note.empty()
                 ? "user declined to run " + name
                 : "user declined to run " + name + " — " + note;
-        case Decision::turn:
+        case Decision::turn: {
+            std::lock_guard<std::recursive_mutex> lk2(_mx);
             _turn_grant = true;
             break;
-        case Decision::session:
+        }
+        case Decision::session: {
+            std::lock_guard<std::recursive_mutex> lk2(_mx);
             _allow_exact.insert(exact_key);
             break;
-        case Decision::similar:
+        }
+        case Decision::similar: {
+            std::lock_guard<std::recursive_mutex> lk2(_mx);
             _allow_similar.insert(similar_key);
             break;
+        }
         case Decision::once:
             break;
     }
@@ -890,23 +911,30 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
 }
 
 bool Registry::has(const std::string& name) const {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     return _tools.find(name) != _tools.end();
 }
 
 bool Registry::ask_continue(const std::string& summary) {
-    if ( _mode == ConfirmMode::insecure )
-        return true; // insecure: never interrupt
-    if ( !_confirm_cb )
-        return false; // non-interactive: stop safely
+    confirm_cb_t cb;
+    {
+        std::lock_guard<std::recursive_mutex> lk(_mx);
+        if ( _mode == ConfirmMode::insecure )
+            return true; // insecure: never interrupt
+        if ( !_confirm_cb )
+            return false; // non-interactive: stop safely
+        cb = _confirm_cb;
+    }
     ConfirmRequest req;
     req.tool = "continue the turn";
     req.summary = summary;
     req.can_similar = false;
     std::string note;
-    return _confirm_cb(req, note) != Decision::deny;
+    return cb(req, note) != Decision::deny;
 }
 
 std::vector<Registry::Grant> Registry::grants() const {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     std::vector<Grant> g;
     for ( const auto& k : _allow_exact ) {
         auto it = _grant_uses.find(k);
@@ -920,12 +948,14 @@ std::vector<Registry::Grant> Registry::grants() const {
 }
 
 size_t Registry::revoke_grant(const std::string& key) {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     size_t n = _allow_exact.erase(key) + _allow_similar.erase(key);
     _grant_uses.erase(key);
     return n;
 }
 
 size_t Registry::revoke_all_grants() {
+    std::lock_guard<std::recursive_mutex> lk(_mx);
     size_t n = _allow_exact.size() + _allow_similar.size();
     _allow_exact.clear();
     _allow_similar.clear();

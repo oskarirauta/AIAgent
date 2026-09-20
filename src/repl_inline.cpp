@@ -924,6 +924,8 @@ std::string InlineRepl::status_line() const {
     // Token usage: current context size and cumulative session total.
     long ctx = _stats.context_tokens.load(std::memory_order_relaxed);
     long total = _stats.session_total();
+    bool ctx_reported = _stats.context_is_reported.load(std::memory_order_relaxed);
+    bool sess_reported = _stats.session_is_reported.load(std::memory_order_relaxed);
     if ( ctx > 0 || total > 0 ) {
         auto fmt = [](long n) -> std::string {
             if ( n >= 1000 ) {
@@ -933,7 +935,10 @@ std::string InlineRepl::status_line() const {
             }
             return std::to_string(n);
         };
-        s += " · ctx " + fmt(ctx) + " · " + fmt(total) + " tok";
+        std::string ctx_str = (ctx_reported ? "" : "~") + fmt(ctx);
+        if ( !ctx_reported && total == 0 )
+            ctx_str += " (est)";
+        s += " · ctx " + ctx_str + " · " + (sess_reported ? "" : "~") + fmt(total) + " tok";
         double cost = _config.session_cost(_stats.session_input.load(std::memory_order_relaxed),
                                            _stats.session_output.load(std::memory_order_relaxed),
                                            _stats.session_cached.load(std::memory_order_relaxed),
@@ -1336,9 +1341,10 @@ void InlineRepl::draw_live() {
         out += pl + "\r\n";                   // transient reasoning preview
     out += "\r\n";                            // blank spacer above the separator
     out += _theme.dim + sep + "\033[0m\r\n";  // separator: transcript | input
-    // The ultracode/ultrathink markers raise Anthropic's effort to max for a turn
+    // The ultracode/ultrathink markers raise thinking effort to max for a turn
     // (and cost budget), so flag them in a distinct colour where they take effect.
-    bool mark_ultra = ( _config.provider == "claude" || _config.provider == "anthropic" );
+    bool mark_ultra = _cap_checker ? ( _cap_checker("thinking") || _cap_checker("reasoning") )
+                                   : ( _config.provider == "claude" || _config.provider == "anthropic" );
     for ( const auto& vl : vlines )
         out += vl.first + ( mark_ultra ? highlight_keywords(vl.second) : vl.second ) + "\r\n";
     out += _theme.dim + sep + "\033[0m\r\n";  // separator: input | status
@@ -3248,8 +3254,10 @@ void InlineRepl::render_context() {
         limit_str = _config.context_limit == 0 ? "unlimited" : fmt(_config.context_limit) + " tokens";
     }
     std::string footer = "  " + _theme.dim + "context limit: " + limit_str;
-    if ( actual > 0 )
-        footer += " · last turn reported " + fmt(static_cast<size_t>(actual));
+    if ( actual > 0 ) {
+        bool actual_reported = _stats.context_is_reported.load(std::memory_order_relaxed);
+        footer += " · last turn " + std::string(actual_reported ? "reported " : "estimated ~") + fmt(static_cast<size_t>(actual));
+    }
     if ( last_cached > 0 )
         footer += " (" + fmt(static_cast<size_t>(last_cached)) + " cached)";
     footer += Theme::reset + std::string("\n");
@@ -3334,7 +3342,7 @@ void InlineRepl::open_settings_menu() {
         0, 2000, 50, "per turn", "unlimited");
     add("redact_secrets", "redact secrets", _config.redact_secrets ? "on" : "off", TOOLS,
         "mask credentials in tool output before it is sent to the model", { "off", "on" });
-    if ( _config.provider == "claude" )
+    if ( _cap_checker ? _cap_checker("advisor") : ( _config.provider == "claude" ) )
         add("advisor", "advisor", _config.advisor ? "on" : "off", TOOLS,
             "let the model consult a stronger advisor model", { "off", "on" });
 

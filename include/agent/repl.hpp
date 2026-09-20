@@ -30,8 +30,10 @@ public:
     void save_conversation();
 
     // Query whether the active provider supports a provider-specific capability
-    // (e.g. "model-command"). Returns false if no provider is loaded.
+    // (e.g. "model-command", "advisor", "thinking"). Returns false if no provider is loaded.
     bool provider_supports(const std::string& capability) const {
+        if ( capability == "thinking" || capability == "reasoning" )
+            return _provider && _provider->supports_reasoning();
         return _provider && _provider->supports(capability);
     }
 
@@ -135,6 +137,9 @@ private:
 
     // Register/unregister the web_search tool to match the config.
     void sync_web_search_tool();
+
+    // Reconcile and enforce the active tool profile across all tool groups.
+    void sync_effective_tools();
 
     // Connect configured MCP servers and register their tools; render /mcp.
     void connect_mcp();

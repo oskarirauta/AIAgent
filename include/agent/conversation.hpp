@@ -56,6 +56,9 @@ public:
     // Approximate tokens for a single message using provider-aware tokenization and framing:
     static size_t estimate_message_tokens(const Message& msg, const std::string& provider = "");
 
+    // Approximate tokens for raw text:
+    static size_t estimate_text_tokens(const std::string& text, const std::string& provider = "");
+
     // Messages to send under an approximate token budget:
     // keep a leading system message plus the most recent messages that fit.
     // 0 means no limit (returns the full history). Leading orphaned tool

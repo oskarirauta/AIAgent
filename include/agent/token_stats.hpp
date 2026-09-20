@@ -23,6 +23,8 @@ struct TurnUsage {
 // provider responses) and the main thread (which shows it on the status line).
 struct TokenStats {
     std::atomic<long> context_tokens{0};        // input/prompt tokens of the latest request (current context size)
+    std::atomic<bool> context_is_reported{false}; // true if context_tokens came from provider API usage
+    std::atomic<bool> session_is_reported{false}; // true if at least one response reported usage
     std::atomic<long> session_input{0};         // cumulative input tokens this session
     std::atomic<long> session_output{0};        // cumulative output tokens this session
     std::atomic<long> session_cached{0};        // cumulative cache-read input tokens (a subset of input)
@@ -40,11 +42,14 @@ struct TokenStats {
                session_output.load(std::memory_order_relaxed);
     }
 
-    void record(long input, long output, long cached = 0, long creation = 0, long reasoning = 0) {
+    void record(long input, long output, long cached = 0, long creation = 0, long reasoning = 0, bool reported = true) {
         if ( input > 0 ) {
             context_tokens.store(input, std::memory_order_relaxed);
+            context_is_reported.store(reported, std::memory_order_relaxed);
             session_input.fetch_add(input, std::memory_order_relaxed);
         }
+        if ( reported && ( input > 0 || output > 0 ) )
+            session_is_reported.store(true, std::memory_order_relaxed);
         if ( output > 0 )
             session_output.fetch_add(output, std::memory_order_relaxed);
         last_cached.store(cached > 0 ? cached : 0, std::memory_order_relaxed);

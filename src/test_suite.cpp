@@ -4044,6 +4044,120 @@ static void test_safe_commands() {
     check(!Registry::classify_safe("sleep 5 &"), "background job not safe");
 }
 
+static void test_token_accounting_estimated_vs_reported() {
+    std::cout << "token accounting: estimated vs reported" << std::endl;
+    agent::TokenStats stats;
+    check(!stats.context_is_reported.load(), "initial context not reported");
+    check(!stats.session_is_reported.load(), "initial session not reported");
+
+    // Record an estimated turn (reported = false)
+    stats.record(1200, 300, 0, 0, 0, /*reported=*/false);
+    check(stats.context_tokens.load() == 1200, "estimated context recorded");
+    check(!stats.context_is_reported.load(), "context marked estimated");
+    check(!stats.session_is_reported.load(), "session marked estimated");
+
+    // Record a reported turn (reported = true)
+    stats.record(1500, 400, 200, 50, 80, /*reported=*/true);
+    check(stats.context_tokens.load() == 1500, "reported context recorded");
+    check(stats.context_is_reported.load(), "context marked reported");
+    check(stats.session_is_reported.load(), "session marked reported");
+
+    // Test text token estimation helper
+    std::string text = "int main() { return 0; }";
+    size_t gemini_est = agent::Conversation::estimate_text_tokens(text, "gemini");
+    size_t claude_est = agent::Conversation::estimate_text_tokens(text, "claude");
+    size_t openai_est = agent::Conversation::estimate_text_tokens(text, "openai");
+    check(gemini_est >= openai_est, "gemini tokens >= openai due to chars_per_tok ratio");
+    check(claude_est >= openai_est, "claude tokens >= openai due to chars_per_tok ratio");
+}
+
+static void test_registry_thread_safety_and_churn() {
+    std::cout << "registry: thread safety and lifecycle churn" << std::endl;
+    using namespace agent::tools;
+    Registry reg;
+    reg.register_defaults();
+
+    // Verify cleanup of disabled_tools on remove()
+    reg.set_tool_enabled("grep", false);
+    check(!reg.is_tool_enabled("grep"), "grep disabled");
+    check(reg.disabled_tools().count("grep") == 1, "grep in disabled_tools set");
+    reg.remove("grep");
+    check(reg.disabled_tools().count("grep") == 0, "remove() cleans up disabled_tools set");
+    check(!reg.has("grep"), "grep removed");
+
+    // Multi-threaded stress test: churn profile switches, schema queries, and tool additions/removals
+    std::atomic<bool> stop{false};
+    std::atomic<int> errors{0};
+
+    // Reader thread 1: repeatedly asks for schema
+    std::thread t1([&]() {
+        while ( !stop.load(std::memory_order_relaxed) ) {
+            try {
+                JSON s = reg.schema();
+                if ( s.size() == 0 && reg.active_profile() == "full" ) errors++;
+            } catch (...) {
+                errors++;
+            }
+        }
+    });
+
+    // Reader thread 2: repeatedly lists tools and checks enabled
+    std::thread t2([&]() {
+        while ( !stop.load(std::memory_order_relaxed) ) {
+            try {
+                auto list = reg.list_tools();
+                for ( const auto& ti : list ) {
+                    bool en = reg.is_tool_enabled(ti.name);
+                    (void)en;
+                }
+            } catch (...) {
+                errors++;
+            }
+        }
+    });
+
+    // Mutator thread 3: toggles profiles
+    std::thread t3([&]() {
+        const std::vector<std::string> profiles = { "code", "full", "minimal", "review", "research" };
+        size_t idx = 0;
+        while ( !stop.load(std::memory_order_relaxed) ) {
+            try {
+                reg.apply_profile(profiles[idx % profiles.size()]);
+                idx++;
+            } catch (...) {
+                errors++;
+            }
+        }
+    });
+
+    // Let threads race for 100ms
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    stop.store(true);
+
+    t1.join();
+    t2.join();
+    t3.join();
+
+    check(errors.load() == 0, "concurrent registry access produced 0 errors");
+}
+
+static void test_provider_capability_neutrality() {
+    std::cout << "provider: capability neutrality" << std::endl;
+    agent::Config cfg;
+    cfg.provider = "anthropic";
+    cfg.model = "claude-3-7-sonnet-20250219";
+    auto anthropic = agent::providers::create(cfg);
+    check(anthropic->output_token_cap("claude-3-7-sonnet-20250219") == 64000, "anthropic sonnet 3.7 cap is 64000");
+    check(anthropic->output_token_cap("claude-3-5-haiku-20241022") == 64000, "anthropic haiku cap is 64000");
+    check(anthropic->supports_reasoning(), "anthropic supports reasoning");
+
+    cfg.provider = "gemini";
+    cfg.model = "gemini-2.5-flash";
+    auto gemini = agent::providers::create(cfg);
+    check(gemini->output_token_cap("gemini-2.5-flash") == 65536, "gemini 2.5 flash cap is 65536");
+    check(gemini->supports_reasoning(), "gemini supports reasoning");
+}
+
 int main() {
     std::cout << "Running AI Agent test suite\n" << std::endl;
 
@@ -4150,6 +4264,9 @@ int main() {
     test_config_booleans();
     test_extra_command_lists();
     test_safe_commands();
+    test_token_accounting_estimated_vs_reported();
+    test_registry_thread_safety_and_churn();
+    test_provider_capability_neutrality();
 
     std::cout << "\n" << passed << " passed, " << failed << " failed" << std::endl;
     return failed > 0 ? 1 : 0;
