@@ -11,6 +11,7 @@ struct TurnUsage {
     size_t tool_calls = 0;
     long input_tokens = 0;
     long cached_tokens = 0;
+    long cache_creation_tokens = 0;
     long output_tokens = 0;
     long reasoning_tokens = 0;
     long first_request_tokens = 0;
@@ -21,11 +22,15 @@ struct TurnUsage {
 // Token accounting shared between the worker thread (which parses `usage` from
 // provider responses) and the main thread (which shows it on the status line).
 struct TokenStats {
-    std::atomic<long> context_tokens{0};  // input/prompt tokens of the latest request (current context size)
-    std::atomic<long> session_input{0};   // cumulative input tokens this session
-    std::atomic<long> session_output{0};  // cumulative output tokens this session
-    std::atomic<long> session_cached{0};  // cumulative cache-read input tokens (a subset of input)
-    std::atomic<long> last_cached{0};      // cache-read input tokens of the latest request
+    std::atomic<long> context_tokens{0};        // input/prompt tokens of the latest request (current context size)
+    std::atomic<long> session_input{0};         // cumulative input tokens this session
+    std::atomic<long> session_output{0};        // cumulative output tokens this session
+    std::atomic<long> session_cached{0};        // cumulative cache-read input tokens (a subset of input)
+    std::atomic<long> session_cache_creation{0};// cumulative cache-write input tokens
+    std::atomic<long> session_reasoning{0};     // cumulative reasoning/thinking tokens
+    std::atomic<long> last_cached{0};           // cache-read input tokens of the latest request
+    std::atomic<long> last_cache_creation{0};   // cache-write input tokens of the latest request
+    std::atomic<long> last_reasoning{0};        // reasoning tokens of the latest request
 
     mutable std::mutex turn_mx;
     TurnUsage last_turn;
@@ -35,7 +40,7 @@ struct TokenStats {
                session_output.load(std::memory_order_relaxed);
     }
 
-    void record(long input, long output, long cached = 0) {
+    void record(long input, long output, long cached = 0, long creation = 0, long reasoning = 0) {
         if ( input > 0 ) {
             context_tokens.store(input, std::memory_order_relaxed);
             session_input.fetch_add(input, std::memory_order_relaxed);
@@ -45,6 +50,12 @@ struct TokenStats {
         last_cached.store(cached > 0 ? cached : 0, std::memory_order_relaxed);
         if ( cached > 0 )
             session_cached.fetch_add(cached, std::memory_order_relaxed);
+        last_cache_creation.store(creation > 0 ? creation : 0, std::memory_order_relaxed);
+        if ( creation > 0 )
+            session_cache_creation.fetch_add(creation, std::memory_order_relaxed);
+        last_reasoning.store(reasoning > 0 ? reasoning : 0, std::memory_order_relaxed);
+        if ( reasoning > 0 )
+            session_reasoning.fetch_add(reasoning, std::memory_order_relaxed);
     }
 
     void record_turn(const TurnUsage& tu) {

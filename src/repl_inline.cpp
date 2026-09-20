@@ -936,7 +936,8 @@ std::string InlineRepl::status_line() const {
         s += " · ctx " + fmt(ctx) + " · " + fmt(total) + " tok";
         double cost = _config.session_cost(_stats.session_input.load(std::memory_order_relaxed),
                                            _stats.session_output.load(std::memory_order_relaxed),
-                                           _stats.session_cached.load(std::memory_order_relaxed));
+                                           _stats.session_cached.load(std::memory_order_relaxed),
+                                           _stats.session_cache_creation.load(std::memory_order_relaxed));
         if ( cost >= 0 ) {
             char buf[32];
             std::snprintf(buf, sizeof(buf), " · $%.4f", cost);
@@ -2299,7 +2300,9 @@ std::string InlineRepl::budget_warning() {
     double frac = 0.0;
     std::string detail;
     if ( _config.budget_usd > 0.0 ) {
-        double cost = _config.session_cost(in, out, _stats.session_cached.load(std::memory_order_relaxed));
+        double cost = _config.session_cost(in, out,
+                                           _stats.session_cached.load(std::memory_order_relaxed),
+                                           _stats.session_cache_creation.load(std::memory_order_relaxed));
         if ( cost >= 0 ) {
             double f = cost / _config.budget_usd;
             if ( f > frac ) {
@@ -3234,9 +3237,18 @@ void InlineRepl::render_context() {
     if ( last_cached > 0 )
         footer += " (" + fmt(static_cast<size_t>(last_cached)) + " cached)";
     footer += Theme::reset + std::string("\n");
-    if ( session_cached > 0 )
-        footer += "  " + _theme.dim + "prompt cache:   " + fmt(static_cast<size_t>(session_cached)) +
-                  " tokens cached this session (~90% cost reduction)" + Theme::reset + "\n";
+    long session_creation = _stats.session_cache_creation.load(std::memory_order_relaxed);
+    if ( session_cached > 0 || session_creation > 0 ) {
+        int disc = _config.provider_pricing_rules(_config.provider, _config.model).discount_pct();
+        footer += "  " + _theme.dim + "prompt cache:   ";
+        if ( session_cached > 0 )
+            footer += fmt(static_cast<size_t>(session_cached)) + " tokens cached (~" + std::to_string(disc) + "% cost reduction)";
+        if ( session_creation > 0 ) {
+            if ( session_cached > 0 ) footer += " · ";
+            footer += fmt(static_cast<size_t>(session_creation)) + " created";
+        }
+        footer += std::string(Theme::reset) + "\n";
+    }
     wr(footer);
 
     draw_live();

@@ -13,6 +13,8 @@ namespace agent {
 struct ModelPricing {
     double input_per_mtok = 0.0;
     double output_per_mtok = 0.0;
+    double cache_read_ratio = 0.0;  // 0.0 means default to provider pricing rules
+    double cache_write_ratio = 0.0; // 0.0 means default to provider pricing rules
 };
 
 class Config {
@@ -249,13 +251,21 @@ public:
     // no price is configured (e.g. a flat-rate subscription).
     std::optional<ModelPricing> pricing_for(const std::string& model) const;
 
+    struct ProviderPricingRules {
+        double cache_read_ratio = 0.10;
+        double cache_write_ratio = 1.00;
+        int discount_pct() const { return static_cast<int>((1.0 - cache_read_ratio) * 100.0 + 0.5); }
+    };
+
+    ProviderPricingRules provider_pricing_rules(const std::string& prov, const std::string& mdl) const;
+
     // A session name reduced to a filename-safe token: letters, digits, '-' and
     // '_' survive, anything else becomes '-'. "default" (and an empty name) mean
     // the project's default session and normalise to "".
     static std::string sanitize_session_name(const std::string& name);
 
     // Estimated session cost in USD for the current model, or -1 if unpriced.
-    double session_cost(long input_tokens, long output_tokens, long cached_input = 0) const;
+    double session_cost(long input_tokens, long output_tokens, long cached_input = 0, long cache_creation = 0) const;
 
     // The token budget to actually apply when trimming history: the model's
     // window (with response headroom) in auto mode, else `context_limit`.

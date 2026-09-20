@@ -498,7 +498,10 @@ Response Gemini::parse_response(const JSON& response) {
         if ( u.contains("promptTokenCount") ) out.input_tokens = json_long(u["promptTokenCount"]);
         if ( u.contains("candidatesTokenCount") ) out.output_tokens = json_long(u["candidatesTokenCount"]);
         if ( u.contains("cachedContentTokenCount") ) out.cached_input_tokens = json_long(u["cachedContentTokenCount"]);
+        if ( u.contains("thoughtsTokenCount") ) out.reasoning_tokens = json_long(u["thoughtsTokenCount"]);
     }
+    if ( out.reasoning_tokens == 0 && !out.thinking.empty() )
+        out.reasoning_tokens = static_cast<long>(out.thinking.size() / 4);
 
     return out;
 }
@@ -518,6 +521,7 @@ void Gemini::stream_reset() {
     _s_input_tokens = 0;
     _s_output_tokens = 0;
     _s_cached_tokens = 0;
+    _s_reasoning_tokens = 0;
     _s_truncated = false;
     _s_success = true;
     _s_error.clear();
@@ -555,6 +559,7 @@ StreamChunk Gemini::parse_stream(const std::string& chunk, std::string& buffer, 
                     if ( u.contains("promptTokenCount") ) _s_input_tokens = json_long(u["promptTokenCount"]);
                     if ( u.contains("candidatesTokenCount") ) _s_output_tokens = json_long(u["candidatesTokenCount"]);
                     if ( u.contains("cachedContentTokenCount") ) _s_cached_tokens = json_long(u["cachedContentTokenCount"]);
+                    if ( u.contains("thoughtsTokenCount") ) _s_reasoning_tokens = json_long(u["thoughtsTokenCount"]);
                 }
 
                 if ( j.contains("candidates") && j["candidates"] == JSON::TYPE::ARRAY && !j["candidates"].empty() ) {
@@ -614,6 +619,8 @@ Response Gemini::stream_result() {
     out.input_tokens = _s_input_tokens;
     out.output_tokens = _s_output_tokens;
     out.cached_input_tokens = _s_cached_tokens;
+    out.reasoning_tokens = _s_reasoning_tokens > 0 ? _s_reasoning_tokens
+                          : static_cast<long>(_s_reasoning.size() / 4);
     out.truncated = _s_truncated;
     return out;
 }

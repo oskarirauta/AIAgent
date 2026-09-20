@@ -115,13 +115,28 @@ void Conversation::clear() {
     _trim_start = 0; // the pinned cut refers to the old history; drop it
 }
 
-size_t Conversation::estimate_tokens() const {
+size_t Conversation::estimate_tokens(const std::string& provider) const {
     size_t total = 0;
+    std::string prov = common::to_lower(common::trim_ws(provider));
+
+    double chars_per_tok = 4.0;
+    size_t overhead = 8;
+    if ( prov == "gemini" ) {
+        chars_per_tok = 3.5;
+        overhead = 6;
+    } else if ( prov == "claude" || prov == "anthropic" ) {
+        chars_per_tok = 3.8;
+        overhead = 6;
+    } else if ( prov == "openai" || prov == "codex" ) {
+        chars_per_tok = 4.0;
+        overhead = 5;
+    }
+
     for ( const auto& m : _messages ) {
         size_t chars = m.content.size();
         for ( const auto& tc : m.tool_calls )
             chars += tc.arguments.size() + tc.name.size();
-        total += chars / 4 + 8;
+        total += static_cast<size_t>(chars / chars_per_tok) + overhead;
     }
     return total;
 }

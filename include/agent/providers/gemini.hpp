@@ -65,6 +65,7 @@ private:
     long _s_input_tokens = 0;
     long _s_output_tokens = 0;
     long _s_cached_tokens = 0;
+    long _s_reasoning_tokens = 0;
     bool _s_truncated = false;
     bool _s_success = true;
     std::string _s_error;

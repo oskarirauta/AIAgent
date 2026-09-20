@@ -33,9 +33,12 @@ struct Response {
     // "max_tokens" / OpenAI finish_reason "length"), not finished naturally.
     bool truncated = false;
 
-    // Portion of input_tokens served from the prompt cache (billed ~10%).
+    // Portion of input_tokens served from the prompt cache.
     // input_tokens is the TOTAL prompt size; cached_input_tokens is the subset.
     long cached_input_tokens = 0;
+
+    // Portion of input_tokens written to create a prompt cache (e.g. Anthropic cache creation).
+    long cache_creation_input_tokens = 0;
 
     // Output reasoning/thinking tokens reported by the provider (0 if unknown).
     long reasoning_tokens = 0;

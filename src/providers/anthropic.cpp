@@ -340,7 +340,8 @@ Response Anthropic::parse_response(const JSON& response) {
         long cr = u.contains("cache_read_input_tokens") ? json_long(u["cache_read_input_tokens"]) : 0;
         long cc = u.contains("cache_creation_input_tokens") ? json_long(u["cache_creation_input_tokens"]) : 0;
         r.input_tokens = inp + cr + cc;         // total prompt size
-        r.cached_input_tokens = cr;             // cache-read subset (billed ~10%)
+        r.cached_input_tokens = cr;             // cache-read subset
+        r.cache_creation_input_tokens = cc;     // cache-write subset
         if ( u.contains("output_tokens")) r.output_tokens = json_long(u["output_tokens"]);
     }
 
@@ -368,6 +369,7 @@ void Anthropic::stream_reset() {
     _s_output_tokens = 0;
     _s_truncated = false;
     _s_cached_tokens = 0;
+    _s_cache_creation_tokens = 0;
 }
 
 StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
@@ -405,6 +407,7 @@ StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffe
                     long cc = u.contains("cache_creation_input_tokens") ? json_long(u["cache_creation_input_tokens"]) : 0;
                     _s_input_tokens = inp + cr + cc;
                     _s_cached_tokens = cr;
+                    _s_cache_creation_tokens = cc;
                 }
             } else if ( type == "content_block_start" && j.contains("index") && j.contains("content_block")) {
                 int idx = static_cast<int>(json_long(j["index"]));
@@ -462,6 +465,9 @@ Response Anthropic::stream_result() {
     r.output_tokens = _s_output_tokens;
     r.truncated = _s_truncated;
     r.cached_input_tokens = _s_cached_tokens;
+    r.cache_creation_input_tokens = _s_cache_creation_tokens;
+    if ( !_s_reasoning.empty() )
+        r.reasoning_tokens = static_cast<long>(_s_reasoning.size() / 4);
     // Reassemble thinking blocks in index order for verbatim replay.
     for ( const auto& [idx, blk] : _s_blocks ) {
         if ( blk.type == "thinking" && !blk.signature.empty())

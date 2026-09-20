@@ -416,9 +416,10 @@ static void test_cached_token_accounting() {
         auto r = p.stream_result();
         check(r.input_tokens == 1050, "anthropic total input includes cache read+create");
         check(r.cached_input_tokens == 900, "anthropic cache-read tracked");
+        check(r.cache_creation_input_tokens == 50, "anthropic cache-creation tracked");
     }
     {
-        agent::Config cfg; cfg.model = "priced-model";
+        agent::Config cfg; cfg.provider = "claude"; cfg.model = "priced-model";
         cfg.pricing["priced-model"] = agent::ModelPricing{ 10.0, 30.0 };
         double full = cfg.session_cost(1000000, 0, 0);
         double cached = cfg.session_cost(1000000, 0, 1000000);
@@ -3220,6 +3221,142 @@ static void test_token_usage() {
     check(formatted.find("3m 42s") != std::string::npos, "formatted duration present");
 }
 
+static void test_provider_aware_token_accounting() {
+    std::cout << "provider-aware token accounting & pricing" << std::endl;
+    agent::Config cfg;
+
+    // 1. Provider pricing rules
+    auto openai_rules = cfg.provider_pricing_rules("openai", "gpt-4o");
+    check(openai_rules.cache_read_ratio == 0.50, "openai cache read ratio is 50%");
+    check(openai_rules.discount_pct() == 50, "openai discount is 50%");
+
+    auto gemini_rules = cfg.provider_pricing_rules("gemini", "gemini-2.5-pro");
+    check(gemini_rules.cache_read_ratio == 0.25, "gemini cache read ratio is 25%");
+    check(gemini_rules.discount_pct() == 75, "gemini discount is 75%");
+
+    auto claude_rules = cfg.provider_pricing_rules("claude", "claude-sonnet-4");
+    check(claude_rules.cache_read_ratio == 0.10, "claude cache read ratio is 10%");
+    check(claude_rules.cache_write_ratio == 1.25, "claude cache write ratio is 125%");
+    check(claude_rules.discount_pct() == 90, "claude read discount is 90%");
+
+    auto kimi_rules = cfg.provider_pricing_rules("kimi", "kimi-k2");
+    check(kimi_rules.cache_read_ratio == 0.20, "kimi cache read ratio is 20%");
+    check(kimi_rules.discount_pct() == 80, "kimi discount is 80%");
+
+    auto deepseek_rules = cfg.provider_pricing_rules("openrouter", "deepseek/deepseek-r1");
+    check(deepseek_rules.cache_read_ratio == 0.25, "deepseek cache read ratio is 25%");
+    check(deepseek_rules.discount_pct() == 75, "deepseek discount is 75%");
+
+    // 2. Cost calculation with provider-specific cache discounts
+    cfg.pricing["openai-test"] = agent::ModelPricing{ 10.0, 30.0 };
+    cfg.provider = "openai"; cfg.model = "openai-test";
+    // 1M total: 500k uncached ($5.00) + 500k cached @ 50% ($2.50) + 100k out @ 30 ($3.00) = $10.50
+    double cost_oai = cfg.session_cost(1000000, 100000, 500000);
+    check(cost_oai > 10.49 && cost_oai < 10.51, "openai session cost with 50% cache discount");
+
+    cfg.pricing["gemini-test"] = agent::ModelPricing{ 10.0, 30.0 };
+    cfg.provider = "gemini"; cfg.model = "gemini-test";
+    // 1M total: 500k uncached ($5.00) + 500k cached @ 25% ($1.25) + 100k out @ 30 ($3.00) = $9.25
+    double cost_gem = cfg.session_cost(1000000, 100000, 500000);
+    check(cost_gem > 9.24 && cost_gem < 9.26, "gemini session cost with 75% cache discount");
+
+    cfg.pricing["claude-test"] = agent::ModelPricing{ 10.0, 30.0 };
+    cfg.provider = "claude"; cfg.model = "claude-test";
+    // 1M total: 300k uncached ($3.00) + 500k cached @ 10% ($0.50) + 200k created @ 125% ($2.50) + 100k out @ 30 ($3.00) = $9.00
+    double cost_claude = cfg.session_cost(1000000, 100000, 500000, 200000);
+    check(cost_claude > 8.99 && cost_claude < 9.01, "claude session cost with 10% read and 125% write");
+
+    // 3. Extended price syntax in config
+    std::string test_cfg_path = "/tmp/test_price_cfg_" + std::to_string(getpid()) + ".ini";
+    {
+        std::ofstream ofs(test_cfg_path);
+        ofs << "price.custom-model: 20.0/40.0/0.15/1.50\n";
+    }
+    agent::Config loaded_cfg;
+    loaded_cfg.load(test_cfg_path);
+    auto p_custom = loaded_cfg.pricing_for("custom-model");
+    check(p_custom.has_value(), "custom-model pricing loaded");
+    if ( p_custom ) {
+        check(p_custom->input_per_mtok == 20.0, "input price parsed");
+        check(p_custom->output_per_mtok == 40.0, "output price parsed");
+        check(p_custom->cache_read_ratio == 0.15, "custom cache_read_ratio parsed");
+        check(p_custom->cache_write_ratio == 1.50, "custom cache_write_ratio parsed");
+    }
+    std::filesystem::remove(test_cfg_path);
+
+    // 4. Native token usage extraction for reasoning & cache creation
+    // OpenAI reasoning_tokens extraction
+    agent::providers::OpenAI oai(cfg);
+    JSON oai_json = JSON::parse(
+        "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],"
+        "\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":500,"
+        "\"prompt_tokens_details\":{\"cached_tokens\":400},"
+        "\"completion_tokens_details\":{\"reasoning_tokens\":350}}}");
+    auto oai_resp = oai.parse_response(oai_json);
+    check(oai_resp.input_tokens == 1000, "openai input tokens");
+    check(oai_resp.cached_input_tokens == 400, "openai cached input tokens");
+    check(oai_resp.output_tokens == 500, "openai output tokens");
+    check(oai_resp.reasoning_tokens == 350, "openai reasoning tokens parsed from completion_tokens_details");
+
+    // Gemini thoughtsTokenCount extraction
+    agent::providers::Gemini gem(cfg);
+    JSON gem_json = JSON::parse(
+        "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}],"
+        "\"usageMetadata\":{\"promptTokenCount\":800,\"candidatesTokenCount\":300,"
+        "\"cachedContentTokenCount\":200,\"thoughtsTokenCount\":150}}");
+    auto gem_resp = gem.parse_response(gem_json);
+    check(gem_resp.input_tokens == 800, "gemini input tokens");
+    check(gem_resp.cached_input_tokens == 200, "gemini cached input tokens");
+    check(gem_resp.output_tokens == 300, "gemini output tokens");
+    check(gem_resp.reasoning_tokens == 150, "gemini thoughtsTokenCount parsed");
+
+    // Anthropic cache_creation_input_tokens extraction
+    agent::providers::Anthropic ant(cfg);
+    JSON ant_json = JSON::parse(
+        "{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],"
+        "\"usage\":{\"input_tokens\":500,\"output_tokens\":100,"
+        "\"cache_read_input_tokens\":300,\"cache_creation_input_tokens\":200}}");
+    auto ant_resp = ant.parse_response(ant_json);
+    check(ant_resp.input_tokens == 1000, "anthropic total input tokens");
+    check(ant_resp.cached_input_tokens == 300, "anthropic cache read tokens");
+    check(ant_resp.cache_creation_input_tokens == 200, "anthropic cache creation tokens");
+
+    // 5. TokenStats & TurnUsage with creation and reasoning
+    agent::TokenStats stats;
+    stats.record(1000, 200, 300, 150, 80);
+    check(stats.context_tokens.load() == 1000, "context_tokens recorded");
+    check(stats.session_cached.load() == 300, "session_cached recorded");
+    check(stats.session_cache_creation.load() == 150, "session_cache_creation recorded");
+    check(stats.session_reasoning.load() == 80, "session_reasoning recorded");
+    check(stats.last_cache_creation.load() == 150, "last_cache_creation recorded");
+    check(stats.last_reasoning.load() == 80, "last_reasoning recorded");
+
+    agent::TurnUsage tu;
+    tu.turn_number = 1;
+    tu.model_requests = 2;
+    tu.tool_calls = 1;
+    tu.input_tokens = 2000;
+    tu.cached_tokens = 800;
+    tu.cache_creation_tokens = 400;
+    tu.output_tokens = 300;
+    tu.reasoning_tokens = 150;
+    tu.elapsed_ms = 5000;
+    std::string turn_fmt = agent::Repl::format_turn_usage(tu);
+    check(turn_fmt.find("800 cached") != std::string::npos, "format_turn_usage includes cached");
+    check(turn_fmt.find("400 created") != std::string::npos, "format_turn_usage includes created");
+    check(turn_fmt.find("800 uncached") != std::string::npos, "format_turn_usage calculates uncached");
+    check(turn_fmt.find("150 reasoning") != std::string::npos, "format_turn_usage includes reasoning");
+
+    // 6. Conversation provider-aware estimation
+    agent::Conversation conv;
+    conv.add_user("void run() { int x = 42; return x * 2; }");
+    size_t oai_est = conv.estimate_tokens("openai");
+    size_t gem_est = conv.estimate_tokens("gemini");
+    check(oai_est > 0, "openai estimate is positive");
+    check(gem_est > 0, "gemini estimate is positive");
+    check(gem_est >= oai_est, "gemini SentencePiece yields >= token count on code");
+}
+
 static void test_trust_grants() {
     std::cout << "trust: standing grants + revoke" << std::endl;
     using namespace agent::tools;
@@ -3809,6 +3946,7 @@ int main() {
     test_confirm_danger_bell();
     test_grep_robustness();
     test_token_usage();
+    test_provider_aware_token_accounting();
     test_trust_grants();
     test_compound_grant_safety();
     test_plan_mode();

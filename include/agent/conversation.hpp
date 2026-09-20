@@ -50,8 +50,8 @@ public:
     const std::vector<Message>& messages() const { return _messages; }
     void clear();
 
-    // Approximate total tokens across all messages (4 chars ≈ 1 token + message overhead):
-    size_t estimate_tokens() const;
+    // Approximate total tokens across all messages (provider-aware tokenization and framing):
+    size_t estimate_tokens(const std::string& provider = "") const;
 
     // Messages to send under an approximate token budget (4 chars ≈ 1 token):
     // keep a leading system message plus the most recent messages that fit.

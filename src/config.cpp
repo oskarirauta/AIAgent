@@ -569,16 +569,63 @@ std::optional<ModelPricing> Config::pricing_for(const std::string& model) const 
     return std::nullopt;
 }
 
-double Config::session_cost(long input_tokens, long output_tokens, long cached_input) const {
+Config::ProviderPricingRules Config::provider_pricing_rules(const std::string& prov, const std::string& mdl) const {
+    ProviderPricingRules rules;
+    std::string p = common::to_lower(common::trim_ws(prov));
+    std::string m = common::to_lower(common::trim_ws(mdl));
+
+    // Check if the model pricing has an explicit override first
+    if ( auto mp = pricing_for(mdl) ) {
+        if ( mp->cache_read_ratio > 0.0 )
+            rules.cache_read_ratio = mp->cache_read_ratio;
+        if ( mp->cache_write_ratio > 0.0 )
+            rules.cache_write_ratio = mp->cache_write_ratio;
+        if ( mp->cache_read_ratio > 0.0 || mp->cache_write_ratio > 0.0 )
+            return rules;
+    }
+
+    // Provider / family defaults:
+    if ( p == "openai" || p == "codex" || m.find("gpt-") != std::string::npos || m.find("o1") != std::string::npos || m.find("o3") != std::string::npos ) {
+        rules.cache_read_ratio = 0.50; // OpenAI prompt caching is 50% of input rate
+        rules.cache_write_ratio = 1.00;
+    } else if ( p == "gemini" || m.find("gemini") != std::string::npos ) {
+        rules.cache_read_ratio = 0.25; // Gemini context caching is 25% of input rate (75% discount)
+        rules.cache_write_ratio = 1.00;
+    } else if ( p == "claude" || p == "anthropic" || m.find("claude") != std::string::npos ) {
+        rules.cache_read_ratio = 0.10; // Anthropic cache read is 10%
+        rules.cache_write_ratio = 1.25; // Anthropic cache creation is 125%
+    } else if ( p == "kimi" || p == "moonshot" || m.find("moonshot") != std::string::npos || m.find("kimi") != std::string::npos ) {
+        rules.cache_read_ratio = 0.20; // Kimi context caching is ~20%
+        rules.cache_write_ratio = 1.00;
+    } else if ( m.find("deepseek") != std::string::npos ) {
+        rules.cache_read_ratio = 0.25; // DeepSeek prompt cache hit is ~25%
+        rules.cache_write_ratio = 1.00;
+    } else if ( p == "ollama" ) {
+        rules.cache_read_ratio = 0.0;
+        rules.cache_write_ratio = 0.0;
+    } else {
+        rules.cache_read_ratio = 0.10;
+        rules.cache_write_ratio = 1.00;
+    }
+
+    return rules;
+}
+
+double Config::session_cost(long input_tokens, long output_tokens, long cached_input, long cache_creation) const {
     auto p = pricing_for(model);
     if ( !p )
         return -1.0;
-    // Cache-read input is billed at ~10% of the normal input rate; the rest of
-    // the input at full price. cached_input is a subset of input_tokens.
-    long full_input = input_tokens - cached_input;
-    if ( full_input < 0 ) full_input = input_tokens;
+
+    auto rules = provider_pricing_rules(provider, model);
+    double read_ratio = ( p->cache_read_ratio > 0.0 ) ? p->cache_read_ratio : rules.cache_read_ratio;
+    double write_ratio = ( p->cache_write_ratio > 0.0 ) ? p->cache_write_ratio : rules.cache_write_ratio;
+
+    long full_input = input_tokens - cached_input - cache_creation;
+    if ( full_input < 0 ) full_input = std::max(0L, input_tokens - cached_input);
+
     return static_cast<double>(full_input) / 1e6 * p->input_per_mtok +
-           static_cast<double>(cached_input) / 1e6 * p->input_per_mtok * 0.1 +
+           static_cast<double>(cached_input) / 1e6 * p->input_per_mtok * read_ratio +
+           static_cast<double>(cache_creation) / 1e6 * p->input_per_mtok * write_ratio +
            static_cast<double>(output_tokens) / 1e6 * p->output_per_mtok;
 }
 
@@ -704,16 +751,28 @@ void Config::load(const std::string& path) {
             catch ( ... ) { logger::warning["config"] << "invalid budget_usd: " << value << std::endl; }
         }
         else if ( key.rfind("price.", 0) == 0 ) {
-            // price.<model>: <input>/<output>  (USD per million tokens)
+            // price.<model>: <input>/<output>[/<cache_read>[/<cache_write>]]  (USD per million tokens, cache ratio 0..1 or absolute USD)
             std::string model_key = trim(key.substr(6));
-            size_t slash = value.find('/');
-            if ( model_key.empty() || slash == std::string::npos ) {
+            std::vector<std::string> parts;
+            {
+                std::istringstream iss(value);
+                std::string item;
+                while ( std::getline(iss, item, '/') )
+                    parts.push_back(trim(item));
+            }
+            if ( model_key.empty() || parts.size() < 2 ) {
                 logger::warning["config"] << "invalid price entry: " << key << ": " << value << std::endl;
             } else {
                 try {
                     ModelPricing p;
-                    p.input_per_mtok = std::stod(trim(value.substr(0, slash)));
-                    p.output_per_mtok = std::stod(trim(value.substr(slash + 1)));
+                    p.input_per_mtok = std::stod(parts[0]);
+                    p.output_per_mtok = std::stod(parts[1]);
+                    if ( parts.size() >= 3 && !parts[2].empty() ) {
+                        p.cache_read_ratio = std::stod(parts[2]);
+                    }
+                    if ( parts.size() >= 4 && !parts[3].empty() ) {
+                        p.cache_write_ratio = std::stod(parts[3]);
+                    }
                     pricing[model_key] = p;
                 } catch ( ... ) {
                     logger::warning["config"] << "invalid price numbers: " << value << std::endl;

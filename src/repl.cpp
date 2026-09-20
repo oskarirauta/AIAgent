@@ -79,13 +79,15 @@ static std::string format_duration(long ms) {
 
 std::string Repl::format_turn_usage(const TurnUsage& tu) {
     if ( tu.model_requests == 0 ) return "";
-    long uncached = std::max<long>(0, tu.input_tokens - tu.cached_tokens);
+    long uncached = std::max<long>(0, tu.input_tokens - tu.cached_tokens - tu.cache_creation_tokens);
     std::string s = "turn #" + std::to_string(tu.turn_number) + " usage:\n";
     s += "  model requests: " + std::to_string(tu.model_requests) + "\n";
     s += "  tool calls:     " + std::to_string(tu.tool_calls) + "\n";
     s += "  input tokens:   " + format_commas(tu.input_tokens) +
-         " (" + format_commas(tu.cached_tokens) + " cached, " +
-         format_commas(uncached) + " uncached)\n";
+         " (" + format_commas(tu.cached_tokens) + " cached";
+    if ( tu.cache_creation_tokens > 0 )
+        s += ", " + format_commas(tu.cache_creation_tokens) + " created";
+    s += ", " + format_commas(uncached) + " uncached)\n";
     s += "  output tokens:  " + format_commas(tu.output_tokens);
     if ( tu.reasoning_tokens > 0 )
         s += " (" + format_commas(tu.reasoning_tokens) + " reasoning)";
@@ -1767,7 +1769,8 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             continue;
 
         long actual_in = resp.input_tokens > 0 ? resp.input_tokens : static_cast<long>(estimated_request_tokens);
-        _stats.record(actual_in, resp.output_tokens, resp.cached_input_tokens);
+        long r_tok = resp.reasoning_tokens > 0 ? resp.reasoning_tokens : static_cast<long>(resp.thinking.size() / 4);
+        _stats.record(actual_in, resp.output_tokens, resp.cached_input_tokens, resp.cache_creation_input_tokens, r_tok);
         ++model_round_trips;
         turn_input_tokens += actual_in;
         turn_output_tokens += resp.output_tokens;
@@ -1775,8 +1778,8 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         cur_turn.model_requests = model_round_trips;
         cur_turn.input_tokens += actual_in;
         cur_turn.cached_tokens += resp.cached_input_tokens;
+        cur_turn.cache_creation_tokens += resp.cache_creation_input_tokens;
         cur_turn.output_tokens += resp.output_tokens;
-        long r_tok = resp.reasoning_tokens > 0 ? resp.reasoning_tokens : static_cast<long>(resp.thinking.size() / 4);
         cur_turn.reasoning_tokens += r_tok;
         if ( model_round_trips == 1 )
             cur_turn.first_request_tokens = actual_in;
@@ -2230,8 +2233,13 @@ std::string Repl::handle_command(const std::string& line) {
         if ( _stats.context_tokens.load() > 0 )
             s += "\n  last turn:     " + std::to_string(_stats.context_tokens.load());
         long last_cached = _stats.last_cached.load();
-        if ( last_cached > 0 )
-            s += "\n  last cached:   " + std::to_string(last_cached);
+        if ( last_cached > 0 ) {
+            int disc = _config.provider_pricing_rules(_config.provider, _config.model).discount_pct();
+            s += "\n  last cached:   " + std::to_string(last_cached) + " (" + std::to_string(disc) + "% discount)";
+        }
+        long last_created = _stats.last_cache_creation.load();
+        if ( last_created > 0 )
+            s += "\n  last created:  " + std::to_string(last_created) + " (cache write)";
         return s;
     }
 
@@ -2297,16 +2305,28 @@ std::string Repl::handle_command(const std::string& line) {
         long in = _stats.session_input.load(std::memory_order_relaxed);
         long out = _stats.session_output.load(std::memory_order_relaxed);
         long cached = _stats.session_cached.load(std::memory_order_relaxed);
+        long creation = _stats.session_cache_creation.load(std::memory_order_relaxed);
+        long reasoning = _stats.session_reasoning.load(std::memory_order_relaxed);
         long total = in + out;
+
+        auto rules = _config.provider_pricing_rules(_config.provider, _config.model);
+        int read_pct = static_cast<int>(rules.cache_read_ratio * 100.0 + 0.5);
+
         std::string s = "session usage (" + _config.provider + " · " + _config.model + "):\n";
         s += "  input:   " + std::to_string(in) + " tokens";
         if ( cached > 0 )
-            s += " (" + std::to_string(cached) + " cached, billed ~10%)";
+            s += " (" + std::to_string(cached) + " cached, billed at " + std::to_string(read_pct) + "%)";
+        if ( creation > 0 )
+            s += " [" + std::to_string(creation) + " written to cache, billed at " +
+                 std::to_string(static_cast<int>(rules.cache_write_ratio * 100.0 + 0.5)) + "%]";
         s += "\n";
-        s += "  output:  " + std::to_string(out) + " tokens\n";
+        s += "  output:  " + std::to_string(out) + " tokens";
+        if ( reasoning > 0 )
+            s += " (" + std::to_string(reasoning) + " reasoning)";
+        s += "\n";
         s += "  total:   " + std::to_string(total) + " tokens\n";
 
-        double cost = _config.session_cost(in, out, cached);
+        double cost = _config.session_cost(in, out, cached, creation);
         if ( cost < 0 ) {
             s += "  cost:    (no price configured for this model — usage only)\n";
             s += "           set one with `price." + _config.model + ": <in>/<out>` (USD per Mtok)";
@@ -2640,7 +2660,8 @@ std::string Repl::handle_command(const std::string& line) {
                "  tool budget:    " + ( _config.tool_call_limit == 0 ? std::string("unlimited") : std::to_string(_config.tool_call_limit) ) + " per turn\n"
                "  last context:   " + std::to_string(_stats.context_tokens.load()) + " tokens\n"
                "  session tokens: " + std::to_string(_stats.session_total()) + " (" +
-                   std::to_string(_stats.session_cached.load()) + " cached)" +
+                   std::to_string(_stats.session_cached.load()) + " cached" +
+                   ( _stats.session_cache_creation.load() > 0 ? ", " + std::to_string(_stats.session_cache_creation.load()) + " created" : "" ) + ")" +
                ( [](const TokenStats& st) {
                    TurnUsage tu = st.get_last_turn();
                    if ( tu.model_requests > 0 ) return "\n\n" + format_turn_usage(tu);

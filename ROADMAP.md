@@ -396,6 +396,14 @@ this project follows: one change, build, tests, try it live, then the next.
   `reasoning_tokens`, `first_request_tokens`, `peak_request_tokens`, and `elapsed_ms`
   per user turn. Exposed in `/status`, `/stats`, and `/context` to pinpoint
   token explosion across multi-call tool loops and quantify prompt cache hits.
+- ✅ **Provider-Aware Token Accounting Refinements** — accurate native cache discounts
+  and pricing rules across providers: OpenAI/Codex (50% cache read discount),
+  Gemini (75% discount), Claude/Anthropic (90% read discount, 125% write/creation rate),
+  Moonshot/Kimi (80% discount), and DeepSeek (75% discount). Native reasoning token
+  breakdowns (`thoughtsTokenCount` on Gemini, `completion_tokens_details.reasoning_tokens`
+  on OpenAI/OpenRouter/Moonshot, thinking blocks on Anthropic) and cache creation tracking
+  across `/cost`, `/context`, `/status`, and `/stats`. Provider-aware token estimation
+  in `Conversation::estimate_tokens`.
 
 ## Backlog (next)
 
@@ -405,9 +413,6 @@ this project follows: one change, build, tests, try it live, then the next.
   in-flight HTTP request safely, preventing partial thinking/tool-use state from
   corrupting the Anthropic conversation structure, appending the steering
   instruction as a valid user turn, and immediately restarting model completion.
-- **Provider-Aware Token Accounting Refinements** — refine model-specific token counts
-  and cache hit ratios across providers (Gemini, Claude, OpenAI, Kimi) to accurately
-  reflect native cache discounts and prompt serialization formats.
 
 ## ROADMAP TO V3
 
