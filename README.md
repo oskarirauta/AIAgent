@@ -69,7 +69,7 @@ tools_enabled: true
 provider.kimi.model: kimi-for-coding
 provider.kimi.thinking: on          # off | on | low | medium | high | xhigh | max
 provider.claude.model: claude-opus-4-8
-provider.codex.model: gpt-5.5
+provider.codex.model: gpt-5.6
 
 # Fallback providers: if a request fails hard (persistent 429/5xx or a network
 # error) before anything streamed, retry the turn on the next one that's logged in.
@@ -233,7 +233,7 @@ only the on-screen echo is trimmed. The preview length is the **preview** row in
 `/settings` (default 8; `0` echoes everything), persisted across sessions as
 `paste_preview`.
 
-If `model` is not set (via config or `-m`), each provider falls back to a sensible default (e.g. `gpt-5.5` for Codex, `claude-opus-4-8`, `kimi-for-coding`, `gpt-4o-mini`, `llama3`, `openrouter/free`).
+If `model` is not set (via config or `-m`), each provider falls back to a sensible default (e.g. `gpt-5.6` for Codex, `claude-opus-4-8`, `kimi-for-coding`, `gpt-4o-mini`, `llama3`, `openrouter/free`).
 
 #### Forgiving model names
 
@@ -328,7 +328,7 @@ The native Codex provider uses your ChatGPT/Codex subscription through the Respo
 ./agent -p codex --login
 ```
 
-Credentials are shared with Codex CLI at `${CODEX_HOME:-~/.codex}/auth.json`, refreshed automatically, and kept mode `0600`. An existing `codex login` is therefore picked up without another prompt. Default model: `gpt-5.5`; use `/model` to select another available Codex model and `/thinking` for reasoning effort.
+Credentials are shared with Codex CLI at `${CODEX_HOME:-~/.codex}/auth.json`, refreshed automatically, and kept mode `0600`. An existing `codex login` is therefore picked up without another prompt. Default model: `gpt-5.6`; use `/model` to select another available Codex model and `/thinking` for reasoning effort.
 
 ## OpenRouter provider
 
@@ -375,7 +375,7 @@ directly is forgiving — see [Forgiving model names](#forgiving-model-names).
 # Pick a provider / model
 ./agent -p kimi
 ./agent -p claude -m claude-opus-4-8
-./agent -p codex -m gpt-5.5
+./agent -p codex -m gpt-5.6
 ./agent -p openrouter                 # free via openrouter/free (export OPENROUTER_API_KEY)
 
 # Single prompt, then exit

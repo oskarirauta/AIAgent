@@ -375,10 +375,11 @@ StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffe
     for ( char ch : chunk )
         if ( ch != '\r' ) buffer += ch;
     StreamChunk out;
+    size_t start = 0;
     size_t pos;
-    while ((pos = buffer.find("\n\n")) != std::string::npos) {
-        std::string frame = buffer.substr(0, pos);
-        buffer.erase(0, pos + 2);
+    while ((pos = buffer.find("\n\n", start)) != std::string::npos) {
+        std::string frame = buffer.substr(start, pos - start);
+        start = pos + 2;
 
         if ( frame.find("event: message_stop") != std::string::npos )
             done = true;
@@ -448,6 +449,8 @@ StreamChunk Anthropic::parse_stream(const std::string& chunk, std::string& buffe
             // ignore malformed chunks
         }
     }
+    if ( start > 0 )
+        buffer.erase(0, start);
     return out;
 }
 

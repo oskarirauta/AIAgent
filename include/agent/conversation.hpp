@@ -63,10 +63,16 @@ public:
 
     // Elide the body of a tool result made stale by a LATER result for the same
     // target (same file path for read/write/edit/outline; same run_command
-    // string), keeping the pairing intact. A pure transform on a message list —
+    // string), keeping the pairing intact. A pure transform on a message list --
     // applied per request after trimming. The newest result for each target is
     // kept in full.
     static std::vector<Message> supersede_stale_tools(std::vector<Message> msgs);
+
+    // Elide large, older tool results even when they were not superseded by the
+    // same target. This keeps the saved transcript intact but prevents old raw
+    // file/search/build output from being replayed on every provider request.
+    // Recent results are kept in full so the model can finish the active task.
+    static std::vector<Message> elide_old_large_tool_results(std::vector<Message> msgs);
 
     void save(const std::string& path) const;
     void load(const std::string& path);

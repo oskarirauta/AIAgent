@@ -43,10 +43,12 @@ void Registry::register_defaults() {
 
 void Registry::add(std::unique_ptr<Tool> tool) {
     _tools[tool->name()] = std::move(tool);
+    _schema_dirty = true;
 }
 
 void Registry::remove(const std::string& name) {
-    _tools.erase(name);
+    if ( _tools.erase(name) > 0 )
+        _schema_dirty = true;
 }
 
 void Registry::set_confirm_callback(confirm_cb_t cb) {
@@ -54,6 +56,9 @@ void Registry::set_confirm_callback(confirm_cb_t cb) {
 }
 
 JSON Registry::schema() const {
+    if ( !_schema_dirty )
+        return _cached_schema;
+
     JSON arr = JSON::Array{};
     for ( const auto& [name, tool] : _tools ) {
         JSON entry = JSON::Object{
@@ -66,7 +71,9 @@ JSON Registry::schema() const {
         };
         arr.append(entry);
     }
-    return arr;
+    _cached_schema = arr;
+    _schema_dirty = false;
+    return _cached_schema;
 }
 
 // ── danger list ─────────────────────────────────────────────────────────

@@ -135,6 +135,32 @@ std::vector<Message> Conversation::supersede_stale_tools(std::vector<Message> ms
     return msgs;
 }
 
+std::vector<Message> Conversation::elide_old_large_tool_results(std::vector<Message> msgs) {
+    constexpr size_t LARGE_TOOL_RESULT_CHARS = 8000;
+    constexpr size_t KEEP_RECENT_TOOL_RESULTS = 8;
+
+    std::vector<size_t> tool_indices;
+    for ( size_t i = 0; i < msgs.size(); ++i )
+        if ( msgs[i].role == Role::TOOL )
+            tool_indices.push_back(i);
+
+    if ( tool_indices.size() <= KEEP_RECENT_TOOL_RESULTS )
+        return msgs;
+
+    size_t keep_from = tool_indices.size() - KEEP_RECENT_TOOL_RESULTS;
+    for ( size_t ti = 0; ti < keep_from; ++ti ) {
+        Message& m = msgs[tool_indices[ti]];
+        if ( m.content.size() <= LARGE_TOOL_RESULT_CHARS )
+            continue;
+        size_t lines = static_cast<size_t>(std::count(m.content.begin(), m.content.end(), '\n')) + 1;
+        std::string tool = m.name.value_or("tool");
+        m.content = "[older large tool result elided: " + tool + ", " +
+                    std::to_string(m.content.size()) + " bytes, " +
+                    std::to_string(lines) + " lines; re-run the tool if you need it again]";
+    }
+    return msgs;
+}
+
 std::vector<Message> Conversation::within_token_budget(size_t max_tokens) const {
     if ( max_tokens == 0 || _messages.empty()) {
         _trim_start = 0;

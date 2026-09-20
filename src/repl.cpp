@@ -1451,6 +1451,11 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     bool showing_thinking = false;
     size_t tools_this_turn = 0;                        // per-turn tool-call budget counter
     size_t next_tool_check = _config.tool_call_limit;  // ask again at each multiple
+    size_t model_round_trips = 0;                      // model decisions in this user turn
+    long turn_input_tokens = 0;
+    long turn_output_tokens = 0;
+    long next_input_notice = 100000;                   // conservative visibility notices
+    long next_input_confirm = 150000;                  // ask before continuing expensive tool loops
     size_t failover_idx = 0;                            // next fallback provider to try this turn
     std::map<std::string, int> repeated_tools;
     std::mutex repeated_tools_mx;
@@ -1505,6 +1510,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         bool produced = false;
         bool failed_over = false;
         bool reauthed = false; // one silent credential refresh per request on a 401
+        size_t estimated_request_tokens = 0;
         for ( int attempt = 0; ; ++attempt ) {
             try {
                 if ( can_stream ) {
@@ -1512,11 +1518,12 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                     _provider->prepare_stream_request(request); // e.g. stream_options.include_usage
                     _last_request = request.dump(); // for /raw
                     std::string body = request.dump_minified();
+                    estimated_request_tokens = body.size() / 4;
                     std::string buffer;
                     bool done = false;
                     _provider->stream_reset();
 
-                    _client.post_stream(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body,
+                    _client.post_stream(_provider->stream_endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body,
                         [&](const std::string& chunk) {
                             logger::vverbose["http"] << "STREAM chunk\n" << chunk << std::endl;
                             providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
@@ -1567,6 +1574,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                 } else {
                     _last_request = request.dump(); // for /raw
                     std::string body = request.dump_minified();
+                    estimated_request_tokens = body.size() / 4;
                     std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body, abort_flag);
                     if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
                         _conversation.undo_last();
@@ -1640,6 +1648,19 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
             continue;
 
         _stats.record(resp.input_tokens, resp.output_tokens, resp.cached_input_tokens);
+        ++model_round_trips;
+        turn_input_tokens += resp.input_tokens > 0 ? resp.input_tokens : static_cast<long>(estimated_request_tokens);
+        turn_output_tokens += resp.output_tokens;
+        if ( _progress_cb && ( model_round_trips > 1 || turn_input_tokens >= next_input_notice )) {
+            _progress_cb("turn: " + std::to_string(model_round_trips) + " model request" +
+                         ( model_round_trips == 1 ? "" : "s" ) + " · " +
+                         std::to_string(tools_this_turn) + " tool call" +
+                         ( tools_this_turn == 1 ? "" : "s" ) + " · ~" +
+                         Config::format_tokens(static_cast<size_t>(std::max<long>(0, turn_input_tokens))) +
+                         " input");
+        }
+        while ( turn_input_tokens >= next_input_notice )
+            next_input_notice *= 2;
 
         if ( !resp.success )
             throws << "provider response error: " << resp.message << std::endl;
@@ -1658,6 +1679,44 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         // calls) — sending it back next request makes some providers return 400.
         if ( !normalized.empty() || !assistant_calls.empty())
             _conversation.add_assistant(normalized, assistant_calls, resp.thinking_blocks);
+
+        if ( !resp.tool_calls.empty() && stream_cb ) {
+            // Show the assistant's pre-tool preface before the ⚙ notices. In the
+            // streaming path it was already emitted, but may still be buffered as a
+            // partial line; force a display-only boundary. In the non-streaming
+            // fallback path, emit the preface now because intermediate tool-call
+            // turns are otherwise not returned to the caller.
+            if ( can_stream ) {
+                if ( showing_thinking ) {
+                    stream_cb("\n\x02\n\n");
+                    showing_thinking = false;
+                }
+                if ( !normalized.empty() && normalized.back() != '\n' )
+                    stream_cb("\n");
+            } else if ( !normalized.empty() ) {
+                stream_cb(normalized);
+                if ( normalized.back() != '\n' )
+                    stream_cb("\n");
+            }
+        }
+
+        if ( !resp.tool_calls.empty() && turn_input_tokens >= next_input_confirm &&
+             !( abort_flag && abort_flag->load(std::memory_order_relaxed))) {
+            bool go = _registry.ask_continue(
+                "this turn has used about " +
+                Config::format_tokens(static_cast<size_t>(std::max<long>(0, turn_input_tokens))) +
+                " input tokens across " + std::to_string(model_round_trips) +
+                " model request" + ( model_round_trips == 1 ? "" : "s" ) +
+                " and is about to run " + std::to_string(resp.tool_calls.size()) +
+                " more tool call" + ( resp.tool_calls.size() == 1 ? "" : "s" ) +
+                " — continue, or stop here and send a follow-up message?");
+            if ( !go )
+                return "(stopped after ~" +
+                       Config::format_tokens(static_cast<size_t>(std::max<long>(0, turn_input_tokens))) +
+                       " input tokens this turn — the work so far is kept; send a message to continue)";
+            while ( turn_input_tokens >= next_input_confirm )
+                next_input_confirm += 150000;
+        }
 
         if ( resp.tool_calls.empty()) {
             // Warn when the reply was cut off by the output-token cap (rather than

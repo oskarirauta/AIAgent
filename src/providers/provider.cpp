@@ -8,6 +8,7 @@
 #include "agent/providers/kimi.hpp"
 #include "agent/providers/claude.hpp"
 #include "agent/providers/codex.hpp"
+#include "agent/providers/gemini.hpp"
 #include "throws.hpp"
 
 namespace agent::providers {
@@ -30,6 +31,8 @@ std::unique_ptr<Provider> create(const Config& cfg) {
         provider = std::make_unique<Claude>(cfg);
     else if ( cfg.provider == "codex" )
         provider = std::make_unique<Codex>(cfg);
+    else if ( cfg.provider == "gemini" )
+        provider = std::make_unique<Gemini>(cfg);
     else {
         throws << "unsupported provider: " << cfg.provider << std::endl;
         return nullptr;

@@ -186,12 +186,13 @@ StreamChunk OpenAI::parse_stream(const std::string& chunk, std::string& buffer, 
     for ( char ch : chunk )
         if ( ch != '\r' ) buffer += ch;
     StreamChunk out;
+    size_t start = 0;
     size_t pos;
-    while ((pos = buffer.find("\n\n")) != std::string::npos) {
-        std::string frame = buffer.substr(0, pos);
-        buffer.erase(0, pos + 2);
+    while ((pos = buffer.find("\n\n", start)) != std::string::npos) {
+        std::string frame = buffer.substr(start, pos - start);
+        start = pos + 2;
 
-        // SSE data line — the space after "data:" is optional (Kimi omits it on
+        // SSE data line -- the space after "data:" is optional (Kimi omits it on
         // chunks but includes it on [DONE]).
         size_t data_pos = frame.find("data:");
         if ( data_pos == std::string::npos )
@@ -261,6 +262,8 @@ StreamChunk OpenAI::parse_stream(const std::string& chunk, std::string& buffer, 
             // ignore malformed chunks
         }
     }
+    if ( start > 0 )
+        buffer.erase(0, start);
     return out;
 }
 

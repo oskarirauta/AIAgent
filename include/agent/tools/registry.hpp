@@ -5,6 +5,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include "json.hpp"
 #include "agent/tools/tool.hpp"
 
 namespace agent::tools {
@@ -98,6 +99,8 @@ public:
 
 private:
     std::map<std::string, std::unique_ptr<Tool>> _tools;
+    mutable bool _schema_dirty = true;
+    mutable JSON _cached_schema;
     confirm_cb_t _confirm_cb;
     activity_cb_t _activity_cb;
     pre_run_cb_t _pre_run_cb;

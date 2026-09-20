@@ -144,9 +144,10 @@ std::string Config::default_path() {
 }
 
 std::string Config::default_model_for(const std::string& provider) {
-    if ( provider == "codex" ) return "gpt-5.5";
+    if ( provider == "codex" ) return "gpt-5.6";
     if ( provider == "claude" ) return "claude-opus-4-8";
     if ( provider == "anthropic" ) return "claude-opus-4-8";
+    if ( provider == "gemini" ) return "gemini-3.6-flash";
     if ( provider == "kimi" ) return "kimi-for-coding";     // managed:kimi-code / "K2.7 Code"
     if ( provider == "moonshot" ) return "kimi-k2-0905-preview";
     if ( provider == "openrouter" ) return "openrouter/free"; // auto-routes to an available free model; -m for a specific one
@@ -188,6 +189,10 @@ const std::vector<std::string>& Config::known_models_for(const std::string& prov
         "kimi-for-coding",
     };
     static const std::vector<std::string> openai_models = {
+        "gpt-5.6",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
         "gpt-4o",
         "gpt-4o-mini",
         "gpt-4.1",
@@ -197,10 +202,25 @@ const std::vector<std::string>& Config::known_models_for(const std::string& prov
         "gpt-4-turbo",
         "gpt-3.5-turbo",
     };
-    // ChatGPT-backed Codex exposes an account-scoped catalogue.  Keep only the
-    // model currently advertised by the compatible endpoint in the picker;
-    // users can still pass any future/entitled slug explicitly with -m.
-    static const std::vector<std::string> codex_models = { "gpt-5.5" };
+    // ChatGPT-backed Codex exposes an account-scoped catalogue. Keep the known
+    // ChatGPT/Codex family in the picker, best/newest first; users can still pass
+    // any future/entitled slug explicitly with -m.
+    static const std::vector<std::string> codex_models = {
+        "gpt-5.6",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+    };
+    static const std::vector<std::string> gemini_models = {
+        "gemini-3.6-flash",
+        "gemini-flash-latest",
+        "gemini-3.1-pro-preview",
+        "gemini-pro-latest",
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+    };
     static const std::vector<std::string> openrouter_models = {
         "openrouter/auto",
         "openrouter/free",
@@ -212,6 +232,7 @@ const std::vector<std::string>& Config::known_models_for(const std::string& prov
     if ( provider == "kimi" ) return kimi_models;
     if ( provider == "openai" ) return openai_models;
     if ( provider == "codex" ) return codex_models;
+    if ( provider == "gemini" ) return gemini_models;
     if ( provider == "openrouter" ) return openrouter_models;
     return none; // ollama and anything custom: user-defined namespace
 }
@@ -243,6 +264,10 @@ static const ModelAlias model_aliases[] = {
     // OpenRouter
     { "auto",    "openrouter/auto" },
     { "free",    "openrouter/free" },
+    // Google Gemini
+    { "gemini",  "gemini-3.6-flash" },
+    { "flash",   "gemini-3.6-flash" },
+    { "pro",     "gemini-3.1-pro" },
 };
 
 // Normalise for comparison: lower-case, and drop the separators people vary on
@@ -488,6 +513,9 @@ std::string Config::default_system_prompt_for(const std::string& provider) {
         // identity block, so this second block only sets task context.
         return "You are Claude Code, Anthropic's official CLI, assisting with "
                "software engineering tasks on a Linux system. Be concise and precise.";
+    if ( provider == "gemini" )
+        return "You are Gemini, Google's coding agent, assisting with software engineering "
+               "tasks on a Linux system. Be concise and precise.";
     return "You are a helpful Linux CLI assistant.";
 }
 
@@ -497,6 +525,10 @@ size_t Config::context_window_for(const std::string& model) {
     auto has = [&](const char* p) { return m.find(p) != std::string::npos; };
     // Explicit 1M-context variants first.
     if ( wants_1m ) return 1000000;
+    if ( has("gemini-1.5-pro") || has("gemini-2.5-pro") || has("gemini-3.1-pro") || has("gemini-pro") )
+        return 2000000;
+    if ( has("gemini") )
+        return 1000000;
     if ( has("claude-opus-5") || has("claude-sonnet-5") || has("claude-fable-5") || has("claude-mythos-5") )
         return 1000000;
     if ( has("claude") || has("opus") || has("sonnet") || has("haiku") || has("fable") )

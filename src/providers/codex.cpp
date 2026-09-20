@@ -16,6 +16,17 @@ long json_long(const JSON& v) {
     return 0;
 }
 
+// Normalise the user-facing thinking vocabulary to the levels accepted by the
+// Codex Responses endpoint. Older Chat Completions-style `high` is not enough
+// for ChatGPT/Codex models that expose a stronger effort tier.
+static std::string codex_reasoning_effort(std::string v) {
+    for ( char& c : v ) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if ( v == "on" || v == "true" || v == "enabled" || v == "1" || v.empty()) return "medium";
+    if ( v == "max" ) return "xhigh";
+    if ( v == "low" || v == "medium" || v == "high" || v == "xhigh" ) return v;
+    return "medium";
+}
+
 JSON responses_tool(const JSON& tool) {
     if ( tool != JSON::TYPE::OBJECT || !tool.contains("function")) return tool;
     JSON fn = tool["function"];
@@ -198,8 +209,7 @@ void Codex::apply_provider_options(const JSON& options) {
         if ( v == "off" || v == "false" || v == "disabled" || v == "0" ) _reasoning_enabled = false;
         else {
             _reasoning_enabled = true;
-            _reasoning_effort = (v == "on" || v == "true" || v.empty()) ? "medium" : v;
-            if ( _reasoning_effort == "max" ) _reasoning_effort = "xhigh";
+            _reasoning_effort = codex_reasoning_effort(v);
         }
     }
 }
@@ -213,9 +223,11 @@ void Codex::stream_reset() {
 StreamChunk Codex::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
     for ( char c : chunk ) if ( c != '\r' ) buffer += c;
     StreamChunk out;
+    size_t start = 0;
     size_t pos;
-    while ((pos = buffer.find("\n\n")) != std::string::npos ) {
-        std::string frame = buffer.substr(0, pos); buffer.erase(0, pos + 2);
+    while ((pos = buffer.find("\n\n", start)) != std::string::npos ) {
+        std::string frame = buffer.substr(start, pos - start);
+        start = pos + 2;
         size_t data_pos = frame.find("data:");
         if ( data_pos == std::string::npos ) continue;
         std::string data = frame.substr(data_pos + 5);
@@ -251,6 +263,8 @@ StreamChunk Codex::parse_stream(const std::string& chunk, std::string& buffer, b
             else if ( type == "response.failed" ) done = true;
         } catch ( ... ) {}
     }
+    if ( start > 0 )
+        buffer.erase(0, start);
     return out;
 }
 

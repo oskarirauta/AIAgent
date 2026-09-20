@@ -51,6 +51,7 @@ public:
 
     virtual std::string name() const = 0;
     virtual std::string endpoint() const = 0;
+    virtual std::string stream_endpoint() const { return endpoint(); }
 
     // Best-effort list of models the provider offers, for the /model picker.
     // Empty on failure or when the provider has no listing endpoint.
@@ -130,6 +131,7 @@ protected:
         auto msgs = conv.within_token_budget(_config.context_budget());
         if ( _config.supersede_tools )
             msgs = Conversation::supersede_stale_tools(std::move(msgs));
+        msgs = Conversation::elide_old_large_tool_results(std::move(msgs));
         return msgs;
     }
 

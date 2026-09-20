@@ -14,9 +14,9 @@ namespace agent::tools {
 
 namespace {
 
-constexpr size_t MAX_MATCHES     = 200;
-constexpr size_t MAX_LINE_CHARS  = 500;
-constexpr size_t MAX_TOTAL_BYTES = 100000;
+constexpr size_t MAX_MATCHES     = 50;
+constexpr size_t MAX_LINE_CHARS  = 300;
+constexpr size_t MAX_TOTAL_BYTES = 20000;
 constexpr size_t MAX_REGEX_CHARS = 8192;   // cap regex subject to bound backtracking
 
 bool looks_binary(const std::string& data) {

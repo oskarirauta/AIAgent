@@ -156,6 +156,16 @@ static std::vector<std::string> word_wrap(const std::string& line, int width) {
     return out;
 }
 
+static std::string thinking_style_for_theme(const Theme& theme) {
+    // Reasoning should be quieter than the final answer, but more legible than
+    // generic dim chrome/tool notices. Pick a slightly lighter neutral tone for
+    // the built-ins; custom themes can still override `dim`/roles normally.
+    if ( theme.name == "light" ) return "\033[38;5;240m";
+    if ( theme.name == "cool" )  return "\033[38;5;110m";
+    if ( theme.name == "rose" )  return "\033[38;5;146m";
+    return "\033[38;5;248m";
+}
+
 // ── construction / teardown ─────────────────────────────────────────────
 
 InlineRepl::InlineRepl(callback_t cb, Config& config, const Conversation& conversation, const TokenStats& stats)
@@ -345,7 +355,7 @@ int InlineRepl::emit_styled_line(const std::string& line) {
         if ( _reply_first_line ) {
             _reply_first_line = false;
             if ( _reply_dim )
-                return _theme.dim + "💭 " + Theme::reset;
+                return thinking_style_for_theme(_theme) + "💭 " + Theme::reset;
             return _theme.ai + "● " + Theme::reset;
         }
         return "  ";
@@ -358,14 +368,16 @@ int InlineRepl::emit_styled_line(const std::string& line) {
         return std::max(1, ( cells + cols - 1 ) / cols);
     };
 
-    // Thinking region: dim, no syntax highlighting, word-wrapped like prose.
+    // Thinking region: slightly brighter than generic dim/tool notices, no syntax
+    // highlighting, word-wrapped like prose so it remains legible between tools.
     if ( _reply_dim ) {
         int width = term_cols() - 4;
         if ( width < 8 ) width = 8;
         std::vector<std::string> segs = word_wrap(line, width);
         int rows = 0;
+        std::string think = thinking_style_for_theme(_theme);
         for ( size_t i = 0; i < segs.size(); ++i ) {
-            wr(next_prefix() + _theme.dim + segs[i] + Theme::reset);
+            wr(next_prefix() + think + segs[i] + Theme::reset);
             if ( i + 1 < segs.size())
                 wr("\n");
             rows += wrapped_rows(segs[i]);
@@ -632,6 +644,7 @@ void InlineRepl::begin_reply() {
     _reply_first_line = true;
     _reply_dim = false;
     _notice_gap_done = false;
+    _last_output_was_notice = false;
     _think_preview.clear();
     _stream_in_think = false;
 }
@@ -665,6 +678,11 @@ void InlineRepl::emit_reply_line(const std::string& raw_line) {
         _reply_has_content = true;
         spacer_lines = 1;
     } else {
+        if ( _last_output_was_notice ) {
+            wr("\n");             // single separator between ⚙ group and next assistant text
+            ++spacer_lines;
+            _last_output_was_notice = false;
+        }
         for ( int i = 0; i < _pending_blanks; ++i ) {
             wr("\n");
             ++spacer_lines;
@@ -1022,11 +1040,14 @@ void InlineRepl::drain_notices() {
         return;
     erase_live();
     // Every speaker block is preceded by exactly one blank line — including a
-    // tool-notice (⚙) group that starts before any reply text has been printed,
-    // which otherwise sat flush under the user's echoed prompt.
-    if ( _turn_running && !_reply_has_content && !_notice_gap_done ) {
+    // tool-notice (⚙) group that starts before any reply text has been printed.
+    // If assistant text just printed, insert the same single separator before
+    // the tool group; repeated notice batches stay visually grouped.
+    if ( _turn_running && !_notice_gap_done ) {
         wr("\n");
         _notice_gap_done = true;
+    } else if ( _turn_running && _reply_has_content && !_last_output_was_notice ) {
+        wr("\n");
     }
     bool ring = false;
     for ( const auto& n : lines ) {
@@ -1038,6 +1059,7 @@ void InlineRepl::drain_notices() {
             wr(_theme.dim + text + Theme::reset + "\r\n");
         }
     }
+    _last_output_was_notice = true;
     if ( ring && bell_level(_config.bell) >= 3 ) // a notice (workflow done) is "attention"
         wr("\a"); // bell: the user may be looking elsewhere
     draw_live();
@@ -2967,50 +2989,82 @@ void InlineRepl::render_context() {
     erase_live();
 
     auto fmt = [](size_t n) -> std::string {
-        if ( n >= 1000 ) {
-            std::string s = std::to_string(n / 1000) + "." + std::to_string((n % 1000) / 100) + "k";
-            return s;
-        }
+        if ( n >= 1000 )
+            return std::to_string(n / 1000) + "." + std::to_string((n % 1000) / 100) + "k";
         return std::to_string(n);
     };
+    auto estimate = [](const std::vector<Message>& msgs) {
+        struct Totals { size_t system = 0, messages = 0, tool_results = 0, tool_calls = 0; size_t elided = 0; } t;
+        for ( const auto& m : msgs ) {
+            size_t content = m.content.size() / 4;
+            if ( m.role == Role::SYSTEM ) t.system += content;
+            else if ( m.role == Role::TOOL ) {
+                t.tool_results += content;
+                if ( m.content.find("tool result elided") != std::string::npos ||
+                     m.content.find("superseded by") != std::string::npos )
+                    ++t.elided;
+            } else t.messages += content;
+            for ( const auto& tc : m.tool_calls )
+                t.tool_calls += ( tc.arguments.size() + tc.name.size()) / 4;
+        }
+        return t;
+    };
+    auto sum = [](const auto& t) { return t.system + t.messages + t.tool_results + t.tool_calls; };
+    auto raw_tool_bytes = [](const std::vector<Message>& msgs) {
+        size_t n = 0;
+        for ( const auto& m : msgs ) if ( m.role == Role::TOOL ) n += m.content.size();
+        return n;
+    };
 
-    // Rough estimate: 4 chars ≈ 1 token (matches the context-budget trimming).
-    size_t sys = 0, msg = 0;
-    for ( const auto& m : _conversation.messages()) {
-        size_t t = m.content.size() / 4;
-        for ( const auto& tc : m.tool_calls )
-            t += ( tc.arguments.size() + tc.name.size()) / 4;
-        if ( m.role == Role::SYSTEM ) sys += t;
-        else                          msg += t;
-    }
+    std::vector<Message> saved = _conversation.messages();
+    std::vector<Message> effective = saved;
+    if ( _config.supersede_tools )
+        effective = Conversation::supersede_stale_tools(std::move(effective));
+    effective = Conversation::elide_old_large_tool_results(std::move(effective));
+
+    auto raw = estimate(saved);
+    auto eff = estimate(effective);
+    size_t raw_total = sum(raw), eff_total = sum(eff);
+    size_t raw_bytes = raw_tool_bytes(saved), eff_bytes = raw_tool_bytes(effective);
+    size_t saved_bytes = raw_bytes > eff_bytes ? raw_bytes - eff_bytes : 0;
     size_t mem = load_memories(_config.home_dir, _config.provider).size() / 4;
-    size_t total = sys + msg;
     long actual = _stats.context_tokens.load(std::memory_order_relaxed);
 
-    auto pct = [total](size_t n) -> std::string {
-        if ( total == 0 ) return "0%";
-        return std::to_string(static_cast<int>((100.0 * n / total) + 0.5)) + "%";
+    auto pct = [eff_total](size_t n) -> std::string {
+        if ( eff_total == 0 ) return "0%";
+        return std::to_string(static_cast<int>((100.0 * n / eff_total) + 0.5)) + "%";
     };
 
     wr("\n" + _theme.command + "⚙ context" + Theme::reset + "\n\n");
 
-    // Composition bar: system segment then conversation segment.
     const int barw = 46;
-    int sysc = ( total > 0 ) ? static_cast<int>(( double(sys) / total ) * barw + 0.5) : 0;
+    int sysc = ( eff_total > 0 ) ? static_cast<int>(( double(eff.system) / eff_total ) * barw + 0.5) : 0;
     if ( sysc > barw ) sysc = barw;
     int msgc = barw - sysc;
     std::string blocks_sys, blocks_msg;
     for ( int i = 0; i < sysc; ++i ) blocks_sys += "█";
     for ( int i = 0; i < msgc; ++i ) blocks_msg += "█";
     wr("  " + _theme.ai + blocks_sys + _theme.command + blocks_msg + Theme::reset +
-       "  " + _theme.dim + "~" + fmt(total) + " tokens" + Theme::reset + "\n\n");
+       "  " + _theme.dim + "~" + fmt(eff_total) + " effective tokens" + Theme::reset + "\n\n");
 
-    wr("  " + _theme.ai + "●" + Theme::reset + " system prompt   " + fmt(sys) + "  " +
-       _theme.dim + "(" + pct(sys) + ")" + Theme::reset + "\n");
-    wr("  " + _theme.command + "●" + Theme::reset + " conversation    " + fmt(msg) + "  " +
-       _theme.dim + "(" + pct(msg) + ")" + Theme::reset + "\n");
+    wr("  " + _theme.ai + "●" + Theme::reset + " system prompt   " + fmt(eff.system) + "  " +
+       _theme.dim + "(" + pct(eff.system) + ")" + Theme::reset + "\n");
+    wr("  " + _theme.command + "●" + Theme::reset + " messages        " + fmt(eff.messages) + "  " +
+       _theme.dim + "(" + pct(eff.messages) + ")" + Theme::reset + "\n");
+    wr("  " + _theme.command + "●" + Theme::reset + " tool results    " + fmt(eff.tool_results) + "  " +
+       _theme.dim + "(" + pct(eff.tool_results) + ")" + Theme::reset + "\n");
+    if ( eff.tool_calls > 0 )
+        wr("    " + _theme.dim + "└ tool calls    " + fmt(eff.tool_calls) + Theme::reset + "\n");
     if ( mem > 0 )
         wr("    " + _theme.dim + "└ memories      " + fmt(mem) + Theme::reset + "\n");
+
+    if ( raw_total != eff_total || eff.elided > 0 ) {
+        wr("\n  " + _theme.dim + "effective request: " + fmt(eff_total) + " tokens; saved transcript: " +
+           fmt(raw_total) + " tokens" + Theme::reset + "\n");
+        if ( eff.elided > 0 || saved_bytes > 0 )
+            wr("  " + _theme.dim + "elided tool results: " + std::to_string(eff.elided) +
+               " · ~" + fmt(saved_bytes / 4) + " tokens avoided" + Theme::reset + "\n");
+    }
 
     std::string limit_str;
     if ( _config.context_auto ) {

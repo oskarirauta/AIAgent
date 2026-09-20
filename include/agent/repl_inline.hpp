@@ -282,6 +282,7 @@ private:
     int  _pending_blanks = 0;
     bool _reply_has_content = false;
     bool _notice_gap_done = false;  // blank line already printed before this turn's ⚙ group
+    bool _last_output_was_notice = false; // previous transcript block was a ⚙ notice group
     bool _reply_first_line = false; // the reply's first printed line gets the AI marker
     bool _reply_dim = false;        // inside a streamed "thinking" region (rendered dim, 💭 marker)
 

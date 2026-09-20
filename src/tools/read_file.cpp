@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <filesystem>
 #include "common.hpp"
 #include "agent/text_utils.hpp"
 
@@ -12,9 +13,11 @@ namespace agent::tools {
 
 namespace {
 
-constexpr size_t DEFAULT_LINES   = 2000;    // lines returned when no limit is given
+constexpr size_t DEFAULT_LINES   = 800;     // lines returned when no limit is given
 constexpr size_t MAX_LINE_CHARS  = 2000;    // per-line cap (avoids one huge line flooding context)
-constexpr size_t MAX_TOTAL_BYTES = 200000;  // overall output cap
+constexpr size_t MAX_TOTAL_BYTES = 50000;   // overall output cap (keep tool results cheap to replay)
+constexpr size_t BINARY_SNIFF_BYTES = 8000; // enough for the binary heuristic without loading the file
+constexpr size_t MAX_INPUT_BYTES = 64u * 1024u * 1024u; // explicit safety cap for read_file
 
 // Heuristic binary detection: a NUL byte, or a high share of control bytes.
 bool looks_binary(const std::string& data) {
@@ -40,55 +43,66 @@ long json_long(const JSON& v, long fallback) {
 }
 
 // Read one file and format a line-windowed view (header/footer), bounded by
-// max_bytes. Returns an error/empty note on failure. Shared by single and bulk.
+// max_bytes. Streams line-by-line instead of loading the whole file; shared by
+// single and bulk reads.
 std::string read_file_section(const std::string& path, long offset, long limit, size_t max_bytes) {
+    std::error_code ec;
+    auto sz = std::filesystem::file_size(path, ec);
+    if ( !ec && sz > MAX_INPUT_BYTES )
+        return "error: " + path + " is too large for read_file (" + std::to_string(sz) +
+               " bytes; limit " + std::to_string(MAX_INPUT_BYTES) + ")";
+
     std::ifstream ifd(path, std::ios::in | std::ios::binary);
     if ( !ifd.is_open())
         return std::string("error: cannot open file: ") + path;
 
-    std::stringstream ss;
-    ss << ifd.rdbuf();
-    std::string raw = ss.str();
-    if ( raw.empty())
+    std::string prefix(BINARY_SNIFF_BYTES, '\0');
+    ifd.read(&prefix[0], static_cast<std::streamsize>(prefix.size()));
+    prefix.resize(static_cast<size_t>(ifd.gcount()));
+    if ( prefix.empty())
         return "(empty file)";
-    if ( looks_binary(raw))
-        return "error: " + path + " appears to be a binary file (" +
-               std::to_string(raw.size()) + " bytes); not shown.";
+    if ( looks_binary(prefix))
+        return "error: " + path + " appears to be a binary file" +
+               ( ec ? std::string() : " (" + std::to_string(sz) + " bytes)" ) + "; not shown.";
 
-    std::string content = agent::normalize_text(raw);
-    std::vector<std::string> lines;
-    {
-        std::string line;
-        std::istringstream ls(content);
-        while ( std::getline(ls, line))
-            lines.push_back(line);
-    }
-    long total = static_cast<long>(lines.size());
+    ifd.clear();
+    ifd.seekg(0);
 
     if ( offset < 1 ) offset = 1;
     if ( limit < 1 ) limit = 1;
-    if ( offset > total )
-        return "error: offset " + std::to_string(offset) + " is past the end of the file (" +
-               std::to_string(total) + " lines)";
-
-    long start = offset - 1;
-    long end = std::min<long>(total, start + limit);
+    const long start = offset - 1;
+    const long wanted_end = start + limit;
 
     std::string out;
     bool byte_capped = false;
+    long total = 0;
     long shown_end = start;
-    for ( long i = start; i < end; ++i ) {
-        std::string ln = lines[i];
+    std::string line;
+    while ( std::getline(ifd, line)) {
+        if ( !line.empty() && line.back() == '\r' )
+            line.pop_back();
+        ++total;
+        long idx = total - 1;
+        if ( idx < start || idx >= wanted_end )
+            continue;
+
+        std::string ln = agent::normalize_text(std::move(line));
         if ( ln.size() > MAX_LINE_CHARS )
-            ln = ln.substr(0, MAX_LINE_CHARS) + " …[line truncated]";
-        if ( out.size() + ln.size() + 1 > max_bytes ) {
+            ln = ln.substr(0, MAX_LINE_CHARS) + " ...[line truncated]";
+        if ( out.size() + ln.size() + (out.empty() ? 0 : 1) > max_bytes ) {
             byte_capped = true;
-            break;
+            continue; // keep counting total lines for an accurate footer/header
         }
         if ( !out.empty()) out += "\n";
         out += ln;
-        shown_end = i + 1;
+        shown_end = idx + 1;
     }
+
+    if ( total == 0 )
+        return "(empty file)";
+    if ( offset > total )
+        return "error: offset " + std::to_string(offset) + " is past the end of the file (" +
+               std::to_string(total) + " lines)";
 
     bool partial = ( start > 0 || shown_end < total );
     std::string header;

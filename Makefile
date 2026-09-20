@@ -57,6 +57,8 @@ OBJS:= \
 	objs/kimi_provider.o \
 	objs/claude_oauth.o \
 	objs/claude_provider.o \
+	objs/gemini_oauth.o \
+	objs/gemini_provider.o \
 	objs/tools_registry.o \
 	objs/tools_read_file.o \
 	objs/tools_write_file.o \
@@ -142,6 +144,10 @@ objs/kimi_provider.o: src/providers/kimi.cpp
 objs/claude_oauth.o: src/auth/claude_oauth.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/claude_provider.o: src/providers/claude.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/gemini_oauth.o: src/auth/gemini_oauth.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
+objs/gemini_provider.o: src/providers/gemini.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;
 objs/workflow.o: src/workflow.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<;

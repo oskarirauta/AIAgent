@@ -132,10 +132,12 @@ static void test_openai_request() {
 
 static void test_codex_provider() {
     std::cout << "codex Responses API provider" << std::endl;
-    check(agent::Config::default_model_for("codex") == "gpt-5.5", "codex default model is gpt-5.5");
+    check(agent::Config::default_model_for("codex") == "gpt-5.6", "codex default model is gpt-5.6");
     const auto& codex_models = agent::Config::known_models_for("codex");
-    check(codex_models.size() == 1 && codex_models[0] == "gpt-5.5",
-          "codex model shortlist matches the ChatGPT account list");
+    check(codex_models.size() >= 4 && codex_models[0] == "gpt-5.6" &&
+          codex_models[1] == "gpt-5.5" && codex_models[2] == "gpt-5.4" &&
+          codex_models[3] == "gpt-5.4-mini",
+          "codex model shortlist includes the ChatGPT/Codex family");
 
     agent::Config cfg; cfg.provider = "codex"; cfg.model = "gpt-5.5";
     agent::providers::Codex p(cfg);
@@ -154,6 +156,9 @@ static void test_codex_provider() {
     req = p.build_request(c, schema);
     check(req.contains("reasoning") && req["reasoning"]["effort"].to_string() == "high",
           "Codex reasoning can be enabled explicitly");
+    p.apply_provider_options(JSON::Object{ { "thinking", "max" } });
+    req = p.build_request(c, schema);
+    check(req["reasoning"]["effort"].to_string() == "xhigh", "Codex max effort maps to xhigh");
 
     JSON response = JSON::Object{
         { "status", "completed" },
@@ -1826,6 +1831,26 @@ static void test_tool_supersession() {
     check(a_valid, "elided result keeps its tool_call_id");
 }
 
+static void test_large_tool_result_elision() {
+    std::cout << "large old tool-result elision" << std::endl;
+    using agent::Message; using agent::Role;
+    std::vector<Message> msgs;
+    msgs.push_back(Message(Role::SYSTEM, "s"));
+    std::string large(9000, 'L');
+    for ( int i = 0; i < 10; ++i ) {
+        msgs.push_back(Message(Role::TOOL, large + std::to_string(i), "id" + std::to_string(i), "read_file"));
+    }
+
+    auto out = agent::Conversation::elide_old_large_tool_results(msgs);
+    check(out.size() == msgs.size(), "large-result elision preserves message count");
+    check(out[1].content.find("older large tool result elided") != std::string::npos,
+          "old large tool result is elided");
+    check(out[1].content.find("900") != std::string::npos, "elision marker includes size");
+    check(out[2].content.find("older large tool result elided") != std::string::npos,
+          "second old large result is elided");
+    check(out.back().content.find("LLLL") != std::string::npos, "recent large tool result stays intact");
+}
+
 static void test_trim_hysteresis() {
     std::cout << "cache-stable trimming (hysteresis)" << std::endl;
     agent::Conversation c;
@@ -1957,14 +1982,14 @@ static void test_model_resolution() {
     check(!Config::known_models_for("claude").empty(), "claude has a curated shortlist");
     check(Config::known_models_for("ollama").empty(), "ollama has no curated shortlist");
     check(!Config::known_models_for("codex").empty(), "codex has a curated shortlist");
-    check(Config::resolve_model("codex", "5.4").model == "5.4", "unlisted Codex model remains explicit");
-    // The alias table is global: "mini"/"gpt" expand to gpt-4o names that Codex
-    // does not offer. An alias must never bury the user's own input, so an
-    // expansion that matches nothing falls back to what was typed.
-    check(Config::resolve_model("codex", "mini").model == "mini",
-          "an alias that misses falls back to the typed name");
-    check(Config::resolve_model("codex", "gpt").model == "gpt-5.5",
-          "a generic alias still lands on this provider's model");
+    check(Config::resolve_model("codex", "5.7").model == "5.7", "unlisted Codex model remains explicit");
+    // The alias table is global: "mini" first expands to gpt-4o-mini, which Codex
+    // does not offer; falling back to the typed family shorthand should then land
+    // on Codex's own mini model.
+    check(Config::resolve_model("codex", "mini").model == "gpt-5.4-mini",
+          "a generic mini shorthand lands on Codex's mini model");
+    check(Config::resolve_model("codex", "gpt").model == "gpt-5.6",
+          "a generic alias still lands on this provider's newest model");
     check(Config::resolve_model("openai", "mini").model == "gpt-4o-mini",
           "the alias still wins where it does apply");
 
@@ -3362,6 +3387,7 @@ int main() {
     test_context_budget();
     test_trim_role_invariants();
     test_tool_supersession();
+    test_large_tool_result_elision();
     test_trim_hysteresis();
     test_settings_persistence();
     test_context_auto();
