@@ -672,10 +672,14 @@ void InlineRepl::emit_reply_line(const std::string& raw_line) {
         return;
     }
 
+    if ( _last_output_was_notice )
+        _pending_blanks = 0; // notice separators are handled explicitly; avoid stacked blank gaps
+
     int spacer_lines = 0;
     if ( !_reply_has_content ) {
         wr("\n");                 // the single blank line before the reply
         _reply_has_content = true;
+        _last_output_was_notice = false;
         spacer_lines = 1;
     } else {
         if ( _last_output_was_notice ) {
@@ -759,12 +763,13 @@ std::vector<std::string> InlineRepl::think_preview_lines(int cols) const {
     int total = static_cast<int>(wrapped.size());
     int first = ( total > cap ) ? ( total - cap ) : 0;
 
-    std::string header = _theme.dim + "💭 thinking";
+    std::string think = thinking_style_for_theme(_theme);
+    std::string header = think + "💭 thinking";
     if ( first > 0 ) header += " (+" + std::to_string(first) + " earlier)";
     header += "…" + std::string(Theme::reset);
     out.push_back(header);
     for ( int i = first; i < total; ++i )
-        out.push_back("  " + _theme.dim + wrapped[i] + Theme::reset);
+        out.push_back("  " + think + wrapped[i] + Theme::reset);
     return out;
 }
 
