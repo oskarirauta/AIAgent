@@ -382,6 +382,20 @@ this project follows: one change, build, tests, try it live, then the next.
   lock), and `/session <name>` switches mid-run (saving the outgoing one, showing
   the project's sessions with sizes). The status line marks a named session, and
   `/sessions` lists them per project.
+- ✅ **Tool Profiles & Dynamic Tool Selection** — switch between `full`, `code`,
+  `research`, `review`, and `minimal` profiles via `/profile [name]` or
+  `/tools profile <name>` to restrict active tools and shrink schema token
+  overhead sent on every API turn. Entire tool groups (`core`, `web`, `workflow`,
+  `skills`, `mcp`) can also be toggled with `/tools group <name> <on|off>`.
+- ✅ **MCP Server Dynamic Toggle & Management** — `/mcp enable <server>` and
+  `/mcp disable <server>` toggle MCP servers on the fly without restarting or
+  editing config files. Bare `/mcp` opens an interactive menu with quick keys
+  (`e` enable, `d` disable, `r` refresh).
+- ✅ **Per-Turn Token Diagnostics & Profiling** — track `model_requests`, `tool_calls`,
+  `input_tokens`, `cached_tokens`, `uncached_tokens`, `output_tokens`,
+  `reasoning_tokens`, `first_request_tokens`, `peak_request_tokens`, and `elapsed_ms`
+  per user turn. Exposed in `/status`, `/stats`, and `/context` to pinpoint
+  token explosion across multi-call tool loops and quantify prompt cache hits.
 
 ## Backlog (next)
 
@@ -391,12 +405,9 @@ this project follows: one change, build, tests, try it live, then the next.
   in-flight HTTP request safely, preventing partial thinking/tool-use state from
   corrupting the Anthropic conversation structure, appending the steering
   instruction as a valid user turn, and immediately restarting model completion.
-- **Tool Profiles & Dynamic Tool Loading** — dynamically restrict or group tool schemas
-  by task type (e.g. read-only audit, code edits, shell execution, research) to reduce
-  tool schema overhead and input tokens on turns that do not need the full tool catalogue.
-- **Provider-Aware Token Accounting** — refine model-specific token counts and cache
-  hit ratios across providers (Gemini, Claude, OpenAI, Kimi) to accurately reflect
-  native cache discounts and prompt serialization formats.
+- **Provider-Aware Token Accounting Refinements** — refine model-specific token counts
+  and cache hit ratios across providers (Gemini, Claude, OpenAI, Kimi) to accurately
+  reflect native cache discounts and prompt serialization formats.
 
 ## ROADMAP TO V3
 

@@ -135,9 +135,24 @@ Whether to stream the model's reasoning live. `collapse` streams it then hides i
 
 ## Tools & safety
 
-### `/tools <confirm|auto|insecure>`
+### `/profile [name]`
 
-confirm: ask before mutating tools (read-only run freely). auto: run ordinary tools without asking; danger-listed commands still warn. insecure: run everything without asking. Not persisted — resets each session.
+Switches the active tool profile to restrict active tools and reduce schema tokens sent on every turn. Bare `/profile` opens an interactive selection menu. Available profiles:
+- `full`: all registered tools active (default).
+- `code`: disables web and workflow tools, keeping core filesystem and execution tools.
+- `research`: read-only exploration with web search (blocks mutating tools).
+- `review`: read-only audit (blocks mutating tools, web search, workflows, and MCP tools).
+- `minimal`: read_file, edit_file, and run_command only (~1.1k schema tokens).
+
+### `/tools [confirm|auto|insecure|list|group <name> [on|off]|profile <name>]`
+
+Controls tool execution safety, groups, and profiling:
+- `confirm`: ask before mutating tools (read-only run freely).
+- `auto`: run ordinary tools without asking; danger-listed commands still warn.
+- `insecure`: run everything without asking.
+- `list`: lists all registered tools, their group, status, and estimated schema token cost. Bare `/tools list` opens an interactive detail menu.
+- `group <name> <on|off>`: toggles an entire tool group (`core`, `web`, `workflow`, `skills`, `mcp`).
+- `profile <name>`: shortcut to switch active profile.
 
 ### `/plan [on|off]`
 
@@ -155,9 +170,12 @@ Lists the tool-safety state: mode, any active turn grant, config safe/danger lis
 
 Lists files created or modified this session. `/changes diff <path>` shows the diff vs the session-start version; `/changes revert <path|all>` restores it.
 
-### `/mcp [refresh|prompt <server> <name> [k=v]]`
+### `/mcp [refresh|prompt <server> <name> [k=v]|enable <server>|disable <server>]`
 
-Shows configured MCP servers and their tools/resources/prompts. `refresh` reconnects; `prompt <server> <name> [k=v]` loads a server prompt into context.
+Shows configured MCP servers and their tools/resources/prompts. Bare `/mcp` opens an interactive menu with quick actions (`e` enable, `d` disable, `r` refresh).
+- `enable <server>` / `disable <server>`: dynamically toggles an MCP server without restarting the agent or modifying configuration files.
+- `refresh`: reconnects all configured servers.
+- `prompt <server> <name> [k=v]`: loads a server prompt into context.
 
 ### `/advisor <on|off|model N>`
 

@@ -425,7 +425,8 @@ Slash commands run locally (never sent to the model):
 | `/settings` | Open the interactive settings menu (↑/↓ select, ←/→ change, Enter edit/apply, Esc close). |
 | `/settings <key> <value>` | Set a value directly: `context` (`auto`, `64K`, or `0` = unlimited), `multiline` (`on`/`off`), `model`, `tools`, `strict`, `thinking`. |
 | `/model [name]` | Show or change the active model. Short or misspelled names are resolved (`fable` → `claude-fable-5`). |
-| `/tools <confirm\|auto\|insecure>` | Change the tool confirmation mode. |
+| `/profile [name]` | Switch tool profile (`full`, `code`, `research`, `review`, `minimal`) to limit active tools and token cost. |
+| `/tools [mode\|list\|group\|profile]` | Tool safety mode (`confirm`, `auto`, `insecure`), `list`, `group <name> <on\|off>`, or profile. |
 | `/thinking <on\|off\|low\|medium\|high\|xhigh\|max>` | Set the thinking level (alias `/effort`; applied by Kimi). |
 | `/theme <dark\|light\|warm\|cool\|rose>` | Switch the colour theme. |
 | `/memories [name]` | List this provider's memory files, or view one. |
