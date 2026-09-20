@@ -251,6 +251,177 @@ static void test_gemini_provider() {
     check(res.message == "Hello World!", "stream_result matches complete text");
 }
 
+static void test_gemini_tool_calls_and_continuation() {
+    std::cout << "gemini tool calls, continuation and role merging" << std::endl;
+    agent::Config cfg;
+    cfg.provider = "gemini";
+    cfg.model = "gemini-2.5-pro";
+    agent::providers::Gemini p(cfg);
+    check(p.supports_reasoning(), "gemini provider supports reasoning");
+
+    // 1. Tool declarations in build_request
+    JSON tools_schema = JSON::Array{
+        JSON::Object{
+            { "type", "function" },
+            { "function", JSON::Object{
+                { "name", "read_file" },
+                { "description", "Read file contents" },
+                { "parameters", JSON::Object{
+                    { "type", "object" },
+                    { "properties", JSON::Object{
+                        { "path", JSON::Object{ { "type", "string" } } }
+                    }},
+                    { "required", JSON::Array{ "path" } }
+                }}
+            }}
+        }
+    };
+    agent::Conversation c;
+    c.set_system("You are a helpful assistant.");
+    c.add_user("Please read main.cpp");
+
+    JSON req = p.build_request(c, tools_schema);
+    check(req.contains("tools") && req["tools"].size() > 0, "gemini request has tools");
+    check(req["tools"][0].contains("functionDeclarations"), "tools has functionDeclarations");
+    const JSON& decls = req["tools"][0]["functionDeclarations"];
+    check(decls.size() == 1 && decls[0]["name"].to_string() == "read_file", "read_file function declared");
+    check(decls[0]["parameters"]["required"][0].to_string() == "path", "parameters preserved");
+
+    // 2. parse_response: text + thoughts + functionCall + finishReason
+    JSON resp = JSON::Object{
+        { "candidates", JSON::Array{
+            JSON::Object{
+                { "finishReason", "STOP" },
+                { "content", JSON::Object{
+                    { "parts", JSON::Array{
+                        JSON::Object{
+                            { "thought", true },
+                            { "text", "I need to check the file contents first." }
+                        },
+                        JSON::Object{
+                            { "text", "Checking the code now." }
+                        },
+                        JSON::Object{
+                            { "functionCall", JSON::Object{
+                                { "name", "read_file" },
+                                { "args", JSON::Object{ { "path", "src/main.cpp" } } }
+                            }}
+                        }
+                    }}
+                }}
+            }
+        }},
+        { "usageMetadata", JSON::Object{
+            { "promptTokenCount", 450 },
+            { "candidatesTokenCount", 85 },
+            { "cachedContentTokenCount", 200 },
+            { "thoughtsTokenCount", 40 }
+        }}
+    };
+    auto r = p.parse_response(resp);
+    check(r.success, "gemini response parsed successfully");
+    check(r.thinking == "I need to check the file contents first.", "thought captured");
+    check(r.message == "Checking the code now.", "preceding text captured");
+    check(r.tool_calls.size() == 1, "one tool call parsed");
+    check(r.tool_calls[0].name == "read_file", "tool call name is read_file");
+    check(r.tool_calls[0].arguments["path"].to_string() == "src/main.cpp", "tool call arg path parsed");
+    check(r.tool_calls[0].id.rfind("call_", 0) == 0, "tool call ID has call_ prefix");
+    check(r.input_tokens == 450, "promptTokenCount parsed");
+    check(r.output_tokens == 85, "candidatesTokenCount parsed");
+    check(r.cached_input_tokens == 200, "cachedContentTokenCount parsed");
+    check(r.reasoning_tokens == 40, "thoughtsTokenCount parsed");
+    check(!r.truncated, "finishReason STOP is not truncated");
+
+    // 3. Multiple function calls with monotonic IDs
+    JSON multi_resp = JSON::Object{
+        { "candidates", JSON::Array{
+            JSON::Object{
+                { "finishReason", "MAX_TOKENS" },
+                { "content", JSON::Object{
+                    { "parts", JSON::Array{
+                        JSON::Object{
+                            { "functionCall", JSON::Object{
+                                { "name", "read_file" },
+                                { "args", JSON::Object{ { "path", "a.txt" } } }
+                            }}
+                        },
+                        JSON::Object{
+                            { "functionCall", JSON::Object{
+                                { "name", "list_directory" },
+                                { "args", JSON::Object{ { "path", "src" } } }
+                            }}
+                        }
+                    }}
+                }}
+            }
+        }}
+    };
+    auto r_multi = p.parse_response(multi_resp);
+    check(r_multi.tool_calls.size() == 2, "two tool calls parsed");
+    check(r_multi.tool_calls[0].name == "read_file", "first tool call is read_file");
+    check(r_multi.tool_calls[1].name == "list_directory", "second tool call is list_directory");
+    check(r_multi.tool_calls[0].id != r_multi.tool_calls[1].id, "tool call IDs are strictly unique");
+    check(r_multi.truncated, "finishReason MAX_TOKENS sets truncated flag");
+
+    // 4. Conversation continuation and consecutive role merging
+    // Flow: user -> model (tool_call) -> user (functionResponse) -> user (additional note)
+    agent::Conversation conv;
+    conv.set_system("System instructions");
+    conv.add_user("Inspect the project");
+    agent::ToolCall ctc{ r.tool_calls[0].id, r.tool_calls[0].name, r.tool_calls[0].arguments.dump() };
+    conv.add_assistant("Calling tools", { ctc });
+    conv.add_tool_result(r.tool_calls[0].id, "read_file", "int main() { return 0; }");
+    conv.add_user("Also check Makefile");
+
+    JSON cont_req = p.build_request(conv, tools_schema);
+    check(cont_req.contains("contents"), "continuation request has contents");
+    const JSON& contents = cont_req["contents"];
+    // Verify contents alternation: user -> model -> user (where functionResponse + user text are merged!)
+    check(contents.size() == 3, "consecutive user messages merged into single role entry");
+    check(contents[0]["role"].to_string() == "user", "turn 0 is user");
+    check(contents[1]["role"].to_string() == "model", "turn 1 is model");
+    check(contents[2]["role"].to_string() == "user", "turn 2 is user (merged role)");
+
+    // Turn 1 parts should have text + functionCall
+    check(contents[1]["parts"].size() >= 2, "model turn has text and functionCall");
+    check(contents[1]["parts"][1].contains("functionCall"), "model turn part 1 is functionCall");
+
+    // Turn 2 parts should have functionResponse followed by user text
+    check(contents[2]["parts"].size() == 2, "merged user turn has 2 parts");
+    check(contents[2]["parts"][0].contains("functionResponse"), "first part is functionResponse");
+    check(contents[2]["parts"][0]["functionResponse"]["name"].to_string() == "read_file", "functionResponse name matches");
+    check(contents[2]["parts"][0]["functionResponse"]["response"]["output"].to_string() == "int main() { return 0; }", "functionResponse output matches");
+    check(contents[2]["parts"][1].contains("text") && contents[2]["parts"][1]["text"].to_string() == "Also check Makefile", "second part is user text");
+
+    // 5. Streamed function calls
+    p.stream_reset();
+    std::string sse_buf;
+    bool sse_done = false;
+    std::string sse_tool = "data: {\"candidates\": [{\"content\": {\"parts\": [{\"functionCall\": {\"name\": \"grep\", \"args\": {\"pattern\": \"TODO\"}}}]}}]}\n\n";
+    p.parse_stream(sse_tool, sse_buf, sse_done);
+    auto streamed_res = p.stream_result();
+    check(streamed_res.tool_calls.size() == 1, "streamed functionCall parsed");
+    check(streamed_res.tool_calls[0].name == "grep", "streamed tool name is grep");
+    check(streamed_res.tool_calls[0].arguments["pattern"].to_string() == "TODO", "streamed tool args parsed");
+    check(streamed_res.tool_calls[0].id.rfind("call_", 0) == 0, "streamed tool call has monotonic ID");
+
+    // 6. Provider-aware context trimming consistency
+    agent::Conversation conv_budget;
+    conv_budget.set_system("System prompt with instructions");
+    for ( int i = 0; i < 20; ++i ) {
+        conv_budget.add_user("User step " + std::to_string(i) + ": short prompt query");
+        conv_budget.add_assistant("Assistant response step " + std::to_string(i) + ": let us examine the files and make sure everything compiles cleanly.");
+    }
+    auto trimmed_gemini = conv_budget.within_token_budget(300, {}, "gemini");
+    auto trimmed_openai = conv_budget.within_token_budget(300, {}, "openai");
+    check(!trimmed_gemini.empty(), "gemini trimmed history not empty");
+    check(!trimmed_openai.empty(), "openai trimmed history not empty");
+    check(trimmed_gemini[0].role == agent::Role::SYSTEM, "gemini trim retains system prompt");
+    check(trimmed_openai[0].role == agent::Role::SYSTEM, "openai trim retains system prompt");
+    check(trimmed_gemini[1].role == agent::Role::USER, "gemini trim snaps to user turn");
+    check(trimmed_openai[1].role == agent::Role::USER, "openai trim snaps to user turn");
+}
+
 static void test_reasoning_content() {
     std::cout << "reasoning content parsing" << std::endl;
     agent::Config cfg;
@@ -3355,6 +3526,14 @@ static void test_provider_aware_token_accounting() {
     check(oai_est > 0, "openai estimate is positive");
     check(gem_est > 0, "gemini estimate is positive");
     check(gem_est >= oai_est, "gemini SentencePiece yields >= token count on code");
+
+    // 7. Message estimation and context trimming consistency
+    agent::Message test_msg(agent::Role::USER, "const std::string text = \"hello world\";");
+    size_t oai_msg_tok = agent::Conversation::estimate_message_tokens(test_msg, "openai");
+    size_t gem_msg_tok = agent::Conversation::estimate_message_tokens(test_msg, "gemini");
+    check(oai_msg_tok > 0, "oai message estimate positive");
+    check(gem_msg_tok > 0, "gemini message estimate positive");
+    check(gem_msg_tok >= oai_msg_tok, "gemini message tokens >= openai due to 3.5 chars/tok");
 }
 
 static void test_trust_grants() {
@@ -3886,6 +4065,7 @@ int main() {
     test_openai_request();
     test_codex_provider();
     test_gemini_provider();
+    test_gemini_tool_calls_and_continuation();
     test_reasoning_content();
     test_reasoning_effort();
     test_openrouter_provider();

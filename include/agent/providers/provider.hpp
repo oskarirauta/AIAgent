@@ -134,7 +134,7 @@ public:
         if ( _config.supersede_tools )
             msgs = Conversation::supersede_stale_tools(std::move(msgs));
         msgs = Conversation::elide_old_large_tool_results(std::move(msgs));
-        return conv.within_token_budget(_config.context_budget(), std::move(msgs));
+        return conv.within_token_budget(_config.context_budget(), std::move(msgs), _config.provider);
     }
 
 protected:

@@ -135,24 +135,13 @@ Whether to stream the model's reasoning live. `collapse` streams it then hides i
 
 ## Tools & safety
 
-### `/profile [name]`
+### `/tools [<confirm|auto|insecure> | list | group <name> [on|off] | profile <name>]`
 
-Switches the active tool profile to restrict active tools and reduce schema tokens sent on every turn. Bare `/profile` opens an interactive selection menu. Available profiles:
-- `full`: all registered tools active (default).
-- `code`: disables web and workflow tools, keeping core filesystem and execution tools.
-- `research`: read-only exploration with web search (blocks mutating tools).
-- `review`: read-only audit (blocks mutating tools, web search, workflows, and MCP tools).
-- `minimal`: read_file, edit_file, and run_command only (~1.1k schema tokens).
+With no argument, shows active tool confirmation mode, profile, and enabled groups. `/tools <confirm|auto|insecure>` sets confirmation mode. `/tools list` lists all tools with estimated schema tokens. `/tools group <name> <on|off>` enables/disables a group. `/tools profile <name>` switches profile.
 
-### `/tools [confirm|auto|insecure|list|group <name> [on|off]|profile <name>]`
+### `/profile [full|code|research|review|minimal]`
 
-Controls tool execution safety, groups, and profiling:
-- `confirm`: ask before mutating tools (read-only run freely).
-- `auto`: run ordinary tools without asking; danger-listed commands still warn.
-- `insecure`: run everything without asking.
-- `list`: lists all registered tools, their group, status, and estimated schema token cost. Bare `/tools list` opens an interactive detail menu.
-- `group <name> <on|off>`: toggles an entire tool group (`core`, `web`, `workflow`, `skills`, `mcp`).
-- `profile <name>`: shortcut to switch active profile.
+Switches tool profile to restrict active tools and reduce schema tokens sent on every turn. full: all tools. code: disables web and workflow tools. research: read-only exploration with web search. review: read-only audit (no web/mutations). minimal: read, edit, and run command only.
 
 ### `/plan [on|off]`
 
@@ -172,10 +161,7 @@ Lists files created or modified this session. `/changes diff <path>` shows the d
 
 ### `/mcp [refresh|prompt <server> <name> [k=v]|enable <server>|disable <server>]`
 
-Shows configured MCP servers and their tools/resources/prompts. Bare `/mcp` opens an interactive menu with quick actions (`e` enable, `d` disable, `r` refresh).
-- `enable <server>` / `disable <server>`: dynamically toggles an MCP server without restarting the agent or modifying configuration files.
-- `refresh`: reconnects all configured servers.
-- `prompt <server> <name> [k=v]`: loads a server prompt into context.
+Shows configured MCP servers and their tools/resources/prompts. `refresh` reconnects; `prompt <server> <name> [k=v]` loads a server prompt into context. `enable <server>` and `disable <server>` dynamically toggle servers.
 
 ### `/advisor <on|off|model N>`
 

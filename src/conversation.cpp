@@ -115,8 +115,7 @@ void Conversation::clear() {
     _trim_start = 0; // the pinned cut refers to the old history; drop it
 }
 
-size_t Conversation::estimate_tokens(const std::string& provider) const {
-    size_t total = 0;
+size_t Conversation::estimate_message_tokens(const Message& m, const std::string& provider) {
     std::string prov = common::to_lower(common::trim_ws(provider));
 
     double chars_per_tok = 4.0;
@@ -132,12 +131,16 @@ size_t Conversation::estimate_tokens(const std::string& provider) const {
         overhead = 5;
     }
 
-    for ( const auto& m : _messages ) {
-        size_t chars = m.content.size();
-        for ( const auto& tc : m.tool_calls )
-            chars += tc.arguments.size() + tc.name.size();
-        total += static_cast<size_t>(chars / chars_per_tok) + overhead;
-    }
+    size_t chars = m.content.size();
+    for ( const auto& tc : m.tool_calls )
+        chars += tc.arguments.size() + tc.name.size();
+    return static_cast<size_t>(chars / chars_per_tok) + overhead;
+}
+
+size_t Conversation::estimate_tokens(const std::string& provider) const {
+    size_t total = 0;
+    for ( const auto& m : _messages )
+        total += estimate_message_tokens(m, provider);
     return total;
 }
 
@@ -241,7 +244,7 @@ std::vector<Message> Conversation::elide_old_large_tool_results(std::vector<Mess
     return msgs;
 }
 
-std::vector<Message> Conversation::within_token_budget(size_t max_tokens, std::vector<Message> msgs) const {
+std::vector<Message> Conversation::within_token_budget(size_t max_tokens, std::vector<Message> msgs, const std::string& provider) const {
     const bool custom_msgs = !msgs.empty();
     const std::vector<Message>& src = custom_msgs ? msgs : _messages;
     if ( max_tokens == 0 || src.empty()) {
@@ -249,11 +252,8 @@ std::vector<Message> Conversation::within_token_budget(size_t max_tokens, std::v
         return src;
     }
 
-    auto est = [](const Message& m) -> size_t {
-        size_t chars = m.content.size();
-        for ( const auto& tc : m.tool_calls )
-            chars += tc.arguments.size() + tc.name.size();
-        return chars / 4 + 8; // rough per-message overhead
+    auto est = [&provider](const Message& m) -> size_t {
+        return estimate_message_tokens(m, provider);
     };
 
     std::vector<Message> head;

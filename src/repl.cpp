@@ -1126,7 +1126,7 @@ std::string Repl::compact_history(size_t keep_tail) {
             _conversation.add_tool_result(m.tool_call_id.value_or(""), m.name.value_or(""), m.content);
     }
     save_conversation();
-    _stats.context_tokens.store(static_cast<long>(_conversation.estimate_tokens()), std::memory_order_relaxed);
+    _stats.context_tokens.store(static_cast<long>(_conversation.estimate_tokens(_config.provider)), std::memory_order_relaxed);
 
     return "compacted " + std::to_string(old_count) + " older messages into a summary" +
            ( tail.empty() ? "" : " (kept the last " + std::to_string(tail.size()) + " verbatim)" );
@@ -2206,7 +2206,7 @@ std::string Repl::handle_command(const std::string& line) {
         // is the plain-text fallback (non-interactive runs).
         size_t sys = 0, msg = 0, tools_res = 0;
         for ( const auto& m : _conversation.messages()) {
-            size_t t = m.content.size() / 4;
+            size_t t = Conversation::estimate_message_tokens(m, _config.provider);
             if ( m.role == Role::SYSTEM ) sys += t;
             else if ( m.role == Role::TOOL ) tools_res += t;
             else msg += t;
@@ -2219,6 +2219,7 @@ std::string Repl::handle_command(const std::string& line) {
                 else builtin_tokens += ti.schema_tokens;
             }
         }
+        size_t total = sys + msg + tools_res + schema_tokens;
         std::string s = "context (estimated tokens):\n";
         s += "  system prompt: " + std::to_string(sys) + "\n";
         s += "  messages:      " + std::to_string(msg) + "\n";
@@ -2226,7 +2227,7 @@ std::string Repl::handle_command(const std::string& line) {
         s += "  tools schema:  " + std::to_string(schema_tokens) +
              " (" + std::to_string(builtin_tokens) + " built-in, " + std::to_string(mcp_tokens) + " mcp)\n";
         s += "  tool profile:  " + _registry.active_profile() + "\n";
-        s += "  total:         " + std::to_string(sys + msg + tools_res) + "\n";
+        s += "  total:         " + std::to_string(total) + "\n";
         s += "  limit:         " + ( _config.context_auto
                  ? ( _config.context_budget() ? "auto (" + std::to_string(_config.context_budget()) + ")" : "auto (unlimited)" )
                  : ( _config.context_limit == 0 ? std::string("unlimited") : std::to_string(_config.context_limit)));
@@ -3136,8 +3137,11 @@ std::string Repl::handle_command(const std::string& line) {
         _config.thinking = common::to_lower(args);
         if ( _provider )
             _provider->apply_provider_options(JSON::Object{{ "thinking", _config.thinking }});
-        bool applies = ( _config.provider == "kimi" || _config.provider == "codex" || _config.provider == "claude" || _config.provider == "anthropic" );
-        std::string note = applies ? "" : "  (thinking is applied by Codex, Kimi and Claude/Anthropic)";
+        bool applies = ( _provider ? _provider->supports_reasoning()
+                                   : ( _config.provider == "kimi" || _config.provider == "codex" ||
+                                       _config.provider == "claude" || _config.provider == "anthropic" ||
+                                       _config.provider == "gemini" || _config.provider == "openai" ) );
+        std::string note = applies ? "" : "  (thinking is not supported by provider " + _config.provider + ")";
         return "thinking: " + _config.thinking + note;
     }
 
@@ -3395,15 +3399,39 @@ void Repl::run_once(const std::string& prompt) {
         }
         save_conversation();
         if ( json ) {
+            JSON u = JSON::Object{
+                { "input_tokens", static_cast<long long>(_stats.session_input.load()) },
+                { "output_tokens", static_cast<long long>(_stats.session_output.load()) },
+                { "cached_input_tokens", static_cast<long long>(_stats.session_cached.load()) }
+            };
+            auto tu = _stats.get_last_turn();
+            if ( tu.turn_number > 0 ) {
+                long uncached = tu.input_tokens > tu.cached_tokens ? tu.input_tokens - tu.cached_tokens : 0;
+                u["turn"] = JSON::Object{
+                    { "turn_number", static_cast<long long>(tu.turn_number) },
+                    { "model_requests", static_cast<long long>(tu.model_requests) },
+                    { "tool_calls", static_cast<long long>(tu.tool_calls) },
+                    { "input_tokens", static_cast<long long>(tu.input_tokens) },
+                    { "cached_tokens", static_cast<long long>(tu.cached_tokens) },
+                    { "cache_creation_tokens", static_cast<long long>(tu.cache_creation_tokens) },
+                    { "uncached_tokens", static_cast<long long>(uncached) },
+                    { "output_tokens", static_cast<long long>(tu.output_tokens) },
+                    { "reasoning_tokens", static_cast<long long>(tu.reasoning_tokens) },
+                    { "elapsed_ms", static_cast<long long>(tu.elapsed_ms) }
+                };
+            }
+            u["session"] = JSON::Object{
+                { "input_tokens", static_cast<long long>(_stats.session_input.load()) },
+                { "output_tokens", static_cast<long long>(_stats.session_output.load()) },
+                { "cached_input_tokens", static_cast<long long>(_stats.session_cached.load()) },
+                { "cache_creation_input_tokens", static_cast<long long>(_stats.session_cache_creation.load()) },
+                { "reasoning_tokens", static_cast<long long>(_stats.session_reasoning.load()) }
+            };
             JSON out = JSON::Object{
                 { "provider", _config.provider },
                 { "model", _config.model },
                 { "response", agent::normalize_text(reply) },
-                { "usage", JSON::Object{
-                    { "input_tokens", static_cast<long long>(_stats.session_input.load()) },
-                    { "output_tokens", static_cast<long long>(_stats.session_output.load()) },
-                    { "cached_input_tokens", static_cast<long long>(_stats.session_cached.load()) }
-                }}
+                { "usage", u }
             };
             std::cout << out.dump() << std::endl;
         }

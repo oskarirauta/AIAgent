@@ -2343,7 +2343,7 @@ bool InlineRepl::maybe_auto_compact() {
     }
     long ctx = _stats.context_tokens.load(std::memory_order_relaxed);
     if ( ctx <= 0 )
-        ctx = static_cast<long>(_conversation.estimate_tokens());
+        ctx = static_cast<long>(_conversation.estimate_tokens(_config.provider));
     if ( ctx <= 0 )
         return false; // no usage reported yet
     size_t pct = ( _config.auto_compact_pct >= 10 && _config.auto_compact_pct <= 100 )
@@ -3142,10 +3142,10 @@ void InlineRepl::render_context() {
             return std::to_string(n / 1000) + "." + std::to_string((n % 1000) / 100) + "k";
         return std::to_string(n);
     };
-    auto estimate = [](const std::vector<Message>& msgs) {
+    auto estimate = [this](const std::vector<Message>& msgs) {
         struct Totals { size_t system = 0, messages = 0, tool_results = 0, tool_calls = 0; size_t elided = 0; } t;
         for ( const auto& m : msgs ) {
-            size_t content = m.content.size() / 4;
+            size_t content = Conversation::estimate_message_tokens(m, _config.provider);
             if ( m.role == Role::SYSTEM ) t.system += content;
             else if ( m.role == Role::TOOL ) {
                 t.tool_results += content;
@@ -3171,11 +3171,23 @@ void InlineRepl::render_context() {
         effective = Conversation::supersede_stale_tools(std::move(effective));
     effective = Conversation::elide_old_large_tool_results(std::move(effective));
     if ( _config.context_budget() > 0 )
-        effective = _conversation.within_token_budget(_config.context_budget(), std::move(effective));
+        effective = _conversation.within_token_budget(_config.context_budget(), std::move(effective), _config.provider);
+
+    size_t schema_tokens = 0;
+    size_t builtin_tokens = 0, mcp_tokens = 0;
+    if ( _tools_provider ) {
+        for ( const auto& ti : _tools_provider() ) {
+            if ( ti.enabled ) {
+                schema_tokens += ti.schema_tokens;
+                if ( ti.group == "mcp" ) mcp_tokens += ti.schema_tokens;
+                else builtin_tokens += ti.schema_tokens;
+            }
+        }
+    }
 
     auto raw = estimate(saved);
     auto eff = estimate(effective);
-    size_t raw_total = sum(raw), eff_total = sum(eff);
+    size_t raw_total = sum(raw) + schema_tokens, eff_total = sum(eff) + schema_tokens;
     size_t raw_bytes = raw_tool_bytes(saved), eff_bytes = raw_tool_bytes(effective);
     size_t saved_bytes = raw_bytes > eff_bytes ? raw_bytes - eff_bytes : 0;
     size_t mem = load_memories(_config.home_dir, _config.provider).size() / 4;
@@ -3215,6 +3227,10 @@ void InlineRepl::render_context() {
        _theme.dim + "(" + pct(eff.tool_results) + ")" + Theme::reset + "\n");
     if ( eff.tool_calls > 0 )
         wr("    " + _theme.dim + "└ tool calls    " + fmt(eff.tool_calls) + Theme::reset + "\n");
+    if ( schema_tokens > 0 ) {
+        wr("  " + _theme.command + "●" + Theme::reset + " tools schema   " + fmt(schema_tokens) + "  " +
+           _theme.dim + "(" + pct(schema_tokens) + " · " + std::to_string(builtin_tokens) + " built-in, " + std::to_string(mcp_tokens) + " mcp)" + Theme::reset + "\n");
+    }
 
     if ( raw_total != eff_total || eff.elided > 0 ) {
         wr("\n  " + _theme.dim + "effective request: " + fmt(eff_total) + " tokens; saved transcript: " +

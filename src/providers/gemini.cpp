@@ -12,9 +12,19 @@
 #include "logger.hpp"
 #include "throws.hpp"
 
+#include <atomic>
+
 namespace agent::providers {
 
 namespace {
+
+static std::string next_gemini_call_id() {
+    static std::atomic<uint64_t> s_gemini_call_seq{0};
+    uint64_t id = ++s_gemini_call_seq;
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "call_%06llu", static_cast<unsigned long long>(id));
+    return std::string(buf);
+}
 
 long json_long(const JSON& v) {
     if ( v == JSON::TYPE::INT ) return static_cast<long>(static_cast<long long>(v));
@@ -487,7 +497,7 @@ Response Gemini::parse_response(const JSON& response) {
                 ToolCall tc;
                 tc.name = fc.contains("name") ? fc["name"].to_string() : "";
                 tc.arguments = fc.contains("args") ? fc["args"] : JSON::Object{};
-                tc.id = "call_" + tc.name + "_" + std::to_string(out.tool_calls.size() + 1);
+                tc.id = next_gemini_call_id();
                 out.tool_calls.push_back(tc);
             }
         }
@@ -589,7 +599,7 @@ StreamChunk Gemini::parse_stream(const std::string& chunk, std::string& buffer, 
                                 ToolCall tc;
                                 tc.name = fc.contains("name") ? fc["name"].to_string() : "";
                                 tc.arguments = fc.contains("args") ? fc["args"] : JSON::Object{};
-                                tc.id = "call_" + tc.name + "_" + std::to_string(_s_tools.size() + 1);
+                                tc.id = next_gemini_call_id();
                                 _s_tools.push_back(tc);
                             }
                         }
