@@ -19,6 +19,7 @@ public:
     // Whether the tool can modify files or run commands. Read-only tools return
     // false and stay available in plan mode; mutating tools are blocked there.
     virtual bool mutates() const { return false; }
+    virtual std::string group() const { return "core"; }
     virtual std::string execute(const JSON& args) = 0;
 };
 

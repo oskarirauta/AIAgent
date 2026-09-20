@@ -30,10 +30,14 @@ public:
     void save_conversation();
 
     // Query whether the active provider supports a provider-specific capability
-    // (e.g. "model-command"). Returns false if no provider is loaded.
+    // (e.g. "model-command", "advisor", "thinking"). Returns false if no provider is loaded.
     bool provider_supports(const std::string& capability) const {
+        if ( capability == "thinking" || capability == "reasoning" )
+            return _provider && _provider->supports_reasoning();
         return _provider && _provider->supports(capability);
     }
+
+    static std::string format_turn_usage(const TurnUsage& tu);
 
 private:
     void run_tty();
@@ -134,6 +138,9 @@ private:
     // Register/unregister the web_search tool to match the config.
     void sync_web_search_tool();
 
+    // Reconcile and enforce the active tool profile across all tool groups.
+    void sync_effective_tools();
+
     // Connect configured MCP servers and register their tools; render /mcp.
     void connect_mcp();
     void register_mcp_tools(); // (re)register proxy tools + resource readers
@@ -157,6 +164,7 @@ private:
     // main thread reassigns it (switch_provider) or edits it (/settings).
     std::atomic<bool> _workflow_autoresume{ false };
     mcp::Client _mcp;
+    size_t _turn_counter = 0;
 };
 
 } // namespace agent

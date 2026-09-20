@@ -9,7 +9,7 @@
 
 namespace agent::tools {
 
-namespace { constexpr size_t MAX_ENTRIES = 1000; }
+namespace { constexpr size_t MAX_ENTRIES = 200; }
 
 JSON ListDirectory::parameters() const {
     return JSON::Object{

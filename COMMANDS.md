@@ -28,6 +28,10 @@ Saves the transcript as Markdown. With no argument a timestamped file is written
 
 Injects a note as a user message without triggering a model turn — for facts or constraints you want in context before your next real prompt.
 
+### `/steer <prompt>`
+
+When a turn is running, queues a steering prompt to guide the model at the next tool boundary/checkpoint without interrupting the turn. When idle, sends the prompt immediately.
+
 ### `/pin [text]`  — alias `/pins, /unpin`
 
 `/pin <text>` (or `/pin` alone to pin the last reply) keeps a note in the system prompt so it survives /compact and auto-compact. `/pins` lists them, `/unpin <n|all>` removes.
@@ -131,9 +135,13 @@ Whether to stream the model's reasoning live. `collapse` streams it then hides i
 
 ## Tools & safety
 
-### `/tools <confirm|auto|insecure>`
+### `/tools [<confirm|auto|insecure> | list | group <name> [on|off] | profile <name>]`
 
-confirm: ask before mutating tools (read-only run freely). auto: run ordinary tools without asking; danger-listed commands still warn. insecure: run everything without asking. Not persisted — resets each session.
+With no argument, shows active tool confirmation mode, profile, and enabled groups. `/tools <confirm|auto|insecure>` sets confirmation mode. `/tools list` lists all tools with estimated schema tokens. `/tools group <name> <on|off>` enables/disables a group. `/tools profile <name>` switches profile.
+
+### `/profile [code|full|research|review|minimal]`
+
+Switches tool profile to restrict active tools and reduce schema tokens sent on every turn. code (default): disables web and workflow tools for coding tasks. full: all tools active. research: read-only exploration with web search. review: read-only audit (no web/mutations). minimal: read, edit, and run command only.
 
 ### `/plan [on|off]`
 
@@ -151,9 +159,9 @@ Lists the tool-safety state: mode, any active turn grant, config safe/danger lis
 
 Lists files created or modified this session. `/changes diff <path>` shows the diff vs the session-start version; `/changes revert <path|all>` restores it.
 
-### `/mcp [refresh|prompt <server> <name> [k=v]]`
+### `/mcp [refresh|prompt <server> <name> [k=v]|enable <server>|disable <server>]`
 
-Shows configured MCP servers and their tools/resources/prompts. `refresh` reconnects; `prompt <server> <name> [k=v]` loads a server prompt into context.
+Shows configured MCP servers and their tools/resources/prompts. `refresh` reconnects; `prompt <server> <name> [k=v]` loads a server prompt into context. `enable <server>` and `disable <server>` dynamically toggle servers.
 
 ### `/advisor <on|off|model N>`
 

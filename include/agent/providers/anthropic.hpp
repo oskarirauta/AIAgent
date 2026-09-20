@@ -40,6 +40,9 @@ public:
     // The model's total output-token ceiling (thinking budget + visible answer).
     // Exceeding it is a hard 400 from the API, so max_tokens is clamped to it.
     static long output_cap_for(const std::string& model);
+    long output_token_cap(const std::string& model) const override {
+        return Anthropic::output_cap_for(model);
+    }
 
 protected:
     bool _thinking_enabled = false;   // off by default (unlike Kimi)
@@ -59,6 +62,7 @@ protected:
     long _s_output_tokens = 0;
     bool _s_truncated = false;
     long _s_cached_tokens = 0;
+    long _s_cache_creation_tokens = 0;
 
     // Add cache_control breakpoints to the stable prefix (tools/system/last
     // message) of a built request. No-op fields are left untouched.

@@ -2,20 +2,21 @@
 
 # AI Agent
 
-C++17 Linux CLI AI assistant — a local, minimal but capable alternative to tools like Kimi Code, Claude Code, or OpenCode.
+C++20 Linux CLI AI assistant — a local, minimal but capable alternative to tools like Kimi Code, Claude Code, or OpenCode.
 
 Philosophy: **Support enough — not everything.**
 
 ## Features
 
 - Chat with LLMs from the command line
-- Providers: OpenAI, Ollama, Anthropic, Moonshot, **OpenRouter**, and native **Codex**, **Kimi** and **Claude** subscription providers
+- Providers: OpenAI, Ollama, Anthropic, Moonshot, **Google Gemini**, **OpenRouter**, and native **Codex**, **Kimi** and **Claude** subscription providers
 - **Codex**, **Kimi** and **Claude** authenticate against the same subscriptions the official CLIs use — no API-key billing and no separate app to install
 - Built-in tools the model can call: `read_file`, `write_file`, `edit_file`,
   `run_command` (foreground or **background** — dev servers/watchers via `/jobs`),
   `list_directory`, `grep`, `find_symbol`, `find_references`, `outline_file`,
   `project_map`, `web_search`, `fetch_url`, `update_tasks`, and **`ask_user`** (the
   model can pause and ask you a decision). Plus **MCP** servers and **skills**.
+- **Tool profiles** (`code` by default, `full`, `research`, `review`, `minimal`) to limit token overhead
 - **Inline REPL** that prints to the terminal's normal buffer, so native scrollback and mouse copy work across the whole conversation
 - Streaming responses (with reasoning/thinking) and lightweight syntax highlighting
 - Layered **tool-call safety**: per-call confirmation with *once / this-session / all-similar* choices, a **danger list** that warns on risky shell commands (every stage of a compound command is checked), a read-only **`/plan`** mode, and an `--insecure` escape hatch
@@ -31,7 +32,7 @@ Philosophy: **Support enough — not everything.**
 ## Build
 
 Requirements:
-- C++17 compiler
+- C++20 compiler
 - libcurl development files
 - `signal`, `process`, and the `common/*` submodules initialized
 - Make
@@ -44,7 +45,7 @@ make docs       # regenerate COMMANDS.md from the command catalogue
 ```
 
 The build defaults to `-O2` with no debug symbols; for a debug build override
-`CXXFLAGS` (e.g. `make CXXFLAGS='--std=c++17 -Wall -fPIC -I./include -g'`).
+`CXXFLAGS` (e.g. `make CXXFLAGS='--std=c++20 -Wall -fPIC -I./include -g'`).
 The interactive UI is built on raw ANSI/termios — there is **no ncurses dependency**; the binary links only against libcurl.
 
 ## Running tests
@@ -330,6 +331,18 @@ The native Codex provider uses your ChatGPT/Codex subscription through the Respo
 
 Credentials are shared with Codex CLI at `${CODEX_HOME:-~/.codex}/auth.json`, refreshed automatically, and kept mode `0600`. An existing `codex login` is therefore picked up without another prompt. Default model: `gpt-5.6`; use `/model` to select another available Codex model and `/thinking` for reasoning effort.
 
+## Google Gemini provider
+
+The native Gemini provider talks directly to the Google Generative Language REST API (`generativelanguage.googleapis.com`), supporting streaming, function calling, reasoning / extended thinking, and context cache discounts (75% savings):
+
+```bash
+export GEMINI_API_KEY="AIzaSy..."
+./agent -p gemini
+./agent -p gemini -m gemini-2.5-pro
+```
+
+Default model: `gemini-3.6-flash`. Extended thinking is supported via `/thinking` (mapped to `thinkingConfig.thinkingBudget`), and reasoning tokens are parsed natively from `usageMetadata.thoughtsTokenCount`.
+
 ## OpenRouter provider
 
 [OpenRouter](https://openrouter.ai) is an OpenAI-compatible gateway to many models. Get a key from `openrouter.ai/settings/keys`, then:
@@ -421,14 +434,16 @@ Slash commands run locally (never sent to the model):
 | `/stats` | Session usage, estimated cost and provider limits. |
 | `/diagnose` | Combined runtime and provider diagnostic report. |
 | `/stop` | Request the active turn to stop safely (alias `/interrupt`). |
+| `/steer <prompt>` | Steer active work at the next checkpoint/tool boundary, or send as a prompt when idle. |
 | `/settings` | Open the interactive settings menu (↑/↓ select, ←/→ change, Enter edit/apply, Esc close). |
 | `/settings <key> <value>` | Set a value directly: `context` (`auto`, `64K`, or `0` = unlimited), `multiline` (`on`/`off`), `model`, `tools`, `strict`, `thinking`. |
 | `/model [name]` | Show or change the active model. Short or misspelled names are resolved (`fable` → `claude-fable-5`). |
-| `/tools <confirm\|auto\|insecure>` | Change the tool confirmation mode. |
-| `/thinking <on\|off\|low\|medium\|high\|xhigh\|max>` | Set the thinking level (alias `/effort`; applied by Kimi). |
+| `/profile [name]` | Switch tool profile (`code` default, `full`, `research`, `review`, `minimal`) to limit active tools and token cost. |
+| `/tools [mode\|list\|group\|profile]` | Tool safety mode (`confirm`, `auto`, `insecure`), `list`, `group <name> <on\|off>`, or profile. |
+| `/thinking <on\|off\|low\|medium\|high\|xhigh\|max>` | Set the thinking level (alias `/effort`; applied by Kimi, Claude, Codex, Gemini). |
 | `/theme <dark\|light\|warm\|cool\|rose>` | Switch the colour theme. |
 | `/memories [name]` | List this provider's memory files, or view one. |
-| `/context` | Visual context usage: a composition bar plus system / conversation / memory token estimates and the limit. |
+| `/context` | Visual context usage: composition bar, messages, tool results, tools schema, and prompt cache stats. |
 | `/history [n\|all\|search <text>]` | Browse, open and search messages in the current context. |
 | `/retry` | Re-run your last message. |
 | `/undo` | Remove the last exchange from history. |
@@ -448,13 +463,14 @@ either mode.
 ### Thinking
 
 Reasoning models expose their thinking: Kimi/OpenAI-compatible via
-`reasoning_content`, Claude via a thinking block. Set the level with `/thinking`
+`reasoning_content`, Claude via a thinking block, and Gemini via `thoughtsTokenCount`
+and thinking chunks. Set the level with `/thinking`
 (`off`/`on`/`low`/`medium`/`high`/`xhigh`/`max`) — for Kimi it maps to the
 `thinking.effort` field (xhigh/max clamp to high), for Claude to a `budget_tokens`
-budget (`max` = the model's ceiling). Every turn streams (even with tools), so the
-reasoning and the answer flow in live and tool calls are assembled from the
-stream. `thinking_stream` (on by default, `/settings thinking_stream off`) toggles
-whether the reasoning is shown live (prefixed 💭).
+budget (`max` = the model's ceiling), and for Gemini to `thinkingConfig.thinkingBudget`.
+Every turn streams (even with tools), so the reasoning and the answer flow in live
+and tool calls are assembled from the stream. `thinking_stream` (on by default,
+`/settings thinking_stream off`) toggles whether the reasoning is shown live (prefixed 💭).
 
 ### Persisted settings
 
@@ -502,8 +518,8 @@ src/
   repl_inline.cpp/hpp   # Inline (ANSI/termios) REPL renderer + line editor
   syntax_highlighter.*  # Fenced-code / markdown highlighting
   api/client.cpp/hpp    # libcurl HTTP client
-  auth/                 # OAuth flows + token storage (Codex/Kimi device-code, Claude auth-code)
-  providers/            # OpenAI, Codex, Ollama, Anthropic, Moonshot, Kimi, Claude adapters
+  auth/                 # OAuth flows + token storage (Codex/Kimi device-code, Claude auth-code, Gemini)
+  providers/            # OpenAI, Codex, Ollama, Anthropic, Moonshot, Kimi, Claude, Gemini adapters
   tools/                # Built-in tools + confirmation/danger-list policy (registry)
 ```
 

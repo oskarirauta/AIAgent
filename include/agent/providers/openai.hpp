@@ -48,6 +48,7 @@ private:
     long _s_output_tokens = 0;
     bool _s_truncated = false;
     long _s_cached_tokens = 0;
+    long _s_reasoning_tokens = 0;
 };
 
 } // namespace agent::providers

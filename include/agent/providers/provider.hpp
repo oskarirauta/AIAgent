@@ -33,9 +33,15 @@ struct Response {
     // "max_tokens" / OpenAI finish_reason "length"), not finished naturally.
     bool truncated = false;
 
-    // Portion of input_tokens served from the prompt cache (billed ~10%).
+    // Portion of input_tokens served from the prompt cache.
     // input_tokens is the TOTAL prompt size; cached_input_tokens is the subset.
     long cached_input_tokens = 0;
+
+    // Portion of input_tokens written to create a prompt cache (e.g. Anthropic cache creation).
+    long cache_creation_input_tokens = 0;
+
+    // Output reasoning/thinking tokens reported by the provider (0 if unknown).
+    long reasoning_tokens = 0;
 };
 
 // Visible deltas produced by one streamed chunk. Content and reasoning are
@@ -81,6 +87,19 @@ public:
     virtual bool supports_tools() const { return true; }
     virtual bool supports_reasoning() const { return false; }
 
+    // Model output cap / ceiling (e.g. Anthropic 8192, Sonnet 3.7 64k). 0 if no fixed ceiling.
+    virtual long output_token_cap(const std::string& model) const { (void)model; return 0; }
+
+    // Model context window size in tokens.
+    virtual size_t context_window_for(const std::string& model) const {
+        return Config::context_window_for(model);
+    }
+
+    // Estimate tokens for serialized request text:
+    virtual size_t estimate_tokens(const std::string& text) const {
+        return Conversation::estimate_text_tokens(text, _config.provider);
+    }
+
     // Streaming: reset per-turn accumulation, parse one SSE chunk (returning the
     // visible deltas while accumulating content/reasoning/tool_calls internally),
     // and assemble the full Response once the stream is done. Providers that can
@@ -119,21 +138,21 @@ public:
     const Config& config() const { return _config; }
     std::string request_model() const { return Config::base_model_name(_config.model); }
 
-protected:
-    Provider(const Config& cfg) : _config(cfg) {}
-    Config _config;
-
     // The messages to send, trimmed to the configured context budget (if any).
     // build_request implementations iterate this instead of conv.messages() so
     // history that would overflow a small context window (e.g. local models) is
     // dropped from the request while the full history stays saved.
     std::vector<Message> request_messages(const Conversation& conv) const {
-        auto msgs = conv.within_token_budget(_config.context_budget());
+        auto msgs = conv.messages();
         if ( _config.supersede_tools )
             msgs = Conversation::supersede_stale_tools(std::move(msgs));
         msgs = Conversation::elide_old_large_tool_results(std::move(msgs));
-        return msgs;
+        return conv.within_token_budget(_config.context_budget(), std::move(msgs), _config.provider);
     }
+
+protected:
+    Provider(const Config& cfg) : _config(cfg) {}
+    Config _config;
 
     std::string build_endpoint(const std::string& path) const {
         std::string url = _config.api_url;

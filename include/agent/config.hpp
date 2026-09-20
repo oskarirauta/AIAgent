@@ -13,6 +13,8 @@ namespace agent {
 struct ModelPricing {
     double input_per_mtok = 0.0;
     double output_per_mtok = 0.0;
+    double cache_read_ratio = 0.0;  // 0.0 means default to provider pricing rules
+    double cache_write_ratio = 0.0; // 0.0 means default to provider pricing rules
 };
 
 class Config {
@@ -47,6 +49,7 @@ public:
     bool tool_mode_explicit = false; // a CLI flag (-T/-Y/-I) set the mode; don't let saved state override it
     bool strict = false;        // in confirm mode, ignore the safe-command allowlist
     bool plan_mode = false;     // read-only planning: mutating tools are blocked (session-only)
+    std::string tool_profile = "code"; // active tool profile: full|code|research|review|minimal (default: code)
     bool steal_lock = false;    // --steal-lock: take over a session locked by a live agent (session-only)
     // Named session within this project: several conversations can live side by
     // side in one directory (e.g. one building, one reviewing), each with its own
@@ -65,6 +68,7 @@ public:
     size_t tool_call_limit = 100;
     bool auto_compact = true;   // summarise history automatically when it nears the context budget
     size_t auto_compact_pct = 80; // trigger threshold as a percentage of context_budget()
+    size_t auto_compact_max_tokens = 30000; // upper ceiling for auto-compact trigger (prevents 1M-window models from running up massive context before compacting)
     bool workflow_autoresume = false; // a finished workflow starts a turn by itself (bounded; see repl)
     std::string bell = "attention"; // terminal bell policy: never|question|attention|always
     bool supersede_tools = true; // elide stale tool results (older read/run of the same target)
@@ -154,6 +158,7 @@ public:
         size_t context_limit = 0;
         bool context_auto = false;
         bool auto_compact = false;
+        size_t auto_compact_max_tokens = 50000;
         // Schema version of the persisted settings block. Absent/0 means a state
         // written before context_auto and auto_compact defaulted to on; such a
         // state is migrated once so an existing user is not left with an
@@ -168,6 +173,7 @@ public:
         size_t paste_preview = 8;
         size_t tool_call_limit = 100;
         size_t max_tokens = 64000;
+        std::string tool_profile = "code";
     };
     static LastUsed load_last_used(const std::string& home_dir);
     static void save_last_used(const std::string& home_dir, const std::string& provider, const std::string& model);
@@ -245,13 +251,21 @@ public:
     // no price is configured (e.g. a flat-rate subscription).
     std::optional<ModelPricing> pricing_for(const std::string& model) const;
 
+    struct ProviderPricingRules {
+        double cache_read_ratio = 0.10;
+        double cache_write_ratio = 1.00;
+        int discount_pct() const { return static_cast<int>((1.0 - cache_read_ratio) * 100.0 + 0.5); }
+    };
+
+    ProviderPricingRules provider_pricing_rules(const std::string& prov, const std::string& mdl) const;
+
     // A session name reduced to a filename-safe token: letters, digits, '-' and
     // '_' survive, anything else becomes '-'. "default" (and an empty name) mean
     // the project's default session and normalise to "".
     static std::string sanitize_session_name(const std::string& name);
 
     // Estimated session cost in USD for the current model, or -1 if unpriced.
-    double session_cost(long input_tokens, long output_tokens, long cached_input = 0) const;
+    double session_cost(long input_tokens, long output_tokens, long cached_input = 0, long cache_creation = 0) const;
 
     // The token budget to actually apply when trimming history: the model's
     // window (with response headroom) in auto mode, else `context_limit`.

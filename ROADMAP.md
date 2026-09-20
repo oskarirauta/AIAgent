@@ -382,10 +382,37 @@ this project follows: one change, build, tests, try it live, then the next.
   lock), and `/session <name>` switches mid-run (saving the outgoing one, showing
   the project's sessions with sizes). The status line marks a named session, and
   `/sessions` lists them per project.
+- ✅ **Tool Profiles & Dynamic Tool Selection** — switch between `full`, `code`,
+  `research`, `review`, and `minimal` profiles via `/profile [name]` or
+  `/tools profile <name>` to restrict active tools and shrink schema token
+  overhead sent on every API turn. Entire tool groups (`core`, `web`, `workflow`,
+  `skills`, `mcp`) can also be toggled with `/tools group <name> <on|off>`.
+- ✅ **MCP Server Dynamic Toggle & Management** — `/mcp enable <server>` and
+  `/mcp disable <server>` toggle MCP servers on the fly without restarting or
+  editing config files. Bare `/mcp` opens an interactive menu with quick keys
+  (`e` enable, `d` disable, `r` refresh).
+- ✅ **Per-Turn Token Diagnostics & Profiling** — track `model_requests`, `tool_calls`,
+  `input_tokens`, `cached_tokens`, `uncached_tokens`, `output_tokens`,
+  `reasoning_tokens`, `first_request_tokens`, `peak_request_tokens`, and `elapsed_ms`
+  per user turn. Exposed in `/status`, `/stats`, and `/context` to pinpoint
+  token explosion across multi-call tool loops and quantify prompt cache hits.
+- ✅ **Provider-Aware Token Accounting Refinements** — accurate native cache discounts
+  and pricing rules across providers: OpenAI/Codex (50% cache read discount),
+  Gemini (75% discount), Claude/Anthropic (90% read discount, 125% write/creation rate),
+  Moonshot/Kimi (80% discount), and DeepSeek (75% discount). Native reasoning token
+  breakdowns (`thoughtsTokenCount` on Gemini, `completion_tokens_details.reasoning_tokens`
+  on OpenAI/OpenRouter/Moonshot, thinking blocks on Anthropic) and cache creation tracking
+  across `/cost`, `/context`, `/status`, and `/stats`. Provider-aware token estimation
+  in `Conversation::estimate_tokens`.
 
 ## Backlog (next)
 
-Nothing outstanding beyond the speculative V3 section below.
+- **Claude Hard Steering / Interruption Transaction** — today's `/steer` queues
+  steering guidance applied safely at the next tool boundary or checkpoint.
+  The deeper hard steering capability will support cancelling an active
+  in-flight HTTP request safely, preventing partial thinking/tool-use state from
+  corrupting the Anthropic conversation structure, appending the steering
+  instruction as a valid user turn, and immediately restarting model completion.
 
 ## ROADMAP TO V3
 

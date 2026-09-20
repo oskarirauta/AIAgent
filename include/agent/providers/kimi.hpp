@@ -32,7 +32,7 @@ public:
 
     // Explicitly authenticate (refresh stored token or run device-code flow).
     // Returns true if a usable token is now available.
-    bool authenticate(api::Client& client, bool force_login = false);
+    bool authenticate(api::Client& client, bool force_login = false) override;
     bool ready_noninteractive(api::Client& client) override;
     // A 401 mid-turn: force one silent refresh so the request can be retried.
     bool reauthenticate(api::Client& client) override { return refresh_now(client); }

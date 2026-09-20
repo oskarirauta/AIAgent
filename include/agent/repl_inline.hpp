@@ -83,10 +83,32 @@ public:
     // accepted per real user message — returns false when dropped by the cap.
     bool enqueue_prompt(const std::string& text);
 
+    struct ToolItem {
+        std::string name;
+        std::string group;
+        std::string description;
+        bool mutating = false;
+        bool enabled = true;
+        size_t schema_tokens = 0;
+    };
+
+    struct McpServerItem {
+        std::string name;
+        std::string transport;
+        bool connected = false;
+        bool enabled = true;
+        std::string error;
+        std::vector<std::string> tool_names;
+    };
+
     // Handler for slash commands (other than /exit and /quit), run locally on the
     // main thread; returns text to show as a system message.
     void set_command_callback(command_cb_t cb) { _command_cb = std::move(cb); }
     void set_workflows_provider(std::function<std::vector<WorkflowRun>()> fn) { _wf_provider = std::move(fn); }
+    void set_tools_provider(std::function<std::vector<ToolItem>()> fn) { _tools_provider = std::move(fn); }
+    void set_mcp_provider(std::function<std::vector<McpServerItem>()> fn) { _mcp_provider = std::move(fn); }
+    using capability_checker_t = std::function<bool(const std::string&)>;
+    void set_capability_checker(capability_checker_t fn) { _cap_checker = std::move(fn); }
     // Multi-level workflows drill-down: runs → steps → one step's content. Public so
     // the navigation can be driven directly (dispatch + tests); run_id >= 0 opens
     // straight into that run's steps.
@@ -106,6 +128,8 @@ public:
 
     // Last-resort restore from the signal handler before a forced exit.
     static void emergency_teardown();
+
+    bool maybe_auto_compact(); // auto-summarise history when it nears the context budget; true if started
 
     enum class PendingKind { Message, Command, Shell, LiveNote };
 
@@ -167,7 +191,6 @@ private:
     void start_turn(const std::string& line, const std::string& display, bool already_echoed = false);
     void start_async_command(const std::string& cmd, const std::string& activity,
                              const std::string& echo_label = ""); // run a slow command off-thread
-    bool maybe_auto_compact(); // auto-summarise history when it nears the context budget; true if started
     std::string budget_warning(); // one-shot warning text when the session nears its cost/token budget
     std::string disk_space_warning(); // one-shot warning when the data dir's disk is nearly full
     void shell_command();             // /shell: hand the terminal to $SHELL, restore on exit
@@ -359,6 +382,9 @@ private:
     bool _wf_active = false;            // the open list menu is the workflow drill-down
     int _wf_level = 0;                  // 0 = runs, 1 = steps (content uses _list_detail)
     int _wf_run_id = -1;               // the run whose steps are shown at level 1
+    std::function<std::vector<ToolItem>()> _tools_provider;
+    std::function<std::vector<McpServerItem>()> _mcp_provider;
+    capability_checker_t _cap_checker;
 
     bool _in_settings = false;
     bool _settings_editing = false;    // typing a free-text value into the selected row

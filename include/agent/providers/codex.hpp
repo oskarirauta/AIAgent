@@ -24,6 +24,7 @@ public:
     bool ready_noninteractive(api::Client& client) override;
     bool reauthenticate(api::Client& client) override;
     void prepare_request(api::Client& client) override;
+    std::vector<std::string> list_models(api::Client& client) override;
 
     JSON build_request(const Conversation& conv, const JSON& tools_schema) override;
     Response parse_response(const JSON& response) override;
@@ -45,7 +46,7 @@ private:
     std::string _reasoning_effort = "medium";
     std::string _s_content, _s_reasoning;
     std::map<std::string, ToolCall> _s_tools;
-    long _s_input_tokens = 0, _s_output_tokens = 0, _s_cached_tokens = 0;
+    long _s_input_tokens = 0, _s_output_tokens = 0, _s_cached_tokens = 0, _s_reasoning_tokens = 0;
     bool _s_truncated = false;
 };
 

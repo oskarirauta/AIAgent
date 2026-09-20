@@ -25,6 +25,7 @@ public:
     explicit WebSearch(std::string endpoint) : _endpoint(std::move(endpoint)) {}
 
     std::string name() const override { return "web_search"; }
+    std::string group() const override { return "web"; }
     std::string description() const override;
     JSON parameters() const override;
     std::string execute(const JSON& args) override;

@@ -157,8 +157,17 @@ bool Client::spawn(Server& s) {
     };
     // O_CLOEXEC so a concurrently-forked sibling child (parallel connect_all)
     // never inherits these pipe fds; close every fd on any failure path.
+#if defined(__APPLE__) || !defined(O_CLOEXEC)
+    if ( pipe(to_child) != 0 ) { s.error = "pipe() failed"; return false; }
+    if ( pipe(from_child) != 0 ) { s.error = "pipe() failed"; close_all(); return false; }
+    fcntl(to_child[0], F_SETFD, FD_CLOEXEC);
+    fcntl(to_child[1], F_SETFD, FD_CLOEXEC);
+    fcntl(from_child[0], F_SETFD, FD_CLOEXEC);
+    fcntl(from_child[1], F_SETFD, FD_CLOEXEC);
+#else
     if ( pipe2(to_child, O_CLOEXEC) != 0 ) { s.error = "pipe() failed"; return false; }
     if ( pipe2(from_child, O_CLOEXEC) != 0 ) { s.error = "pipe() failed"; close_all(); return false; }
+#endif
 
     // Build the child's environment in the PARENT: setenv() between fork() and
     // exec() is not async-signal-safe in a multithreaded process (it may take a
@@ -192,7 +201,12 @@ bool Client::spawn(Server& s) {
         dup2(from_child[1], STDOUT_FILENO);
         int devnull = open("/dev/null", O_WRONLY);
         if ( devnull >= 0 ) { dup2(devnull, STDERR_FILENO); close(devnull); }
+#if defined(__APPLE__)
+        environ = envp.data();
+        execvp(s.command.c_str(), argv.data());
+#else
         execvpe(s.command.c_str(), argv.data(), envp.data());
+#endif
         _exit(127);
     }
     ::close(to_child[0]); ::close(from_child[1]);
@@ -582,7 +596,7 @@ Client::Server* Client::find(const std::string& name) {
 std::vector<ToolDef> Client::tools() const {
     std::vector<ToolDef> out;
     for ( const auto& sp : _servers )
-        if ( sp->connected )
+        if ( sp->connected && sp->enabled )
             for ( const auto& t : sp->tools ) out.push_back(t);
     return out;
 }
@@ -590,7 +604,7 @@ std::vector<ToolDef> Client::tools() const {
 std::vector<ResourceDef> Client::resources() const {
     std::vector<ResourceDef> out;
     for ( const auto& sp : _servers )
-        if ( sp->connected )
+        if ( sp->connected && sp->enabled )
             for ( const auto& r : sp->resources ) out.push_back(r);
     return out;
 }
@@ -598,14 +612,30 @@ std::vector<ResourceDef> Client::resources() const {
 std::vector<PromptDef> Client::prompts() const {
     std::vector<PromptDef> out;
     for ( const auto& sp : _servers )
-        if ( sp->connected )
+        if ( sp->connected && sp->enabled )
             for ( const auto& p : sp->prompts ) out.push_back(p);
     return out;
+}
+
+bool Client::set_server_enabled(const std::string& name, bool enabled) {
+    Server* s = find(name);
+    if ( s ) {
+        s->enabled = enabled;
+        return true;
+    }
+    return false;
+}
+
+bool Client::is_server_enabled(const std::string& name) const {
+    for ( const auto& sp : _servers )
+        if ( sp->name == name ) return sp->enabled;
+    return false;
 }
 
 std::string Client::call_tool(const std::string& server, const std::string& tool, const JSON& args) {
     Server* s = find(server);
     if ( !s ) return "error: no MCP server named '" + server + "'";
+    if ( !s->enabled ) return "error: MCP server '" + server + "' is disabled";
     if ( !s->connected ) return "error: MCP server '" + server + "' is not connected";
     try {
         JSON params = JSON::Object{
@@ -689,6 +719,7 @@ std::vector<Client::ServerInfo> Client::status() const {
         si.name = sp->name;
         si.transport = ( sp->transport == Transport::http ) ? "http" : "stdio";
         si.connected = sp->connected;
+        si.enabled = sp->enabled;
         si.error = sp->error;
         si.command = ( sp->transport == Transport::http ) ? sp->url : sp->command;
         for ( const auto& t : sp->tools ) si.tool_names.push_back(t.tool);

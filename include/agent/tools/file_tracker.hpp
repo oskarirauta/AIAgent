@@ -25,7 +25,7 @@ public:
         auto sz = std::filesystem::file_size(path, ec2);
         if ( ec2 ) return;
         std::lock_guard<std::mutex> lk(_mx);
-        _seen[key] = { t.time_since_epoch().count(), sz };
+        _seen[key] = { static_cast<long long>(t.time_since_epoch().count()), sz };
     }
 
     // Non-empty reason if the file was read before AND has since changed on disk
@@ -42,7 +42,7 @@ public:
         std::error_code ec2;
         auto sz = std::filesystem::file_size(path, ec2);
         if ( ec2 ) return "";
-        if ( t.time_since_epoch().count() != it->second.mtime || sz != it->second.size )
+        if ( static_cast<long long>(t.time_since_epoch().count()) != it->second.mtime || sz != it->second.size )
             return "the file changed on disk since you last read it — re-read it before "
                    "editing so your change is based on the current version (this avoids "
                    "silently overwriting edits made in the meantime)";

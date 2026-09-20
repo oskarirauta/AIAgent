@@ -74,7 +74,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
 
 static std::string pending_kind_label(InlineRepl::PendingKind kind) {
     switch ( kind ) {
-    case InlineRepl::PendingKind::LiveNote: return "btw";
+    case InlineRepl::PendingKind::LiveNote: return "steer/btw";
     case InlineRepl::PendingKind::Shell: return "shell";
     case InlineRepl::PendingKind::Command: return "command";
     default: return "message";
@@ -240,6 +240,8 @@ std::string InlineRepl::theme_overrides_summary() const {
 }
 
 InlineRepl::~InlineRepl() {
+    if ( _worker.joinable())
+        _worker.join();
     teardown();
 }
 
@@ -907,7 +909,9 @@ std::string InlineRepl::status_line() const {
     std::string tools = !_config.tools_enabled ? "tools off"
                         : _config.insecure ? "tools: insecure"
                         : (_config.confirm_tools ? "tools: confirm" : "tools: auto");
-    if ( _config.plan_mode )
+    if ( !_config.tool_profile.empty() && _config.tool_profile != "code" )
+        tools += " [" + _config.tool_profile + "]";
+    else if ( _config.plan_mode )
         tools += " · plan";
 
     std::string s = _config.provider + " · " + _config.model + " · " + cwd;
@@ -920,6 +924,8 @@ std::string InlineRepl::status_line() const {
     // Token usage: current context size and cumulative session total.
     long ctx = _stats.context_tokens.load(std::memory_order_relaxed);
     long total = _stats.session_total();
+    bool ctx_reported = _stats.context_is_reported.load(std::memory_order_relaxed);
+    bool sess_reported = _stats.session_is_reported.load(std::memory_order_relaxed);
     if ( ctx > 0 || total > 0 ) {
         auto fmt = [](long n) -> std::string {
             if ( n >= 1000 ) {
@@ -929,10 +935,14 @@ std::string InlineRepl::status_line() const {
             }
             return std::to_string(n);
         };
-        s += " · ctx " + fmt(ctx) + " · " + fmt(total) + " tok";
+        std::string ctx_str = (ctx_reported ? "" : "~") + fmt(ctx);
+        if ( !ctx_reported && total == 0 )
+            ctx_str += " (est)";
+        s += " · ctx " + ctx_str + " · " + (sess_reported ? "" : "~") + fmt(total) + " tok";
         double cost = _config.session_cost(_stats.session_input.load(std::memory_order_relaxed),
                                            _stats.session_output.load(std::memory_order_relaxed),
-                                           _stats.session_cached.load(std::memory_order_relaxed));
+                                           _stats.session_cached.load(std::memory_order_relaxed),
+                                           _stats.session_cache_creation.load(std::memory_order_relaxed));
         if ( cost >= 0 ) {
             char buf[32];
             std::snprintf(buf, sizeof(buf), " · $%.4f", cost);
@@ -1331,9 +1341,10 @@ void InlineRepl::draw_live() {
         out += pl + "\r\n";                   // transient reasoning preview
     out += "\r\n";                            // blank spacer above the separator
     out += _theme.dim + sep + "\033[0m\r\n";  // separator: transcript | input
-    // The ultracode/ultrathink markers raise Anthropic's effort to max for a turn
+    // The ultracode/ultrathink markers raise thinking effort to max for a turn
     // (and cost budget), so flag them in a distinct colour where they take effect.
-    bool mark_ultra = ( _config.provider == "claude" || _config.provider == "anthropic" );
+    bool mark_ultra = _cap_checker ? ( _cap_checker("thinking") || _cap_checker("reasoning") )
+                                   : ( _config.provider == "claude" || _config.provider == "anthropic" );
     for ( const auto& vl : vlines )
         out += vl.first + ( mark_ultra ? highlight_keywords(vl.second) : vl.second ) + "\r\n";
     out += _theme.dim + sep + "\033[0m\r\n";  // separator: input | status
@@ -1400,7 +1411,7 @@ namespace {
 
 const std::vector<std::string>& slash_commands() {
     static const std::vector<std::string> cmds = {
-        "/help", "/about", "/info", "/settings", "/provider", "/model", "/btw", "/note",
+        "/help", "/about", "/info", "/settings", "/provider", "/model", "/profile", "/btw", "/note", "/steer",
         "/tools", "/strict", "/thinking", "/effort", "/theme", "/stream", "/bell",
         "/memories", "/roadmap", "/context", "/cost", "/history", "/retry", "/undo", "/tasks",
         "/pin", "/pins", "/unpin", "/queue", "/trust", "/skills", "/skill", "/plan",
@@ -1445,7 +1456,37 @@ void InlineRepl::handle_tab() {
     if ( is_command ) {
         for ( const auto& c : slash_commands())
             if ( c.rfind(token, 0) == 0 ) { matches.push_back(c); display.push_back(c); }
-    } else if ( !token.empty() || !at_prefix.empty()) {
+    } else {
+        std::string prefix_before = common::trim_ws(_input.substr(0, start));
+        std::vector<std::string> sub_candidates;
+        if ( prefix_before == "/profile" || prefix_before == "/tools profile" ) {
+            sub_candidates = { "full", "code", "research", "review", "minimal" };
+        } else if ( prefix_before == "/tools" ) {
+            sub_candidates = { "confirm", "auto", "insecure", "list", "group", "profile" };
+        } else if ( prefix_before == "/tools group" ) {
+            sub_candidates = { "core", "web", "workflow", "skills", "mcp" };
+        } else if ( prefix_before.rfind("/tools group ", 0) == 0 ) {
+            sub_candidates = { "on", "off" };
+        } else if ( prefix_before == "/mcp" ) {
+            sub_candidates = { "refresh", "prompt", "enable", "disable" };
+        } else if ( prefix_before == "/mcp enable" || prefix_before == "/mcp disable" ) {
+            if ( _mcp_provider ) {
+                for ( const auto& s : _mcp_provider())
+                    sub_candidates.push_back(s.name);
+            }
+        }
+
+        if ( !sub_candidates.empty()) {
+            for ( const auto& c : sub_candidates ) {
+                if ( token.empty() || c.rfind(token, 0) == 0 ) {
+                    matches.push_back(c);
+                    display.push_back(c);
+                }
+            }
+        }
+    }
+
+    if ( matches.empty() && ( !token.empty() || !at_prefix.empty())) {
         // Path completion: split into a directory part and a name prefix.
         std::string dir, prefix;
         size_t slash = token.rfind('/');
@@ -1872,17 +1913,36 @@ void InlineRepl::on_enter() {
         // starts work (clear, undo, compact, model/provider switch, …) queues so
         // it runs when the turn finishes, instead of interleaving with the output.
         if ( _turn_running && !command_runs_immediately(trimmed)) {
-            PendingKind kind = trimmed.rfind("/btw", 0) == 0 || trimmed.rfind("/note", 0) == 0
+            bool is_steer = trimmed.rfind("/steer", 0) == 0;
+            PendingKind kind = ( is_steer || trimmed.rfind("/btw", 0) == 0 || trimmed.rfind("/note", 0) == 0 )
                 ? PendingKind::LiveNote : ( trimmed[0] == '!' ? PendingKind::Shell : PendingKind::Command );
             if ( kind == PendingKind::LiveNote ) {
                 std::lock_guard<std::mutex> lk(_mx);
                 _live_updates.push_back(trimmed);
-                _notices.push({ "btw update queued for the next checkpoint", false });
+                _notices.push({ is_steer ? "steering update queued for the next checkpoint"
+                                         : "btw update queued for the next checkpoint", false });
             } else {
                 enqueue_pending(trimmed, kind);
             }
             tcflush(STDIN_FILENO, TCIFLUSH);
             draw_live();
+            return;
+        }
+        if ( trimmed.rfind("/steer", 0) == 0 ) {
+            std::string prompt = common::trim_ws(trimmed.substr(6));
+            if ( prompt.empty()) {
+                echo_user(trimmed);
+                wr(_theme.warn + "usage: /steer <prompt>  — steer active work at the next checkpoint, or send as a prompt\n" + Theme::reset);
+                _input.clear(); _cursor = 0; _input_window_start = 0;
+                draw_live();
+                return;
+            }
+            _prompt_history.push_back(line);
+            _history_index = _prompt_history.size();
+            _stashed_input.clear();
+            _input.clear(); _cursor = 0; _input_window_start = 0;
+            echo_user(prompt);
+            start_turn(prompt, prompt, /*already_echoed=*/true);
             return;
         }
         run_command_line(trimmed);
@@ -2246,7 +2306,9 @@ std::string InlineRepl::budget_warning() {
     double frac = 0.0;
     std::string detail;
     if ( _config.budget_usd > 0.0 ) {
-        double cost = _config.session_cost(in, out, _stats.session_cached.load(std::memory_order_relaxed));
+        double cost = _config.session_cost(in, out,
+                                           _stats.session_cached.load(std::memory_order_relaxed),
+                                           _stats.session_cache_creation.load(std::memory_order_relaxed));
         if ( cost >= 0 ) {
             double f = cost / _config.budget_usd;
             if ( f > frac ) {
@@ -2279,14 +2341,23 @@ bool InlineRepl::maybe_auto_compact() {
     if ( !_config.auto_compact )
         return false;
     size_t budget = _config.compaction_budget();
-    if ( budget == 0 )
-        return false; // unknown model window — nothing reliable to measure against
+    if ( budget == 0 ) {
+        if ( _config.auto_compact_max_tokens > 0 )
+            budget = _config.auto_compact_max_tokens;
+        else
+            return false; // unknown model window — nothing reliable to measure against
+    }
     long ctx = _stats.context_tokens.load(std::memory_order_relaxed);
+    if ( ctx <= 0 )
+        ctx = static_cast<long>(_conversation.estimate_tokens(_config.provider));
     if ( ctx <= 0 )
         return false; // no usage reported yet
     size_t pct = ( _config.auto_compact_pct >= 10 && _config.auto_compact_pct <= 100 )
                ? _config.auto_compact_pct : 80;
-    if ( static_cast<size_t>(ctx) < budget * pct / 100 )
+    size_t target = budget * pct / 100;
+    if ( _config.auto_compact_max_tokens > 0 && target > _config.auto_compact_max_tokens )
+        target = _config.auto_compact_max_tokens;
+    if ( static_cast<size_t>(ctx) < target )
         return false;
     // Need at least a couple of exchanges to be worth summarising; compact_history
     // itself declines a near-empty history, but avoid the spinner flash for it.
@@ -2296,9 +2367,9 @@ bool InlineRepl::maybe_auto_compact() {
     if ( non_system < 4 )
         return false;
 
-    int used = static_cast<int>(static_cast<long long>(ctx) * 100 / static_cast<long long>(budget));
+    int used = static_cast<int>(static_cast<long long>(ctx) * 100 / static_cast<long long>(target));
     start_async_command("/compact", "auto-compacting",
-                        "auto-compact (context " + std::to_string(used) + "% of budget)");
+                        "auto-compact (context " + std::to_string(used) + "% of trigger limit)");
     return true;
 }
 
@@ -2841,6 +2912,85 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         open_list_menu(std::move(m));
         return;
     }
+    if ( trimmed == "/profile" ) {
+        ListMenu m;
+        m.title = "tool profile";
+        m.rows = {
+            "full      — all registered tools enabled",
+            "code      — coding tools (disables web, workflow)",
+            "research  — read-only exploration + web search",
+            "review    — read-only audit (no web/mutations)",
+            "minimal   — read, edit, and bash only"
+        };
+        m.keys = { "full", "code", "research", "review", "minimal" };
+        m.select_cmd = "/profile ";
+        m.current = _config.tool_profile.empty() ? "code" : _config.tool_profile;
+        open_list_menu(std::move(m));
+        return;
+    }
+    if ( trimmed == "/tools list" ) {
+        if ( _tools_provider ) {
+            auto tools = _tools_provider();
+            if ( !tools.empty()) {
+                ListMenu m;
+                m.title = "tools";
+                for ( const auto& t : tools ) {
+                    std::string glyph = t.enabled ? "✓" : "○";
+                    std::string row = glyph + " " + t.name;
+                    if ( row.size() < 24 ) row += std::string(24 - row.size(), ' ');
+                    row += " [" + t.group + "]  ~" + std::to_string(t.schema_tokens) + " tok";
+                    if ( t.mutating ) row += "  (mutating)";
+                    m.rows.push_back(row);
+                    m.keys.push_back(t.name);
+
+                    std::string detail = "Tool: " + t.name + "\n";
+                    detail += "Group: " + t.group + "\n";
+                    detail += "Status: " + std::string(t.enabled ? "enabled" : "disabled") + "\n";
+                    detail += "Mutating: " + std::string(t.mutating ? "yes" : "no") + "\n";
+                    detail += "Estimated schema tokens: ~" + std::to_string(t.schema_tokens) + "\n\n";
+                    detail += "Description:\n" + t.description + "\n";
+                    m.details.push_back(detail);
+                }
+                m.hint = "↑↓ select · Enter details · esc close";
+                open_list_menu(std::move(m));
+                return;
+            }
+        }
+    }
+    if ( trimmed == "/mcp" ) {
+        if ( _mcp_provider ) {
+            auto servers = _mcp_provider();
+            if ( !servers.empty()) {
+                ListMenu m;
+                m.title = "MCP servers";
+                for ( const auto& s : servers ) {
+                    std::string glyph = !s.enabled ? "○" : ( s.connected ? "✓" : "✗" );
+                    std::string row = glyph + " " + s.name + "  [" + s.transport + "]";
+                    if ( !s.enabled ) row += "  (disabled)";
+                    else if ( !s.connected ) row += "  (" + (s.error.empty() ? "disconnected" : s.error) + ")";
+                    else row += "  (" + std::to_string(s.tool_names.size()) + " tools)";
+                    m.rows.push_back(row);
+                    m.keys.push_back(s.name);
+
+                    std::string detail = "MCP Server: " + s.name + "\n";
+                    detail += "Transport: " + s.transport + "\n";
+                    detail += "Status: " + std::string(!s.enabled ? "disabled" : (s.connected ? "connected" : "disconnected")) + "\n";
+                    if ( !s.error.empty()) detail += "Error: " + s.error + "\n";
+                    detail += "\nExposed tools (" + std::to_string(s.tool_names.size()) + "):\n";
+                    for ( const auto& tn : s.tool_names )
+                        detail += "  • " + tn + "\n";
+                    m.details.push_back(detail);
+                }
+                m.actions.push_back({ 'e', "/mcp enable ", "enable" });
+                m.actions.push_back({ 'd', "/mcp disable ", "disable" });
+                m.actions.push_back({ 'r', "/mcp refresh", "refresh" });
+                m.reopen_cmd = "/mcp";
+                m.hint = "↑↓ select · Enter details · e enable · d disable · r refresh · esc close";
+                open_list_menu(std::move(m));
+                return;
+            }
+        }
+    }
     if ( trimmed == "/tools" || trimmed == "/stream" || trimmed == "/strict" || trimmed == "/plan" ) {
         ListMenu m;
         if ( trimmed == "/tools" ) {
@@ -2998,10 +3148,10 @@ void InlineRepl::render_context() {
             return std::to_string(n / 1000) + "." + std::to_string((n % 1000) / 100) + "k";
         return std::to_string(n);
     };
-    auto estimate = [](const std::vector<Message>& msgs) {
+    auto estimate = [this](const std::vector<Message>& msgs) {
         struct Totals { size_t system = 0, messages = 0, tool_results = 0, tool_calls = 0; size_t elided = 0; } t;
         for ( const auto& m : msgs ) {
-            size_t content = m.content.size() / 4;
+            size_t content = Conversation::estimate_message_tokens(m, _config.provider);
             if ( m.role == Role::SYSTEM ) t.system += content;
             else if ( m.role == Role::TOOL ) {
                 t.tool_results += content;
@@ -3026,14 +3176,33 @@ void InlineRepl::render_context() {
     if ( _config.supersede_tools )
         effective = Conversation::supersede_stale_tools(std::move(effective));
     effective = Conversation::elide_old_large_tool_results(std::move(effective));
+    if ( _config.context_budget() > 0 )
+        effective = _conversation.within_token_budget(_config.context_budget(), std::move(effective), _config.provider);
+
+    size_t schema_tokens = 0;
+    size_t builtin_tokens = 0, mcp_tokens = 0;
+    if ( _tools_provider ) {
+        for ( const auto& ti : _tools_provider() ) {
+            if ( ti.enabled ) {
+                schema_tokens += ti.schema_tokens;
+                if ( ti.group == "mcp" ) mcp_tokens += ti.schema_tokens;
+                else builtin_tokens += ti.schema_tokens;
+            }
+        }
+    }
 
     auto raw = estimate(saved);
     auto eff = estimate(effective);
-    size_t raw_total = sum(raw), eff_total = sum(eff);
+    size_t raw_total = sum(raw) + schema_tokens, eff_total = sum(eff) + schema_tokens;
     size_t raw_bytes = raw_tool_bytes(saved), eff_bytes = raw_tool_bytes(effective);
     size_t saved_bytes = raw_bytes > eff_bytes ? raw_bytes - eff_bytes : 0;
     size_t mem = load_memories(_config.home_dir, _config.provider).size() / 4;
+    std::string proj_instr_text;
+    try { proj_instr_text = load_project_instructions(std::filesystem::current_path().string()); } catch (...) {}
+    size_t proj_instr_tokens = proj_instr_text.size() / 4;
     long actual = _stats.context_tokens.load(std::memory_order_relaxed);
+    long last_cached = _stats.last_cached.load(std::memory_order_relaxed);
+    long session_cached = _stats.session_cached.load(std::memory_order_relaxed);
 
     auto pct = [eff_total](size_t n) -> std::string {
         if ( eff_total == 0 ) return "0%";
@@ -3054,14 +3223,20 @@ void InlineRepl::render_context() {
 
     wr("  " + _theme.ai + "●" + Theme::reset + " system prompt   " + fmt(eff.system) + "  " +
        _theme.dim + "(" + pct(eff.system) + ")" + Theme::reset + "\n");
+    if ( proj_instr_tokens > 0 )
+        wr("    " + _theme.dim + "└ instructions  " + fmt(proj_instr_tokens) + "  (AGENTS.md)" + Theme::reset + "\n");
+    if ( mem > 0 )
+        wr("    " + _theme.dim + "└ memories      " + fmt(mem) + Theme::reset + "\n");
     wr("  " + _theme.command + "●" + Theme::reset + " messages        " + fmt(eff.messages) + "  " +
        _theme.dim + "(" + pct(eff.messages) + ")" + Theme::reset + "\n");
     wr("  " + _theme.command + "●" + Theme::reset + " tool results    " + fmt(eff.tool_results) + "  " +
        _theme.dim + "(" + pct(eff.tool_results) + ")" + Theme::reset + "\n");
     if ( eff.tool_calls > 0 )
         wr("    " + _theme.dim + "└ tool calls    " + fmt(eff.tool_calls) + Theme::reset + "\n");
-    if ( mem > 0 )
-        wr("    " + _theme.dim + "└ memories      " + fmt(mem) + Theme::reset + "\n");
+    if ( schema_tokens > 0 ) {
+        wr("  " + _theme.command + "●" + Theme::reset + " tools schema   " + fmt(schema_tokens) + "  " +
+           _theme.dim + "(" + pct(schema_tokens) + " · " + std::to_string(builtin_tokens) + " built-in, " + std::to_string(mcp_tokens) + " mcp)" + Theme::reset + "\n");
+    }
 
     if ( raw_total != eff_total || eff.elided > 0 ) {
         wr("\n  " + _theme.dim + "effective request: " + fmt(eff_total) + " tokens; saved transcript: " +
@@ -3079,9 +3254,25 @@ void InlineRepl::render_context() {
         limit_str = _config.context_limit == 0 ? "unlimited" : fmt(_config.context_limit) + " tokens";
     }
     std::string footer = "  " + _theme.dim + "context limit: " + limit_str;
-    if ( actual > 0 )
-        footer += " · last turn reported " + fmt(static_cast<size_t>(actual));
+    if ( actual > 0 ) {
+        bool actual_reported = _stats.context_is_reported.load(std::memory_order_relaxed);
+        footer += " · last turn " + std::string(actual_reported ? "reported " : "estimated ~") + fmt(static_cast<size_t>(actual));
+    }
+    if ( last_cached > 0 )
+        footer += " (" + fmt(static_cast<size_t>(last_cached)) + " cached)";
     footer += Theme::reset + std::string("\n");
+    long session_creation = _stats.session_cache_creation.load(std::memory_order_relaxed);
+    if ( session_cached > 0 || session_creation > 0 ) {
+        int disc = _config.provider_pricing_rules(_config.provider, _config.model).discount_pct();
+        footer += "  " + _theme.dim + "prompt cache:   ";
+        if ( session_cached > 0 )
+            footer += fmt(static_cast<size_t>(session_cached)) + " tokens cached (~" + std::to_string(disc) + "% cost reduction)";
+        if ( session_creation > 0 ) {
+            if ( session_cached > 0 ) footer += " · ";
+            footer += fmt(static_cast<size_t>(session_creation)) + " created";
+        }
+        footer += std::string(Theme::reset) + "\n";
+    }
     wr(footer);
 
     draw_live();
@@ -3151,7 +3342,7 @@ void InlineRepl::open_settings_menu() {
         0, 2000, 50, "per turn", "unlimited");
     add("redact_secrets", "redact secrets", _config.redact_secrets ? "on" : "off", TOOLS,
         "mask credentials in tool output before it is sent to the model", { "off", "on" });
-    if ( _config.provider == "claude" )
+    if ( _cap_checker ? _cap_checker("advisor") : ( _config.provider == "claude" ) )
         add("advisor", "advisor", _config.advisor ? "on" : "off", TOOLS,
             "let the model consult a stronger advisor model", { "off", "on" });
 

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <random>
 #include <fstream>
+#include <mutex>
 #include "agent/auth/claude_oauth.hpp"
 #include "logger.hpp"
 #include "throws.hpp"
@@ -47,7 +48,10 @@ Claude::Claude(const Config& cfg) : Anthropic(cfg) {
 }
 
 bool Claude::refresh_now(api::Client& client) {
-    // Another instance (or a restart) may have refreshed — and thereby ROTATED —
+    static std::mutex refresh_mx;
+    std::lock_guard<std::mutex> lock(refresh_mx);
+
+    // Another instance (or parallel thread) may have refreshed — and thereby ROTATED —
     // the refresh token since this process loaded its copy. Re-read the
     // credentials file first and prefer the stored token when it differs, so we
     // never burn a rotated-out refresh token (which 401s and used to demand a
@@ -55,8 +59,11 @@ bool Claude::refresh_now(api::Client& client) {
     if ( auto disk = auth::load_claude_token(_config.home_dir)) {
         if ( !disk->refresh_token.empty() &&
              ( !_token || disk->refresh_token != _token->refresh_token ||
-               disk->access_token != _token->access_token ))
+               disk->access_token != _token->access_token )) {
             _token = disk;
+            if ( _token && !auth::token_needs_refresh(*_token, 300))
+                return true;
+        }
     }
 
     if ( !_token || _token->refresh_token.empty())

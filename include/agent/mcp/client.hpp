@@ -89,11 +89,15 @@ public:
         bool connected = false;
         std::string error;
         std::string command;   // command or url
+        bool enabled = true;
         std::vector<std::string> tool_names;
         std::vector<std::string> resource_uris;
         std::vector<std::string> prompt_names;
     };
     std::vector<ServerInfo> status() const;
+
+    bool set_server_enabled(const std::string& name, bool enabled);
+    bool is_server_enabled(const std::string& name) const;
 
     bool any_configured() const { return !_servers.empty(); }
 
@@ -122,6 +126,7 @@ private:
         std::string session_id;
 
         bool connected = false;
+        bool enabled = true;
         bool needs_approval = false; // from an untrusted config; not auto-connected
         std::string error;
         std::vector<ToolDef> tools;

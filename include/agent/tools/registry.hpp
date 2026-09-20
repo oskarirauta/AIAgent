@@ -3,6 +3,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include "json.hpp"
@@ -51,21 +52,44 @@ public:
     void set_confirm_callback(confirm_cb_t cb);
     void set_activity_callback(activity_cb_t cb) { _activity_cb = std::move(cb); }
     void set_pre_run_callback(pre_run_cb_t cb) { _pre_run_cb = std::move(cb); }
-    void set_mode(ConfirmMode mode) { _mode = mode; }
-    void set_strict(bool strict) { _strict = strict; } // ignore the safe-command list when true
-    void set_plan_mode(bool plan) { _plan_mode = plan; } // block mutating tools (read-only planning)
-    bool plan_mode() const { return _plan_mode; }
+    void set_mode(ConfirmMode mode) { std::lock_guard<std::recursive_mutex> lk(_mx); _mode = mode; }
+    void set_strict(bool strict) { std::lock_guard<std::recursive_mutex> lk(_mx); _strict = strict; } // ignore the safe-command list when true
+    void set_plan_mode(bool plan) { std::lock_guard<std::recursive_mutex> lk(_mx); _plan_mode = plan; } // block mutating tools (read-only planning)
+    bool plan_mode() const { std::lock_guard<std::recursive_mutex> lk(_mx); return _plan_mode; }
 
     // Visible session state for /trust: the standing grants (exact + similar)
     // with a use counter, whether a turn grant is active, and the mode/strict.
     struct Grant { std::string kind; std::string key; size_t uses = 0; }; // kind: "session"|"similar"
     std::vector<Grant> grants() const;
-    bool turn_grant_active() const { return _turn_grant; }
-    ConfirmMode mode() const { return _mode; }
-    bool strict() const { return _strict; }
+    bool turn_grant_active() const { std::lock_guard<std::recursive_mutex> lk(_mx); return _turn_grant; }
+    ConfirmMode mode() const { std::lock_guard<std::recursive_mutex> lk(_mx); return _mode; }
+    bool strict() const { std::lock_guard<std::recursive_mutex> lk(_mx); return _strict; }
     // Revoke one grant (exact or similar key) or every grant; returns count removed.
     size_t revoke_grant(const std::string& key);
     size_t revoke_all_grants();
+
+    struct ToolInfo {
+        std::string name;
+        std::string group;
+        std::string description;
+        bool mutating = false;
+        bool enabled = true;
+        size_t schema_tokens = 0;
+    };
+
+    std::vector<ToolInfo> list_tools() const;
+    bool apply_profile(const std::string& profile);
+    std::string active_profile() const { std::lock_guard<std::recursive_mutex> lk(_mx); return _active_profile; }
+    static std::vector<std::string> available_profiles();
+    static std::vector<std::string> available_groups();
+
+    void set_group_enabled(const std::string& group, bool enabled);
+    bool is_group_enabled(const std::string& group) const;
+    std::set<std::string> disabled_groups() const { std::lock_guard<std::recursive_mutex> lk(_mx); return _disabled_groups; }
+
+    void set_tool_enabled(const std::string& name, bool enabled);
+    bool is_tool_enabled(const std::string& name) const;
+    std::set<std::string> disabled_tools() const { std::lock_guard<std::recursive_mutex> lk(_mx); return _disabled_tools; }
 
     JSON schema() const;
     std::string execute(const std::string& name, const JSON& args);
@@ -98,6 +122,7 @@ public:
     static bool classify_safe(const std::string& command);
 
 private:
+    mutable std::recursive_mutex _mx;
     std::map<std::string, std::unique_ptr<Tool>> _tools;
     mutable bool _schema_dirty = true;
     mutable JSON _cached_schema;
@@ -107,6 +132,9 @@ private:
     ConfirmMode _mode = ConfirmMode::confirm;
     bool _strict = false;
     bool _plan_mode = false;
+    std::string _active_profile = "code";
+    std::set<std::string> _disabled_groups = { "web", "workflow" };
+    std::set<std::string> _disabled_tools;
 
     // Session-scoped approvals granted via "allow session" / "allow similar".
     std::set<std::string> _allow_exact;   // full command / action strings
@@ -117,7 +145,7 @@ private:
     // at each new user turn, so autonomy never leaks past the task just reviewed.
     bool _turn_grant = false;
 public:
-    void begin_turn() { _turn_grant = false; }
+    void begin_turn() { std::lock_guard<std::recursive_mutex> lk(_mx); _turn_grant = false; }
 };
 
 } // namespace agent::tools

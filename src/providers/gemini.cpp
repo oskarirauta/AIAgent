@@ -5,15 +5,26 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include <mutex>
 
 #include "agent/text_utils.hpp"
 #include "common.hpp"
 #include "logger.hpp"
 #include "throws.hpp"
 
+#include <atomic>
+
 namespace agent::providers {
 
 namespace {
+
+static std::string next_gemini_call_id() {
+    static std::atomic<uint64_t> s_gemini_call_seq{0};
+    uint64_t id = ++s_gemini_call_seq;
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "call_%06llu", static_cast<unsigned long long>(id));
+    return std::string(buf);
+}
 
 long json_long(const JSON& v) {
     if ( v == JSON::TYPE::INT ) return static_cast<long>(static_cast<long long>(v));
@@ -108,6 +119,16 @@ std::vector<std::string> Gemini::list_models(api::Client& client) {
         std::vector<std::string> out;
         for ( size_t i = 0; i < j["models"].size(); ++i ) {
             const JSON& m = j["models"][i];
+            if ( m.contains("supportedGenerationMethods") && m["supportedGenerationMethods"] == JSON::TYPE::ARRAY ) {
+                bool can_generate = false;
+                for ( size_t k = 0; k < m["supportedGenerationMethods"].size(); ++k ) {
+                    if ( m["supportedGenerationMethods"][k].to_string() == "generateContent" ) {
+                        can_generate = true;
+                        break;
+                    }
+                }
+                if ( !can_generate ) continue;
+            }
             if ( m.contains("name") && m["name"] == JSON::TYPE::STRING ) {
                 std::string n = m["name"].to_string();
                 if ( n.rfind("models/", 0) == 0 ) n = n.substr(7);
@@ -144,8 +165,14 @@ std::vector<std::pair<std::string, std::string>> Gemini::extra_headers() const {
 }
 
 bool Gemini::refresh_now(api::Client& client) {
+    static std::mutex refresh_mx;
+    std::lock_guard<std::mutex> lock(refresh_mx);
     auto tok = auth::load_gemini_token(_config.home_dir);
     if ( !tok || tok->refresh_token.empty() ) return false;
+    if ( !auth::gemini_token_needs_refresh(*tok) ) {
+        _token = tok;
+        return true;
+    }
     try {
         _token = auth::refresh_gemini_token(client, *tok);
         return _token.has_value() && !_token->access_token.empty();
@@ -470,7 +497,7 @@ Response Gemini::parse_response(const JSON& response) {
                 ToolCall tc;
                 tc.name = fc.contains("name") ? fc["name"].to_string() : "";
                 tc.arguments = fc.contains("args") ? fc["args"] : JSON::Object{};
-                tc.id = "call_" + tc.name + "_" + std::to_string(out.tool_calls.size() + 1);
+                tc.id = next_gemini_call_id();
                 out.tool_calls.push_back(tc);
             }
         }
@@ -481,7 +508,10 @@ Response Gemini::parse_response(const JSON& response) {
         if ( u.contains("promptTokenCount") ) out.input_tokens = json_long(u["promptTokenCount"]);
         if ( u.contains("candidatesTokenCount") ) out.output_tokens = json_long(u["candidatesTokenCount"]);
         if ( u.contains("cachedContentTokenCount") ) out.cached_input_tokens = json_long(u["cachedContentTokenCount"]);
+        if ( u.contains("thoughtsTokenCount") ) out.reasoning_tokens = json_long(u["thoughtsTokenCount"]);
     }
+    if ( out.reasoning_tokens == 0 && !out.thinking.empty() )
+        out.reasoning_tokens = static_cast<long>(out.thinking.size() / 4);
 
     return out;
 }
@@ -501,6 +531,7 @@ void Gemini::stream_reset() {
     _s_input_tokens = 0;
     _s_output_tokens = 0;
     _s_cached_tokens = 0;
+    _s_reasoning_tokens = 0;
     _s_truncated = false;
     _s_success = true;
     _s_error.clear();
@@ -510,10 +541,11 @@ StreamChunk Gemini::parse_stream(const std::string& chunk, std::string& buffer, 
     buffer += chunk;
     StreamChunk sc;
 
+    size_t start = 0;
     size_t pos = 0;
-    while ( (pos = buffer.find('\n')) != std::string::npos ) {
-        std::string line = buffer.substr(0, pos);
-        buffer.erase(0, pos + 1);
+    while ( (pos = buffer.find('\n', start)) != std::string::npos ) {
+        std::string line = buffer.substr(start, pos - start);
+        start = pos + 1;
 
         line = common::trim_ws(line);
         if ( line.empty() || line[0] == ':' ) continue;
@@ -537,6 +569,7 @@ StreamChunk Gemini::parse_stream(const std::string& chunk, std::string& buffer, 
                     if ( u.contains("promptTokenCount") ) _s_input_tokens = json_long(u["promptTokenCount"]);
                     if ( u.contains("candidatesTokenCount") ) _s_output_tokens = json_long(u["candidatesTokenCount"]);
                     if ( u.contains("cachedContentTokenCount") ) _s_cached_tokens = json_long(u["cachedContentTokenCount"]);
+                    if ( u.contains("thoughtsTokenCount") ) _s_reasoning_tokens = json_long(u["thoughtsTokenCount"]);
                 }
 
                 if ( j.contains("candidates") && j["candidates"] == JSON::TYPE::ARRAY && !j["candidates"].empty() ) {
@@ -566,7 +599,7 @@ StreamChunk Gemini::parse_stream(const std::string& chunk, std::string& buffer, 
                                 ToolCall tc;
                                 tc.name = fc.contains("name") ? fc["name"].to_string() : "";
                                 tc.arguments = fc.contains("args") ? fc["args"] : JSON::Object{};
-                                tc.id = "call_" + tc.name + "_" + std::to_string(_s_tools.size() + 1);
+                                tc.id = next_gemini_call_id();
                                 _s_tools.push_back(tc);
                             }
                         }
@@ -577,6 +610,8 @@ StreamChunk Gemini::parse_stream(const std::string& chunk, std::string& buffer, 
             }
         }
     }
+    if ( start > 0 )
+        buffer.erase(0, start);
 
     return sc;
 }
@@ -594,6 +629,8 @@ Response Gemini::stream_result() {
     out.input_tokens = _s_input_tokens;
     out.output_tokens = _s_output_tokens;
     out.cached_input_tokens = _s_cached_tokens;
+    out.reasoning_tokens = _s_reasoning_tokens > 0 ? _s_reasoning_tokens
+                          : static_cast<long>(_s_reasoning.size() / 4);
     out.truncated = _s_truncated;
     return out;
 }

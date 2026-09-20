@@ -12,6 +12,7 @@
 
 #include "agent/config.hpp"
 #include "agent/conversation.hpp"
+#include "agent/repl.hpp"
 #include "agent/repl_inline.hpp"
 #include "agent/memory.hpp"
 #include "agent/token_stats.hpp"
@@ -21,6 +22,7 @@
 #include "agent/tools/edit_file.hpp"
 #include "agent/providers/provider.hpp"
 #include "agent/api/rate_limit.hpp"
+#include "agent/api/client.hpp"
 #include "agent/providers/openai.hpp"
 #include "agent/providers/ollama.hpp"
 #include "agent/providers/anthropic.hpp"
@@ -29,6 +31,7 @@
 #include "agent/providers/kimi.hpp"
 #include "agent/providers/claude.hpp"
 #include "agent/providers/codex.hpp"
+#include "agent/providers/gemini.hpp"
 #include "agent/auth/claude_oauth.hpp"
 #include "agent/tools/registry.hpp"
 #include "agent/skills.hpp"
@@ -134,10 +137,14 @@ static void test_codex_provider() {
     std::cout << "codex Responses API provider" << std::endl;
     check(agent::Config::default_model_for("codex") == "gpt-5.6", "codex default model is gpt-5.6");
     const auto& codex_models = agent::Config::known_models_for("codex");
-    check(codex_models.size() >= 4 && codex_models[0] == "gpt-5.6" &&
-          codex_models[1] == "gpt-5.5" && codex_models[2] == "gpt-5.4" &&
-          codex_models[3] == "gpt-5.4-mini",
+    check(codex_models.size() >= 8 && codex_models[0] == "gpt-6-astra" &&
+          codex_models[1] == "gpt-5.6-sol" && codex_models[2] == "gpt-5.6-terra" &&
+          codex_models[3] == "gpt-5.6-luna",
           "codex model shortlist includes the ChatGPT/Codex family");
+    check(agent::Config::resolve_model("codex", "astra").model == "gpt-6-astra", "astra alias resolves to gpt-6-astra");
+    check(agent::Config::resolve_model("codex", "sol").model == "gpt-5.6-sol", "sol alias resolves to gpt-5.6-sol");
+    check(agent::Config::resolve_model("codex", "terra").model == "gpt-5.6-terra", "terra alias resolves to gpt-5.6-terra");
+    check(agent::Config::resolve_model("codex", "luna").model == "gpt-5.6-luna", "luna alias resolves to gpt-5.6-luna");
 
     agent::Config cfg; cfg.provider = "codex"; cfg.model = "gpt-5.5";
     agent::providers::Codex p(cfg);
@@ -200,6 +207,219 @@ static void test_codex_provider() {
         buffer, done);
     check(thinking.reasoning == "ajatellaan ensin" && p.stream_result().thinking == "ajatellaan ensin",
           "Codex live stream preserves multiple reasoning deltas in one HTTP chunk");
+
+    agent::api::Client client;
+    auto codex_live_models = p.list_models(client);
+    check(!codex_live_models.empty() && codex_live_models[0] == "gpt-6-astra",
+          "Codex list_models returns desktop app models starting with gpt-6-astra");
+}
+
+static void test_gemini_provider() {
+    std::cout << "gemini provider & SSE streaming" << std::endl;
+    check(agent::Config::default_model_for("gemini") == "gemini-3.6-flash", "gemini default model is gemini-3.6-flash");
+
+    agent::Config cfg;
+    cfg.provider = "gemini";
+    cfg.model = "gemini-3.6-flash";
+    cfg.api_key = "test_key";
+    agent::providers::Gemini p(cfg);
+    check(p.name() == "gemini", "gemini provider name");
+
+    agent::Conversation c;
+    c.set_system("sys");
+    c.add_user("hello");
+    JSON req = p.build_request(c, JSON::Array{});
+    check(req.contains("contents"), "gemini request has contents");
+    check(req.contains("systemInstruction"), "gemini request has systemInstruction");
+    check(!req.contains("stream"), "gemini request does not contain stream flag in body");
+
+    // Test SSE parse_stream with comments, multiple chunks and single-pass buffer draining
+    std::string buffer;
+    bool done = false;
+    p.stream_reset();
+
+    std::string sse_chunk1 = ":keepalive\ndata: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello \"}]}}]}\n\n";
+    auto sc1 = p.parse_stream(sse_chunk1, buffer, done);
+    check(sc1.content == "Hello ", "first chunk parsed");
+    check(buffer.empty(), "buffer drained after full frame");
+
+    std::string sse_chunk2 = "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"World!\"}]}}]}\n\ndata: [DONE]\n\n";
+    auto sc2 = p.parse_stream(sse_chunk2, buffer, done);
+    check(sc2.content == "World!", "second chunk parsed");
+    check(done, "done marker set");
+    auto res = p.stream_result();
+    check(res.message == "Hello World!", "stream_result matches complete text");
+}
+
+static void test_gemini_tool_calls_and_continuation() {
+    std::cout << "gemini tool calls, continuation and role merging" << std::endl;
+    agent::Config cfg;
+    cfg.provider = "gemini";
+    cfg.model = "gemini-2.5-pro";
+    agent::providers::Gemini p(cfg);
+    check(p.supports_reasoning(), "gemini provider supports reasoning");
+
+    // 1. Tool declarations in build_request
+    JSON tools_schema = JSON::Array{
+        JSON::Object{
+            { "type", "function" },
+            { "function", JSON::Object{
+                { "name", "read_file" },
+                { "description", "Read file contents" },
+                { "parameters", JSON::Object{
+                    { "type", "object" },
+                    { "properties", JSON::Object{
+                        { "path", JSON::Object{ { "type", "string" } } }
+                    }},
+                    { "required", JSON::Array{ "path" } }
+                }}
+            }}
+        }
+    };
+    agent::Conversation c;
+    c.set_system("You are a helpful assistant.");
+    c.add_user("Please read main.cpp");
+
+    JSON req = p.build_request(c, tools_schema);
+    check(req.contains("tools") && req["tools"].size() > 0, "gemini request has tools");
+    check(req["tools"][0].contains("functionDeclarations"), "tools has functionDeclarations");
+    const JSON& decls = req["tools"][0]["functionDeclarations"];
+    check(decls.size() == 1 && decls[0]["name"].to_string() == "read_file", "read_file function declared");
+    check(decls[0]["parameters"]["required"][0].to_string() == "path", "parameters preserved");
+
+    // 2. parse_response: text + thoughts + functionCall + finishReason
+    JSON resp = JSON::Object{
+        { "candidates", JSON::Array{
+            JSON::Object{
+                { "finishReason", "STOP" },
+                { "content", JSON::Object{
+                    { "parts", JSON::Array{
+                        JSON::Object{
+                            { "thought", true },
+                            { "text", "I need to check the file contents first." }
+                        },
+                        JSON::Object{
+                            { "text", "Checking the code now." }
+                        },
+                        JSON::Object{
+                            { "functionCall", JSON::Object{
+                                { "name", "read_file" },
+                                { "args", JSON::Object{ { "path", "src/main.cpp" } } }
+                            }}
+                        }
+                    }}
+                }}
+            }
+        }},
+        { "usageMetadata", JSON::Object{
+            { "promptTokenCount", 450 },
+            { "candidatesTokenCount", 85 },
+            { "cachedContentTokenCount", 200 },
+            { "thoughtsTokenCount", 40 }
+        }}
+    };
+    auto r = p.parse_response(resp);
+    check(r.success, "gemini response parsed successfully");
+    check(r.thinking == "I need to check the file contents first.", "thought captured");
+    check(r.message == "Checking the code now.", "preceding text captured");
+    check(r.tool_calls.size() == 1, "one tool call parsed");
+    check(r.tool_calls[0].name == "read_file", "tool call name is read_file");
+    check(r.tool_calls[0].arguments["path"].to_string() == "src/main.cpp", "tool call arg path parsed");
+    check(r.tool_calls[0].id.rfind("call_", 0) == 0, "tool call ID has call_ prefix");
+    check(r.input_tokens == 450, "promptTokenCount parsed");
+    check(r.output_tokens == 85, "candidatesTokenCount parsed");
+    check(r.cached_input_tokens == 200, "cachedContentTokenCount parsed");
+    check(r.reasoning_tokens == 40, "thoughtsTokenCount parsed");
+    check(!r.truncated, "finishReason STOP is not truncated");
+
+    // 3. Multiple function calls with monotonic IDs
+    JSON multi_resp = JSON::Object{
+        { "candidates", JSON::Array{
+            JSON::Object{
+                { "finishReason", "MAX_TOKENS" },
+                { "content", JSON::Object{
+                    { "parts", JSON::Array{
+                        JSON::Object{
+                            { "functionCall", JSON::Object{
+                                { "name", "read_file" },
+                                { "args", JSON::Object{ { "path", "a.txt" } } }
+                            }}
+                        },
+                        JSON::Object{
+                            { "functionCall", JSON::Object{
+                                { "name", "list_directory" },
+                                { "args", JSON::Object{ { "path", "src" } } }
+                            }}
+                        }
+                    }}
+                }}
+            }
+        }}
+    };
+    auto r_multi = p.parse_response(multi_resp);
+    check(r_multi.tool_calls.size() == 2, "two tool calls parsed");
+    check(r_multi.tool_calls[0].name == "read_file", "first tool call is read_file");
+    check(r_multi.tool_calls[1].name == "list_directory", "second tool call is list_directory");
+    check(r_multi.tool_calls[0].id != r_multi.tool_calls[1].id, "tool call IDs are strictly unique");
+    check(r_multi.truncated, "finishReason MAX_TOKENS sets truncated flag");
+
+    // 4. Conversation continuation and consecutive role merging
+    // Flow: user -> model (tool_call) -> user (functionResponse) -> user (additional note)
+    agent::Conversation conv;
+    conv.set_system("System instructions");
+    conv.add_user("Inspect the project");
+    agent::ToolCall ctc{ r.tool_calls[0].id, r.tool_calls[0].name, r.tool_calls[0].arguments.dump() };
+    conv.add_assistant("Calling tools", { ctc });
+    conv.add_tool_result(r.tool_calls[0].id, "read_file", "int main() { return 0; }");
+    conv.add_user("Also check Makefile");
+
+    JSON cont_req = p.build_request(conv, tools_schema);
+    check(cont_req.contains("contents"), "continuation request has contents");
+    const JSON& contents = cont_req["contents"];
+    // Verify contents alternation: user -> model -> user (where functionResponse + user text are merged!)
+    check(contents.size() == 3, "consecutive user messages merged into single role entry");
+    check(contents[0]["role"].to_string() == "user", "turn 0 is user");
+    check(contents[1]["role"].to_string() == "model", "turn 1 is model");
+    check(contents[2]["role"].to_string() == "user", "turn 2 is user (merged role)");
+
+    // Turn 1 parts should have text + functionCall
+    check(contents[1]["parts"].size() >= 2, "model turn has text and functionCall");
+    check(contents[1]["parts"][1].contains("functionCall"), "model turn part 1 is functionCall");
+
+    // Turn 2 parts should have functionResponse followed by user text
+    check(contents[2]["parts"].size() == 2, "merged user turn has 2 parts");
+    check(contents[2]["parts"][0].contains("functionResponse"), "first part is functionResponse");
+    check(contents[2]["parts"][0]["functionResponse"]["name"].to_string() == "read_file", "functionResponse name matches");
+    check(contents[2]["parts"][0]["functionResponse"]["response"]["output"].to_string() == "int main() { return 0; }", "functionResponse output matches");
+    check(contents[2]["parts"][1].contains("text") && contents[2]["parts"][1]["text"].to_string() == "Also check Makefile", "second part is user text");
+
+    // 5. Streamed function calls
+    p.stream_reset();
+    std::string sse_buf;
+    bool sse_done = false;
+    std::string sse_tool = "data: {\"candidates\": [{\"content\": {\"parts\": [{\"functionCall\": {\"name\": \"grep\", \"args\": {\"pattern\": \"TODO\"}}}]}}]}\n\n";
+    p.parse_stream(sse_tool, sse_buf, sse_done);
+    auto streamed_res = p.stream_result();
+    check(streamed_res.tool_calls.size() == 1, "streamed functionCall parsed");
+    check(streamed_res.tool_calls[0].name == "grep", "streamed tool name is grep");
+    check(streamed_res.tool_calls[0].arguments["pattern"].to_string() == "TODO", "streamed tool args parsed");
+    check(streamed_res.tool_calls[0].id.rfind("call_", 0) == 0, "streamed tool call has monotonic ID");
+
+    // 6. Provider-aware context trimming consistency
+    agent::Conversation conv_budget;
+    conv_budget.set_system("System prompt with instructions");
+    for ( int i = 0; i < 20; ++i ) {
+        conv_budget.add_user("User step " + std::to_string(i) + ": short prompt query");
+        conv_budget.add_assistant("Assistant response step " + std::to_string(i) + ": let us examine the files and make sure everything compiles cleanly.");
+    }
+    auto trimmed_gemini = conv_budget.within_token_budget(300, {}, "gemini");
+    auto trimmed_openai = conv_budget.within_token_budget(300, {}, "openai");
+    check(!trimmed_gemini.empty(), "gemini trimmed history not empty");
+    check(!trimmed_openai.empty(), "openai trimmed history not empty");
+    check(trimmed_gemini[0].role == agent::Role::SYSTEM, "gemini trim retains system prompt");
+    check(trimmed_openai[0].role == agent::Role::SYSTEM, "openai trim retains system prompt");
+    check(trimmed_gemini[1].role == agent::Role::USER, "gemini trim snaps to user turn");
+    check(trimmed_openai[1].role == agent::Role::USER, "openai trim snaps to user turn");
 }
 
 static void test_reasoning_content() {
@@ -367,9 +587,10 @@ static void test_cached_token_accounting() {
         auto r = p.stream_result();
         check(r.input_tokens == 1050, "anthropic total input includes cache read+create");
         check(r.cached_input_tokens == 900, "anthropic cache-read tracked");
+        check(r.cache_creation_input_tokens == 50, "anthropic cache-creation tracked");
     }
     {
-        agent::Config cfg; cfg.model = "priced-model";
+        agent::Config cfg; cfg.provider = "claude"; cfg.model = "priced-model";
         cfg.pricing["priced-model"] = agent::ModelPricing{ 10.0, 30.0 };
         double full = cfg.session_cost(1000000, 0, 0);
         double cached = cfg.session_cost(1000000, 0, 1000000);
@@ -1718,6 +1939,137 @@ static void test_tools() {
     std::filesystem::remove("/tmp/ai_agent_tool_test.txt");
 }
 
+static void test_tool_groups() {
+    std::cout << "tool groups filtering" << std::endl;
+    agent::tools::Registry r;
+    r.register_defaults();
+    r.add(std::make_unique<agent::tools::WebSearch>("https://example.com"));
+    r.add(std::make_unique<agent::tools::FetchUrl>());
+    r.add(std::make_unique<agent::tools::WorkflowTool>(nullptr));
+    r.add(std::make_unique<agent::tools::SkillTool>(nullptr, nullptr));
+
+    r.apply_profile("full");
+    check(r.is_group_enabled("core"), "core enabled in full");
+    check(r.is_group_enabled("web"), "web enabled in full");
+    check(r.is_group_enabled("workflow"), "workflow enabled in full");
+    check(r.is_group_enabled("skills"), "skills enabled in full");
+    check(r.disabled_groups().empty(), "no disabled groups in full profile");
+
+    auto has_tool = [](const JSON& s, const std::string& name) {
+        for ( size_t i = 0; i < s.size(); ++i ) {
+            if ( s[i].contains("function") && s[i]["function"].contains("name") ) {
+                if ( s[i]["function"]["name"].to_string() == name ) return true;
+            }
+        }
+        return false;
+    };
+
+    JSON full_schema = r.schema();
+    check(has_tool(full_schema, "read_file"), "read_file present");
+    check(has_tool(full_schema, "web_search"), "web_search present in full schema");
+    check(has_tool(full_schema, "fetch_url"), "fetch_url present in full schema");
+    check(has_tool(full_schema, "run_workflow"), "run_workflow present in full schema");
+    check(has_tool(full_schema, "use_skill"), "use_skill present in full schema");
+
+    r.set_group_enabled("web", false);
+    check(!r.is_group_enabled("web"), "web is now disabled");
+    check(r.disabled_groups().count("web") == 1, "web in disabled_groups set");
+
+    JSON filtered = r.schema();
+    check(has_tool(filtered, "read_file"), "read_file still present when web disabled");
+    check(!has_tool(filtered, "web_search"), "web_search omitted when web disabled");
+    check(!has_tool(filtered, "fetch_url"), "fetch_url omitted when web disabled");
+    check(has_tool(filtered, "run_workflow"), "run_workflow still present");
+
+    r.set_group_enabled("workflow", false);
+    r.set_group_enabled("skills", false);
+    JSON filtered2 = r.schema();
+    check(!has_tool(filtered2, "run_workflow"), "run_workflow omitted");
+    check(!has_tool(filtered2, "use_skill"), "use_skill omitted");
+    check(has_tool(filtered2, "read_file"), "core read_file still present");
+
+    r.set_group_enabled("web", true);
+    r.set_group_enabled("workflow", true);
+    r.set_group_enabled("skills", true);
+    JSON restored = r.schema();
+    check(has_tool(restored, "web_search"), "web_search restored");
+    check(has_tool(restored, "fetch_url"), "fetch_url restored");
+    check(has_tool(restored, "run_workflow"), "run_workflow restored");
+    check(has_tool(restored, "use_skill"), "use_skill restored");
+    check(r.disabled_groups().empty(), "disabled_groups empty after restoring");
+}
+
+static void test_tool_profiles() {
+    std::cout << "tool profiles and dynamic selection" << std::endl;
+    agent::tools::Registry r;
+    r.register_defaults();
+    r.add(std::make_unique<agent::tools::WebSearch>("https://example.com"));
+    r.add(std::make_unique<agent::tools::FetchUrl>());
+    r.add(std::make_unique<agent::tools::WorkflowTool>(nullptr));
+    r.add(std::make_unique<agent::tools::SkillTool>(nullptr, nullptr));
+
+    check(r.active_profile() == "code", "default profile is code");
+    check(!r.is_group_enabled("web"), "web group disabled in default code profile");
+    check(!r.is_group_enabled("workflow"), "workflow group disabled in default code profile");
+    auto profiles = agent::tools::Registry::available_profiles();
+    check(profiles.size() == 5, "5 profiles available");
+
+    check(r.apply_profile("full"), "apply_profile full succeeds");
+    check(r.active_profile() == "full", "active profile is full");
+    check(r.is_group_enabled("web"), "web group enabled in full profile");
+    check(r.is_group_enabled("workflow"), "workflow group enabled in full profile");
+
+    check(r.apply_profile("code"), "apply_profile code succeeds");
+    check(r.active_profile() == "code", "active profile is code");
+    check(!r.is_group_enabled("web"), "web group disabled in code profile");
+    check(!r.is_group_enabled("workflow"), "workflow group disabled in code profile");
+    check(r.is_group_enabled("core"), "core group enabled in code profile");
+    check(!r.plan_mode(), "plan mode is off in code profile");
+
+    check(r.apply_profile("research"), "apply_profile research succeeds");
+    check(r.active_profile() == "research", "active profile is research");
+    check(r.is_group_enabled("web"), "web group enabled in research profile");
+    check(r.plan_mode(), "plan mode is on in research profile");
+    check(!r.is_tool_enabled("write_file"), "write_file disabled in research profile");
+    check(!r.is_tool_enabled("edit_file"), "edit_file disabled in research profile");
+    check(r.is_tool_enabled("read_file"), "read_file enabled in research profile");
+
+    JSON wargs = JSON::Object{{ "path", "/tmp/ai_agent_profile_test.txt" }, { "content", "x" }};
+    std::string wres = r.execute("write_file", wargs);
+    check(wres.find("disabled") != std::string::npos, "executing disabled tool returns error");
+
+    check(r.apply_profile("review"), "apply_profile review succeeds");
+    check(r.active_profile() == "review", "active profile is review");
+    check(!r.is_group_enabled("web"), "web disabled in review profile");
+    check(r.plan_mode(), "plan mode is on in review profile");
+    check(!r.is_tool_enabled("write_file"), "write_file disabled in review profile");
+    check(r.is_tool_enabled("read_file"), "read_file enabled in review profile");
+
+    check(r.apply_profile("minimal"), "apply_profile minimal succeeds");
+    check(r.active_profile() == "minimal", "active profile is minimal");
+    check(r.is_tool_enabled("read_file"), "read_file enabled in minimal");
+    check(r.is_tool_enabled("edit_file"), "edit_file enabled in minimal");
+    check(r.is_tool_enabled("run_command"), "run_command enabled in minimal");
+    check(!r.is_tool_enabled("write_file"), "write_file disabled in minimal");
+    check(!r.is_tool_enabled("list_directory"), "list_directory disabled in minimal");
+
+    check(r.apply_profile("full"), "apply_profile full succeeds");
+    check(r.active_profile() == "full", "active profile is full");
+    check(r.is_tool_enabled("write_file"), "write_file enabled in full");
+    check(r.is_group_enabled("web"), "web enabled in full");
+
+    auto tools = r.list_tools();
+    check(!tools.empty(), "list_tools returns tools");
+    check(tools[0].schema_tokens > 0, "tool schema tokens estimated");
+}
+
+static void test_mcp_server_toggle() {
+    std::cout << "mcp server enable/disable" << std::endl;
+    agent::mcp::Client mcp;
+    check(!mcp.set_server_enabled("nonexistent", false), "set_server_enabled returns false for nonexistent");
+    check(!mcp.is_server_enabled("nonexistent"), "is_server_enabled returns false for nonexistent");
+}
+
 static void test_expand_tilde() {
     std::cout << "tilde expansion" << std::endl;
     setenv("HOME", "/home/tester", 1);
@@ -1831,6 +2183,56 @@ static void test_tool_supersession() {
     check(a_valid, "elided result keeps its tool_call_id");
 }
 
+static void test_tool_supersession_extended() {
+    std::cout << "extended tool supersession (grep, dir, symbol, refs)" << std::endl;
+    using agent::Message; using agent::Role; using agent::ToolCall;
+    std::string big(500, 'X');
+    auto assistant = [](const std::string& id, const std::string& tool, const std::string& args) {
+        Message m(Role::ASSISTANT, "");
+        m.tool_calls.push_back(ToolCall{ id, tool, args });
+        return m;
+    };
+    auto result = [](const std::string& id, const std::string& body) {
+        return Message(Role::TOOL, body, id, "tool");
+    };
+
+    std::vector<Message> msgs = {
+        Message(Role::SYSTEM, "s"),
+        assistant("d1", "list_directory", "{\"path\":\".\"}"),
+        result("d1", "DIR1 " + big),
+        assistant("d2", "list_directory", "{\"path\":\".\"}"),
+        result("d2", "DIR2 " + big),
+        assistant("g1", "grep", "{\"pattern\":\"foo\",\"path\":\".\"}"),
+        result("g1", "GREP1 " + big),
+        assistant("g2", "grep", "{\"pattern\":\"foo\",\"path\":\".\"}"),
+        result("g2", "GREP2 " + big),
+        assistant("s1", "find_symbol", "{\"name\":\"MyClass\"}"),
+        result("s1", "SYM1 " + big),
+        assistant("s2", "find_symbol", "{\"name\":\"MyClass\"}"),
+        result("s2", "SYM2 " + big),
+        assistant("r1", "find_references", "{\"name\":\"my_fn\"}"),
+        result("r1", "REF1 " + big),
+        assistant("r2", "find_references", "{\"name\":\"my_fn\"}"),
+        result("r2", "REF2 " + big),
+    };
+
+    auto out = agent::Conversation::supersede_stale_tools(msgs);
+    auto body = [&](const std::string& id) {
+        for ( const auto& m : out )
+            if ( m.role == Role::TOOL && m.tool_call_id.value_or("") == id ) return m.content;
+        return std::string("<missing>");
+    };
+
+    check(body("d1").find("superseded by a later listing of .") != std::string::npos, "older list_directory elided");
+    check(body("d2").find("DIR2") != std::string::npos, "newest list_directory kept");
+    check(body("g1").find("superseded by a later grep in .") != std::string::npos, "older grep elided");
+    check(body("g2").find("GREP2") != std::string::npos, "newest grep kept");
+    check(body("s1").find("superseded by a later lookup of MyClass") != std::string::npos, "older find_symbol elided");
+    check(body("s2").find("SYM2") != std::string::npos, "newest find_symbol kept");
+    check(body("r1").find("superseded by a later reference search for my_fn") != std::string::npos, "older find_references elided");
+    check(body("r2").find("REF2") != std::string::npos, "newest find_references kept");
+}
+
 static void test_large_tool_result_elision() {
     std::cout << "large old tool-result elision" << std::endl;
     using agent::Message; using agent::Role;
@@ -1849,6 +2251,42 @@ static void test_large_tool_result_elision() {
     check(out[2].content.find("older large tool result elided") != std::string::npos,
           "second old large result is elided");
     check(out.back().content.find("LLLL") != std::string::npos, "recent large tool result stays intact");
+
+    // Test with 4 messages: older than 2 are elided if > 2500 chars, kept if <= 2500 chars
+    std::vector<Message> small_flow;
+    small_flow.push_back(Message(Role::SYSTEM, "sys"));
+    small_flow.push_back(Message(Role::TOOL, std::string(3000, 'A'), "t1", "read_file")); // >2500, old -> elide
+    small_flow.push_back(Message(Role::TOOL, std::string(1500, 'B'), "t2", "read_file")); // <=2500, old -> keep
+    small_flow.push_back(Message(Role::TOOL, std::string(4000, 'C'), "t3", "read_file")); // recent -> keep
+    small_flow.push_back(Message(Role::TOOL, std::string(4000, 'D'), "t4", "read_file")); // recent -> keep
+
+    auto out2 = agent::Conversation::elide_old_large_tool_results(small_flow);
+    check(out2[1].content.find("older large tool result elided") != std::string::npos, "old >2500 result elided");
+    check(out2[2].content == std::string(1500, 'B'), "old <=2500 result kept intact");
+    check(out2[3].content == std::string(4000, 'C'), "recent large result 1 kept intact");
+    check(out2[4].content == std::string(4000, 'D'), "recent large result 2 kept intact");
+
+    // Pre-elision budgeting: A conversation with old large tool results should NOT
+    // drop the first user turn when budgeted if the elided size easily fits in budget.
+    agent::Conversation c_elide;
+    c_elide.set_system("system prompt");
+    c_elide.add_user("first user message");
+    c_elide.add_tool_result("t1", std::string(10000, 'X'), "read_file"); // old large
+    c_elide.add_tool_result("t2", std::string(10000, 'Y'), "read_file"); // old large
+    c_elide.add_user("second user message");
+    c_elide.add_tool_result("t3", "short1", "read_file");
+    c_elide.add_tool_result("t4", "short2", "read_file");
+    c_elide.add_user("third user message");
+
+    agent::Config test_cfg;
+    test_cfg.context_limit = 1500;
+    test_cfg.context_auto = false;
+    test_cfg.provider = "openai";
+    agent::providers::OpenAI prov(test_cfg);
+    auto req_msgs = prov.request_messages(c_elide);
+    check(req_msgs.size() == c_elide.messages().size(),
+          "pre-elision budgeting keeps history that fits after eliding large tools");
+    check(req_msgs[1].content == "first user message", "first user message preserved");
 }
 
 static void test_trim_hysteresis() {
@@ -2323,6 +2761,8 @@ static void test_compaction_budget() {
     c.context_auto = false;
     c.context_limit = 50000;
     check(c.compaction_budget() == 50000, "explicit context limit is used");
+    check(c.auto_compact_max_tokens == 30000, "default auto_compact_max_tokens is 30000");
+    check(c.auto_compact_pct == 80, "default auto_compact_pct is 80");
 
     // "unlimited" used to disable auto-compaction entirely: the trigger compared
     // against a budget of 0 and never fired, so the sessions most in need of
@@ -2343,6 +2783,59 @@ static void test_compaction_budget() {
     u.context_auto = false;
     u.context_limit = 0;
     check(u.compaction_budget() == 0, "unknown model has no compaction budget");
+}
+
+static void test_auto_compact() {
+    std::cout << "auto-compact trigger & estimation" << std::endl;
+    agent::Conversation conv;
+    conv.set_system("You are a helpful assistant.");
+    conv.add_user("Please read this file.");
+    conv.add_assistant("Reading file...", { agent::ToolCall{"call_1", "read_file", "{\"path\":\"foo.txt\"}"} });
+    conv.add_tool_result("call_1", "read_file", "File contents here...");
+    conv.add_assistant("Here is the content.");
+
+    size_t est = conv.estimate_tokens();
+    check(est > 20, "conversation estimate_tokens produces reasonable count");
+
+    agent::Config cfg;
+    cfg.auto_compact = true;
+    cfg.auto_compact_max_tokens = 30000;
+    cfg.auto_compact_pct = 80;
+    cfg.context_auto = false;
+    cfg.context_limit = 30000;
+
+    agent::TokenStats stats;
+    // Context well below threshold
+    stats.context_tokens.store(5000);
+    agent::InlineRepl repl1(nullptr, cfg, conv, stats);
+    check(!repl1.maybe_auto_compact(), "does not trigger when context is below target");
+
+    // Disabled auto_compact
+    cfg.auto_compact = false;
+    stats.context_tokens.store(35000);
+    agent::InlineRepl repl2(nullptr, cfg, conv, stats);
+    check(!repl2.maybe_auto_compact(), "does not trigger when auto_compact is off");
+    cfg.auto_compact = true;
+
+    // Unknown model window falls back to auto_compact_max_tokens
+    agent::Config ucfg;
+    ucfg.model = "unknown-model";
+    ucfg.auto_compact = true;
+    ucfg.auto_compact_max_tokens = 10000;
+    ucfg.auto_compact_pct = 80;
+    ucfg.context_auto = false;
+    ucfg.context_limit = 0; // budget == 0
+    stats.context_tokens.store(8500); // >= 80% of 10000
+    agent::InlineRepl repl3(nullptr, ucfg, conv, stats);
+    check(repl3.maybe_auto_compact(), "unknown model falls back to auto_compact_max_tokens");
+
+    // Zero context_tokens in stats falls back to conversation token estimation
+    stats.context_tokens.store(0);
+    ucfg.auto_compact_max_tokens = 50;
+    ucfg.auto_compact_pct = 80;
+    conv.add_user("A longer prompt to push conversation token estimation over the small limit for testing.");
+    agent::InlineRepl repl4(nullptr, ucfg, conv, stats);
+    check(repl4.maybe_auto_compact(), "stats context_tokens == 0 falls back to conversation estimate");
 }
 
 static void test_context_auto() {
@@ -2877,6 +3370,178 @@ static void test_token_usage() {
     stats.record(1500, 40);
     check(stats.context_tokens.load() == 1500, "context tracks latest request");
     check(stats.session_total() == 1200 + 34 + 1500 + 40, "session total accumulates");
+
+    agent::TurnUsage tu;
+    tu.turn_number = 37;
+    tu.model_requests = 14;
+    tu.tool_calls = 13;
+    tu.input_tokens = 1842391;
+    tu.cached_tokens = 1521804;
+    tu.output_tokens = 18422;
+    tu.reasoning_tokens = 9817;
+    tu.first_request_tokens = 182440;
+    tu.peak_request_tokens = 201438;
+    tu.elapsed_ms = 222000;
+    stats.record_turn(tu);
+
+    agent::TurnUsage got = stats.get_last_turn();
+    check(got.turn_number == 37, "turn_number captured");
+    check(got.model_requests == 14, "model_requests captured");
+    check(got.tool_calls == 13, "tool_calls captured");
+    check(got.input_tokens == 1842391, "input_tokens captured");
+    check(got.cached_tokens == 1521804, "cached_tokens captured");
+
+    std::string formatted = agent::Repl::format_turn_usage(got);
+    check(formatted.find("turn #37 usage:") != std::string::npos, "formatted header present");
+    check(formatted.find("1,842,391") != std::string::npos, "formatted input tokens present");
+    check(formatted.find("1,521,804 cached") != std::string::npos, "formatted cached tokens present");
+    check(formatted.find("320,587 uncached") != std::string::npos, "formatted uncached tokens present");
+    check(formatted.find("9,817 reasoning") != std::string::npos, "formatted reasoning present");
+    check(formatted.find("3m 42s") != std::string::npos, "formatted duration present");
+}
+
+static void test_provider_aware_token_accounting() {
+    std::cout << "provider-aware token accounting & pricing" << std::endl;
+    agent::Config cfg;
+
+    // 1. Provider pricing rules
+    auto openai_rules = cfg.provider_pricing_rules("openai", "gpt-4o");
+    check(openai_rules.cache_read_ratio == 0.50, "openai cache read ratio is 50%");
+    check(openai_rules.discount_pct() == 50, "openai discount is 50%");
+
+    auto gemini_rules = cfg.provider_pricing_rules("gemini", "gemini-2.5-pro");
+    check(gemini_rules.cache_read_ratio == 0.25, "gemini cache read ratio is 25%");
+    check(gemini_rules.discount_pct() == 75, "gemini discount is 75%");
+
+    auto claude_rules = cfg.provider_pricing_rules("claude", "claude-sonnet-4");
+    check(claude_rules.cache_read_ratio == 0.10, "claude cache read ratio is 10%");
+    check(claude_rules.cache_write_ratio == 1.25, "claude cache write ratio is 125%");
+    check(claude_rules.discount_pct() == 90, "claude read discount is 90%");
+
+    auto kimi_rules = cfg.provider_pricing_rules("kimi", "kimi-k2");
+    check(kimi_rules.cache_read_ratio == 0.20, "kimi cache read ratio is 20%");
+    check(kimi_rules.discount_pct() == 80, "kimi discount is 80%");
+
+    auto deepseek_rules = cfg.provider_pricing_rules("openrouter", "deepseek/deepseek-r1");
+    check(deepseek_rules.cache_read_ratio == 0.25, "deepseek cache read ratio is 25%");
+    check(deepseek_rules.discount_pct() == 75, "deepseek discount is 75%");
+
+    // 2. Cost calculation with provider-specific cache discounts
+    cfg.pricing["openai-test"] = agent::ModelPricing{ 10.0, 30.0 };
+    cfg.provider = "openai"; cfg.model = "openai-test";
+    // 1M total: 500k uncached ($5.00) + 500k cached @ 50% ($2.50) + 100k out @ 30 ($3.00) = $10.50
+    double cost_oai = cfg.session_cost(1000000, 100000, 500000);
+    check(cost_oai > 10.49 && cost_oai < 10.51, "openai session cost with 50% cache discount");
+
+    cfg.pricing["gemini-test"] = agent::ModelPricing{ 10.0, 30.0 };
+    cfg.provider = "gemini"; cfg.model = "gemini-test";
+    // 1M total: 500k uncached ($5.00) + 500k cached @ 25% ($1.25) + 100k out @ 30 ($3.00) = $9.25
+    double cost_gem = cfg.session_cost(1000000, 100000, 500000);
+    check(cost_gem > 9.24 && cost_gem < 9.26, "gemini session cost with 75% cache discount");
+
+    cfg.pricing["claude-test"] = agent::ModelPricing{ 10.0, 30.0 };
+    cfg.provider = "claude"; cfg.model = "claude-test";
+    // 1M total: 300k uncached ($3.00) + 500k cached @ 10% ($0.50) + 200k created @ 125% ($2.50) + 100k out @ 30 ($3.00) = $9.00
+    double cost_claude = cfg.session_cost(1000000, 100000, 500000, 200000);
+    check(cost_claude > 8.99 && cost_claude < 9.01, "claude session cost with 10% read and 125% write");
+
+    // 3. Extended price syntax in config
+    std::string test_cfg_path = "/tmp/test_price_cfg_" + std::to_string(getpid()) + ".ini";
+    {
+        std::ofstream ofs(test_cfg_path);
+        ofs << "price.custom-model: 20.0/40.0/0.15/1.50\n";
+    }
+    agent::Config loaded_cfg;
+    loaded_cfg.load(test_cfg_path);
+    auto p_custom = loaded_cfg.pricing_for("custom-model");
+    check(p_custom.has_value(), "custom-model pricing loaded");
+    if ( p_custom ) {
+        check(p_custom->input_per_mtok == 20.0, "input price parsed");
+        check(p_custom->output_per_mtok == 40.0, "output price parsed");
+        check(p_custom->cache_read_ratio == 0.15, "custom cache_read_ratio parsed");
+        check(p_custom->cache_write_ratio == 1.50, "custom cache_write_ratio parsed");
+    }
+    std::filesystem::remove(test_cfg_path);
+
+    // 4. Native token usage extraction for reasoning & cache creation
+    // OpenAI reasoning_tokens extraction
+    agent::providers::OpenAI oai(cfg);
+    JSON oai_json = JSON::parse(
+        "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],"
+        "\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":500,"
+        "\"prompt_tokens_details\":{\"cached_tokens\":400},"
+        "\"completion_tokens_details\":{\"reasoning_tokens\":350}}}");
+    auto oai_resp = oai.parse_response(oai_json);
+    check(oai_resp.input_tokens == 1000, "openai input tokens");
+    check(oai_resp.cached_input_tokens == 400, "openai cached input tokens");
+    check(oai_resp.output_tokens == 500, "openai output tokens");
+    check(oai_resp.reasoning_tokens == 350, "openai reasoning tokens parsed from completion_tokens_details");
+
+    // Gemini thoughtsTokenCount extraction
+    agent::providers::Gemini gem(cfg);
+    JSON gem_json = JSON::parse(
+        "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}],"
+        "\"usageMetadata\":{\"promptTokenCount\":800,\"candidatesTokenCount\":300,"
+        "\"cachedContentTokenCount\":200,\"thoughtsTokenCount\":150}}");
+    auto gem_resp = gem.parse_response(gem_json);
+    check(gem_resp.input_tokens == 800, "gemini input tokens");
+    check(gem_resp.cached_input_tokens == 200, "gemini cached input tokens");
+    check(gem_resp.output_tokens == 300, "gemini output tokens");
+    check(gem_resp.reasoning_tokens == 150, "gemini thoughtsTokenCount parsed");
+
+    // Anthropic cache_creation_input_tokens extraction
+    agent::providers::Anthropic ant(cfg);
+    JSON ant_json = JSON::parse(
+        "{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],"
+        "\"usage\":{\"input_tokens\":500,\"output_tokens\":100,"
+        "\"cache_read_input_tokens\":300,\"cache_creation_input_tokens\":200}}");
+    auto ant_resp = ant.parse_response(ant_json);
+    check(ant_resp.input_tokens == 1000, "anthropic total input tokens");
+    check(ant_resp.cached_input_tokens == 300, "anthropic cache read tokens");
+    check(ant_resp.cache_creation_input_tokens == 200, "anthropic cache creation tokens");
+
+    // 5. TokenStats & TurnUsage with creation and reasoning
+    agent::TokenStats stats;
+    stats.record(1000, 200, 300, 150, 80);
+    check(stats.context_tokens.load() == 1000, "context_tokens recorded");
+    check(stats.session_cached.load() == 300, "session_cached recorded");
+    check(stats.session_cache_creation.load() == 150, "session_cache_creation recorded");
+    check(stats.session_reasoning.load() == 80, "session_reasoning recorded");
+    check(stats.last_cache_creation.load() == 150, "last_cache_creation recorded");
+    check(stats.last_reasoning.load() == 80, "last_reasoning recorded");
+
+    agent::TurnUsage tu;
+    tu.turn_number = 1;
+    tu.model_requests = 2;
+    tu.tool_calls = 1;
+    tu.input_tokens = 2000;
+    tu.cached_tokens = 800;
+    tu.cache_creation_tokens = 400;
+    tu.output_tokens = 300;
+    tu.reasoning_tokens = 150;
+    tu.elapsed_ms = 5000;
+    std::string turn_fmt = agent::Repl::format_turn_usage(tu);
+    check(turn_fmt.find("800 cached") != std::string::npos, "format_turn_usage includes cached");
+    check(turn_fmt.find("400 created") != std::string::npos, "format_turn_usage includes created");
+    check(turn_fmt.find("800 uncached") != std::string::npos, "format_turn_usage calculates uncached");
+    check(turn_fmt.find("150 reasoning") != std::string::npos, "format_turn_usage includes reasoning");
+
+    // 6. Conversation provider-aware estimation
+    agent::Conversation conv;
+    conv.add_user("void run() { int x = 42; return x * 2; }");
+    size_t oai_est = conv.estimate_tokens("openai");
+    size_t gem_est = conv.estimate_tokens("gemini");
+    check(oai_est > 0, "openai estimate is positive");
+    check(gem_est > 0, "gemini estimate is positive");
+    check(gem_est >= oai_est, "gemini SentencePiece yields >= token count on code");
+
+    // 7. Message estimation and context trimming consistency
+    agent::Message test_msg(agent::Role::USER, "const std::string text = \"hello world\";");
+    size_t oai_msg_tok = agent::Conversation::estimate_message_tokens(test_msg, "openai");
+    size_t gem_msg_tok = agent::Conversation::estimate_message_tokens(test_msg, "gemini");
+    check(oai_msg_tok > 0, "oai message estimate positive");
+    check(gem_msg_tok > 0, "gemini message estimate positive");
+    check(gem_msg_tok >= oai_msg_tok, "gemini message tokens >= openai due to 3.5 chars/tok");
 }
 
 static void test_trust_grants() {
@@ -3379,6 +4044,120 @@ static void test_safe_commands() {
     check(!Registry::classify_safe("sleep 5 &"), "background job not safe");
 }
 
+static void test_token_accounting_estimated_vs_reported() {
+    std::cout << "token accounting: estimated vs reported" << std::endl;
+    agent::TokenStats stats;
+    check(!stats.context_is_reported.load(), "initial context not reported");
+    check(!stats.session_is_reported.load(), "initial session not reported");
+
+    // Record an estimated turn (reported = false)
+    stats.record(1200, 300, 0, 0, 0, /*reported=*/false);
+    check(stats.context_tokens.load() == 1200, "estimated context recorded");
+    check(!stats.context_is_reported.load(), "context marked estimated");
+    check(!stats.session_is_reported.load(), "session marked estimated");
+
+    // Record a reported turn (reported = true)
+    stats.record(1500, 400, 200, 50, 80, /*reported=*/true);
+    check(stats.context_tokens.load() == 1500, "reported context recorded");
+    check(stats.context_is_reported.load(), "context marked reported");
+    check(stats.session_is_reported.load(), "session marked reported");
+
+    // Test text token estimation helper
+    std::string text = "int main() { return 0; }";
+    size_t gemini_est = agent::Conversation::estimate_text_tokens(text, "gemini");
+    size_t claude_est = agent::Conversation::estimate_text_tokens(text, "claude");
+    size_t openai_est = agent::Conversation::estimate_text_tokens(text, "openai");
+    check(gemini_est >= openai_est, "gemini tokens >= openai due to chars_per_tok ratio");
+    check(claude_est >= openai_est, "claude tokens >= openai due to chars_per_tok ratio");
+}
+
+static void test_registry_thread_safety_and_churn() {
+    std::cout << "registry: thread safety and lifecycle churn" << std::endl;
+    using namespace agent::tools;
+    Registry reg;
+    reg.register_defaults();
+
+    // Verify cleanup of disabled_tools on remove()
+    reg.set_tool_enabled("grep", false);
+    check(!reg.is_tool_enabled("grep"), "grep disabled");
+    check(reg.disabled_tools().count("grep") == 1, "grep in disabled_tools set");
+    reg.remove("grep");
+    check(reg.disabled_tools().count("grep") == 0, "remove() cleans up disabled_tools set");
+    check(!reg.has("grep"), "grep removed");
+
+    // Multi-threaded stress test: churn profile switches, schema queries, and tool additions/removals
+    std::atomic<bool> stop{false};
+    std::atomic<int> errors{0};
+
+    // Reader thread 1: repeatedly asks for schema
+    std::thread t1([&]() {
+        while ( !stop.load(std::memory_order_relaxed) ) {
+            try {
+                JSON s = reg.schema();
+                if ( s.size() == 0 && reg.active_profile() == "full" ) errors++;
+            } catch (...) {
+                errors++;
+            }
+        }
+    });
+
+    // Reader thread 2: repeatedly lists tools and checks enabled
+    std::thread t2([&]() {
+        while ( !stop.load(std::memory_order_relaxed) ) {
+            try {
+                auto list = reg.list_tools();
+                for ( const auto& ti : list ) {
+                    bool en = reg.is_tool_enabled(ti.name);
+                    (void)en;
+                }
+            } catch (...) {
+                errors++;
+            }
+        }
+    });
+
+    // Mutator thread 3: toggles profiles
+    std::thread t3([&]() {
+        const std::vector<std::string> profiles = { "code", "full", "minimal", "review", "research" };
+        size_t idx = 0;
+        while ( !stop.load(std::memory_order_relaxed) ) {
+            try {
+                reg.apply_profile(profiles[idx % profiles.size()]);
+                idx++;
+            } catch (...) {
+                errors++;
+            }
+        }
+    });
+
+    // Let threads race for 100ms
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    stop.store(true);
+
+    t1.join();
+    t2.join();
+    t3.join();
+
+    check(errors.load() == 0, "concurrent registry access produced 0 errors");
+}
+
+static void test_provider_capability_neutrality() {
+    std::cout << "provider: capability neutrality" << std::endl;
+    agent::Config cfg;
+    cfg.provider = "anthropic";
+    cfg.model = "claude-3-7-sonnet-20250219";
+    auto anthropic = agent::providers::create(cfg);
+    check(anthropic->output_token_cap("claude-3-7-sonnet-20250219") == 64000, "anthropic sonnet 3.7 cap is 64000");
+    check(anthropic->output_token_cap("claude-3-5-haiku-20241022") == 64000, "anthropic haiku cap is 64000");
+    check(anthropic->supports_reasoning(), "anthropic supports reasoning");
+
+    cfg.provider = "gemini";
+    cfg.model = "gemini-2.5-flash";
+    auto gemini = agent::providers::create(cfg);
+    check(gemini->output_token_cap("gemini-2.5-flash") == 65536, "gemini 2.5 flash cap is 65536");
+    check(gemini->supports_reasoning(), "gemini supports reasoning");
+}
+
 int main() {
     std::cout << "Running AI Agent test suite\n" << std::endl;
 
@@ -3387,6 +4166,7 @@ int main() {
     test_context_budget();
     test_trim_role_invariants();
     test_tool_supersession();
+    test_tool_supersession_extended();
     test_large_tool_result_elision();
     test_trim_hysteresis();
     test_settings_persistence();
@@ -3394,6 +4174,7 @@ int main() {
     test_token_formatting();
     test_budget_persistence();
     test_compaction_budget();
+    test_auto_compact();
     test_output_cap();
     test_rate_limit_parsing();
     test_context_defaults();
@@ -3405,6 +4186,8 @@ int main() {
     test_memory_listing();
     test_openai_request();
     test_codex_provider();
+    test_gemini_provider();
+    test_gemini_tool_calls_and_continuation();
     test_reasoning_content();
     test_reasoning_effort();
     test_openrouter_provider();
@@ -3452,6 +4235,9 @@ int main() {
     test_stream_parsers();
     test_stream_tool_calls();
     test_tools();
+    test_tool_groups();
+    test_tool_profiles();
+    test_mcp_server_toggle();
     test_run_command_robustness();
     test_read_file_robustness();
     test_parallel_tool_safety();
@@ -3462,6 +4248,7 @@ int main() {
     test_confirm_danger_bell();
     test_grep_robustness();
     test_token_usage();
+    test_provider_aware_token_accounting();
     test_trust_grants();
     test_compound_grant_safety();
     test_plan_mode();
@@ -3477,6 +4264,9 @@ int main() {
     test_config_booleans();
     test_extra_command_lists();
     test_safe_commands();
+    test_token_accounting_estimated_vs_reported();
+    test_registry_thread_safety_and_churn();
+    test_provider_capability_neutrality();
 
     std::cout << "\n" << passed << " passed, " << failed << " failed" << std::endl;
     return failed > 0 ? 1 : 0;

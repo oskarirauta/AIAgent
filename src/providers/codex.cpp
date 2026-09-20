@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <sstream>
+#include <mutex>
 
 #include "logger.hpp"
 #include "throws.hpp"
@@ -61,6 +65,16 @@ std::vector<std::pair<std::string, std::string>> Codex::extra_headers() const {
 }
 
 bool Codex::refresh_now(api::Client& client) {
+    static std::mutex refresh_mx;
+    std::lock_guard<std::mutex> lock(refresh_mx);
+    if ( auto disk = auth::load_codex_token()) {
+        if ( !_token || disk->access_token != _token->access_token ||
+             disk->refresh_token != _token->refresh_token ) {
+            _token = disk;
+            if ( !auth::codex_token_needs_refresh(*_token))
+                return true;
+        }
+    }
     if ( !_token ) _token = auth::load_codex_token();
     if ( !_token || _token->refresh_token.empty()) return false;
     try {
@@ -104,6 +118,44 @@ void Codex::prepare_request(api::Client& client) {
     // turns the server's useful 400 into a misleading request for another model.
     if ( auth::codex_token_needs_refresh(*_token) && !refresh_now(client))
         throws << "Codex session could not be refreshed — run `codex login` again" << std::endl;
+}
+
+std::vector<std::string> Codex::list_models(api::Client& /*client*/) {
+    const char* codex_home = std::getenv("CODEX_HOME");
+    std::string base;
+    if ( codex_home && *codex_home )
+        base = std::string(codex_home);
+    else {
+        const char* user_home = std::getenv("HOME");
+        base = std::string(user_home && *user_home ? user_home : "/root") + "/.codex";
+    }
+    std::string path = base + "/models_cache.json";
+
+    std::vector<std::string> out;
+    try {
+        std::ifstream f(path);
+        if ( f.is_open() ) {
+            std::stringstream ss;
+            ss << f.rdbuf();
+            JSON j = JSON::parse(ss.str());
+            if ( j.contains("models") && j["models"] == JSON::TYPE::ARRAY ) {
+                for ( size_t i = 0; i < j["models"].size(); ++i ) {
+                    const JSON& m = j["models"][i];
+                    bool vis_list = !m.contains("visibility") || m["visibility"].to_string() == "list";
+                    bool api_ok = !m.contains("supported_in_api") || static_cast<bool>(m["supported_in_api"]);
+                    if ( vis_list && api_ok && m.contains("slug") && m["slug"] == JSON::TYPE::STRING ) {
+                        out.push_back(m["slug"].to_string());
+                    }
+                }
+            }
+        }
+    } catch ( ... ) {
+        out.clear();
+    }
+
+    if ( out.empty() )
+        return Config::known_models_for("codex");
+    return out;
 }
 
 JSON Codex::build_request(const Conversation& conv, const JSON& tools_schema) {
@@ -216,7 +268,7 @@ void Codex::apply_provider_options(const JSON& options) {
 
 void Codex::stream_reset() {
     _s_content.clear(); _s_reasoning.clear(); _s_tools.clear();
-    _s_input_tokens = _s_output_tokens = _s_cached_tokens = 0;
+    _s_input_tokens = _s_output_tokens = _s_cached_tokens = _s_reasoning_tokens = 0;
     _s_truncated = false;
 }
 
@@ -257,6 +309,8 @@ StreamChunk Codex::parse_stream(const std::string& chunk, std::string& buffer, b
                     if ( u.contains("output_tokens")) _s_output_tokens = json_long(u["output_tokens"]);
                     if ( u.contains("input_tokens_details") && u["input_tokens_details"] == JSON::TYPE::OBJECT && u["input_tokens_details"].contains("cached_tokens"))
                         _s_cached_tokens = json_long(u["input_tokens_details"]["cached_tokens"]);
+                    if ( u.contains("output_tokens_details") && u["output_tokens_details"] == JSON::TYPE::OBJECT && u["output_tokens_details"].contains("reasoning_tokens"))
+                        _s_reasoning_tokens = json_long(u["output_tokens_details"]["reasoning_tokens"]);
                 }
                 done = true;
             } else if ( type == "response.incomplete" ) { _s_truncated = true; done = true; }
@@ -273,6 +327,7 @@ Response Codex::stream_result() {
     r.message = _s_content; r.thinking = _s_reasoning;
     r.input_tokens = _s_input_tokens; r.output_tokens = _s_output_tokens;
     r.cached_input_tokens = _s_cached_tokens; r.truncated = _s_truncated;
+    r.reasoning_tokens = _s_reasoning_tokens;
     for ( const auto& [id, tc] : _s_tools ) r.tool_calls.push_back(tc);
     return r;
 }

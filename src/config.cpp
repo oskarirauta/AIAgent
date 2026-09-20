@@ -206,6 +206,10 @@ const std::vector<std::string>& Config::known_models_for(const std::string& prov
     // ChatGPT/Codex family in the picker, best/newest first; users can still pass
     // any future/entitled slug explicitly with -m.
     static const std::vector<std::string> codex_models = {
+        "gpt-6-astra",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
         "gpt-5.6",
         "gpt-5.5",
         "gpt-5.4",
@@ -261,6 +265,11 @@ static const ModelAlias model_aliases[] = {
     { "gpt4",    "gpt-4o" },
     { "gpt",     "gpt-4o" },
     { "3.5",     "gpt-3.5-turbo" },
+    // Codex / ChatGPT Desktop
+    { "astra",   "gpt-6-astra" },
+    { "sol",     "gpt-5.6-sol" },
+    { "terra",   "gpt-5.6-terra" },
+    { "luna",    "gpt-5.6-luna" },
     // OpenRouter
     { "auto",    "openrouter/auto" },
     { "free",    "openrouter/free" },
@@ -533,6 +542,8 @@ size_t Config::context_window_for(const std::string& model) {
         return 1000000;
     if ( has("claude") || has("opus") || has("sonnet") || has("haiku") || has("fable") )
         return 200000;
+    if ( has("gpt-6") || has("astra") || has("sol") || has("terra") || has("luna") )
+        return 272000;
     if ( has("kimi") || has("moonshot") ) return 256000;
     if ( has("gpt-5.6") ) return 1050000;
     if ( has("gpt-5.5") ) return 1000000;
@@ -558,16 +569,63 @@ std::optional<ModelPricing> Config::pricing_for(const std::string& model) const 
     return std::nullopt;
 }
 
-double Config::session_cost(long input_tokens, long output_tokens, long cached_input) const {
+Config::ProviderPricingRules Config::provider_pricing_rules(const std::string& prov, const std::string& mdl) const {
+    ProviderPricingRules rules;
+    std::string p = common::to_lower(common::trim_ws(prov));
+    std::string m = common::to_lower(common::trim_ws(mdl));
+
+    // Check if the model pricing has an explicit override first
+    if ( auto mp = pricing_for(mdl) ) {
+        if ( mp->cache_read_ratio > 0.0 )
+            rules.cache_read_ratio = mp->cache_read_ratio;
+        if ( mp->cache_write_ratio > 0.0 )
+            rules.cache_write_ratio = mp->cache_write_ratio;
+        if ( mp->cache_read_ratio > 0.0 || mp->cache_write_ratio > 0.0 )
+            return rules;
+    }
+
+    // Provider / family defaults:
+    if ( p == "openai" || p == "codex" || m.find("gpt-") != std::string::npos || m.find("o1") != std::string::npos || m.find("o3") != std::string::npos ) {
+        rules.cache_read_ratio = 0.50; // OpenAI prompt caching is 50% of input rate
+        rules.cache_write_ratio = 1.00;
+    } else if ( p == "gemini" || m.find("gemini") != std::string::npos ) {
+        rules.cache_read_ratio = 0.25; // Gemini context caching is 25% of input rate (75% discount)
+        rules.cache_write_ratio = 1.00;
+    } else if ( p == "claude" || p == "anthropic" || m.find("claude") != std::string::npos ) {
+        rules.cache_read_ratio = 0.10; // Anthropic cache read is 10%
+        rules.cache_write_ratio = 1.25; // Anthropic cache creation is 125%
+    } else if ( p == "kimi" || p == "moonshot" || m.find("moonshot") != std::string::npos || m.find("kimi") != std::string::npos ) {
+        rules.cache_read_ratio = 0.20; // Kimi context caching is ~20%
+        rules.cache_write_ratio = 1.00;
+    } else if ( m.find("deepseek") != std::string::npos ) {
+        rules.cache_read_ratio = 0.25; // DeepSeek prompt cache hit is ~25%
+        rules.cache_write_ratio = 1.00;
+    } else if ( p == "ollama" ) {
+        rules.cache_read_ratio = 0.0;
+        rules.cache_write_ratio = 0.0;
+    } else {
+        rules.cache_read_ratio = 0.10;
+        rules.cache_write_ratio = 1.00;
+    }
+
+    return rules;
+}
+
+double Config::session_cost(long input_tokens, long output_tokens, long cached_input, long cache_creation) const {
     auto p = pricing_for(model);
     if ( !p )
         return -1.0;
-    // Cache-read input is billed at ~10% of the normal input rate; the rest of
-    // the input at full price. cached_input is a subset of input_tokens.
-    long full_input = input_tokens - cached_input;
-    if ( full_input < 0 ) full_input = input_tokens;
+
+    auto rules = provider_pricing_rules(provider, model);
+    double read_ratio = ( p->cache_read_ratio > 0.0 ) ? p->cache_read_ratio : rules.cache_read_ratio;
+    double write_ratio = ( p->cache_write_ratio > 0.0 ) ? p->cache_write_ratio : rules.cache_write_ratio;
+
+    long full_input = input_tokens - cached_input - cache_creation;
+    if ( full_input < 0 ) full_input = std::max(0L, input_tokens - cached_input);
+
     return static_cast<double>(full_input) / 1e6 * p->input_per_mtok +
-           static_cast<double>(cached_input) / 1e6 * p->input_per_mtok * 0.1 +
+           static_cast<double>(cached_input) / 1e6 * p->input_per_mtok * read_ratio +
+           static_cast<double>(cache_creation) / 1e6 * p->input_per_mtok * write_ratio +
            static_cast<double>(output_tokens) / 1e6 * p->output_per_mtok;
 }
 
@@ -670,6 +728,7 @@ void Config::load(const std::string& path) {
         }
         else if ( key == "auto_compact" ) auto_compact = parse_bool(value);
         else if ( key == "auto_compact_pct" ) auto_compact_pct = parse_size(value, auto_compact_pct, key);
+        else if ( key == "auto_compact_max_tokens" || key == "auto_compact_limit" ) auto_compact_max_tokens = parse_token_value(value, auto_compact_max_tokens, key);
         else if ( key == "workflow_autoresume" ) workflow_autoresume = parse_bool(value);
         else if ( key == "bell" ) bell = common::to_lower(value);
         else if ( key == "supersede_tools" ) supersede_tools = parse_bool(value);
@@ -686,22 +745,35 @@ void Config::load(const std::string& path) {
         else if ( key == "web_search_url" ) web_search_url = value;
         else if ( key == "prompt_cache" ) prompt_cache = parse_bool(value);
         else if ( key == "parallel_tools" ) parallel_tools = parse_bool(value);
+        else if ( key == "tool_profile" || key == "profile" ) tool_profile = common::to_lower(trim(value));
         else if ( key == "mcp_config" ) mcp_config = expand_tilde(value);
         else if ( key == "budget_usd" ) {
             try { budget_usd = std::stod(common::trim_ws(value)); }
             catch ( ... ) { logger::warning["config"] << "invalid budget_usd: " << value << std::endl; }
         }
         else if ( key.rfind("price.", 0) == 0 ) {
-            // price.<model>: <input>/<output>  (USD per million tokens)
+            // price.<model>: <input>/<output>[/<cache_read>[/<cache_write>]]  (USD per million tokens, cache ratio 0..1 or absolute USD)
             std::string model_key = trim(key.substr(6));
-            size_t slash = value.find('/');
-            if ( model_key.empty() || slash == std::string::npos ) {
+            std::vector<std::string> parts;
+            {
+                std::istringstream iss(value);
+                std::string item;
+                while ( std::getline(iss, item, '/') )
+                    parts.push_back(trim(item));
+            }
+            if ( model_key.empty() || parts.size() < 2 ) {
                 logger::warning["config"] << "invalid price entry: " << key << ": " << value << std::endl;
             } else {
                 try {
                     ModelPricing p;
-                    p.input_per_mtok = std::stod(trim(value.substr(0, slash)));
-                    p.output_per_mtok = std::stod(trim(value.substr(slash + 1)));
+                    p.input_per_mtok = std::stod(parts[0]);
+                    p.output_per_mtok = std::stod(parts[1]);
+                    if ( parts.size() >= 3 && !parts[2].empty() ) {
+                        p.cache_read_ratio = std::stod(parts[2]);
+                    }
+                    if ( parts.size() >= 4 && !parts[3].empty() ) {
+                        p.cache_write_ratio = std::stod(parts[3]);
+                    }
                     pricing[model_key] = p;
                 } catch ( ... ) {
                     logger::warning["config"] << "invalid price numbers: " << value << std::endl;
@@ -779,6 +851,8 @@ void Config::apply_cli(const usage_t& usage) {
         tool_mode_explicit = true; // an explicit CLI mode wins over saved state
     if ( usage["steal_lock"] )
         steal_lock = true;
+    if ( usage["profile"] )
+        tool_profile = common::to_lower(usage["profile"].stringValue());
     if ( usage["session"] )
         session_name = sanitize_session_name(usage["session"].stringValue());
     // paste thresholds and oauth host/client id are config-file only (see load()).
@@ -834,6 +908,8 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.context_limit = static_cast<size_t>(static_cast<long long>(s["context_limit"]));
             if ( s.contains("auto_compact") && s["auto_compact"] == JSON::TYPE::BOOL )
                 last.auto_compact = s["auto_compact"].to_bool();
+            if ( s.contains("auto_compact_max_tokens") && s["auto_compact_max_tokens"] == JSON::TYPE::INT )
+                last.auto_compact_max_tokens = static_cast<size_t>(static_cast<long long>(s["auto_compact_max_tokens"]));
             if ( s.contains("workflow_autoresume") && s["workflow_autoresume"] == JSON::TYPE::BOOL )
                 last.workflow_autoresume = s["workflow_autoresume"].to_bool();
             if ( s.contains("confirm_tools") && s["confirm_tools"] == JSON::TYPE::BOOL )
@@ -855,6 +931,8 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.tool_call_limit = static_cast<size_t>(static_cast<long long>(s["tool_call_limit"]));
             if ( s.contains("max_tokens") && s["max_tokens"] == JSON::TYPE::INT )
                 last.max_tokens = static_cast<size_t>(static_cast<long long>(s["max_tokens"]));
+            if ( s.contains("tool_profile") && s["tool_profile"] == JSON::TYPE::STRING )
+                last.tool_profile = s["tool_profile"].to_string();
 
             // Migrate a settings block written before context_auto/auto_compact
             // defaulted to on. Applied here, on the loaded state itself, so that
@@ -901,6 +979,7 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "context_auto", last.context_auto },
             { "context_limit", static_cast<long long>(last.context_limit) },
             { "auto_compact", last.auto_compact },
+            { "auto_compact_max_tokens", static_cast<long long>(last.auto_compact_max_tokens) },
             { "confirm_tools", last.confirm_tools },
             { "insecure", last.insecure },
             { "workflow_autoresume", last.workflow_autoresume },
@@ -909,7 +988,8 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "advisor_model", last.advisor_model },
             { "paste_preview", static_cast<long long>(last.paste_preview) },
             { "tool_call_limit", static_cast<long long>(last.tool_call_limit) },
-            { "max_tokens", static_cast<long long>(last.max_tokens) }
+            { "max_tokens", static_cast<long long>(last.max_tokens) },
+            { "tool_profile", last.tool_profile }
         };
     }
 
@@ -952,6 +1032,7 @@ void Config::save_settings(const std::string& home_dir) const {
     last.context_auto = context_auto;
     last.context_limit = context_limit;
     last.auto_compact = auto_compact;
+    last.auto_compact_max_tokens = auto_compact_max_tokens;
     last.workflow_autoresume = workflow_autoresume;
     // A CLI flag (-Y/-I/-T) sets the mode for this session only — it must NOT
     // overwrite the user's saved preference. `last` already holds the persisted
@@ -967,6 +1048,7 @@ void Config::save_settings(const std::string& home_dir) const {
     last.paste_preview = paste_preview;
     last.tool_call_limit = tool_call_limit;
     last.max_tokens = max_tokens;
+    last.tool_profile = tool_profile;
     write_state(home_dir, last);
 }
 
@@ -981,6 +1063,7 @@ void Config::apply_settings(const LastUsed& last) {
     context_auto = last.context_auto;
     context_limit = last.context_limit;
     auto_compact = last.auto_compact;
+    auto_compact_max_tokens = last.auto_compact_max_tokens;
     workflow_autoresume = last.workflow_autoresume;
     // Tool confirmation mode is persisted (user opted in), but an explicit CLI
     // flag (-T/-Y/-I) for this launch always wins over the saved mode.
@@ -988,6 +1071,8 @@ void Config::apply_settings(const LastUsed& last) {
         confirm_tools = last.confirm_tools;
         insecure = last.insecure;
     }
+    if ( !last.tool_profile.empty() )
+        tool_profile = last.tool_profile;
     bell = last.bell;
     advisor = last.advisor;
     if ( !last.advisor_model.empty())

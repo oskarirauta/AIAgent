@@ -53,6 +53,51 @@ static std::string raw_response_dump(const providers::Response& r) {
     return s;
 }
 
+static std::string format_commas(long n) {
+    std::string s = std::to_string(n);
+    if ( s.size() <= 3 ) return s;
+    std::string out;
+    int rem = s.size() % 3;
+    if ( rem > 0 ) {
+        out += s.substr(0, rem);
+        if ( rem < static_cast<int>(s.size())) out += ",";
+    }
+    for ( size_t i = rem; i < s.size(); i += 3 ) {
+        if ( i > static_cast<size_t>(rem) ) out += ",";
+        out += s.substr(i, 3);
+    }
+    return out;
+}
+
+static std::string format_duration(long ms) {
+    long sec = ms / 1000;
+    if ( sec < 60 ) return std::to_string(sec) + "s";
+    long min = sec / 60;
+    sec = sec % 60;
+    return std::to_string(min) + "m " + std::to_string(sec) + "s";
+}
+
+std::string Repl::format_turn_usage(const TurnUsage& tu) {
+    if ( tu.model_requests == 0 ) return "";
+    long uncached = std::max<long>(0, tu.input_tokens - tu.cached_tokens - tu.cache_creation_tokens);
+    std::string s = "turn #" + std::to_string(tu.turn_number) + " usage:\n";
+    s += "  model requests: " + std::to_string(tu.model_requests) + "\n";
+    s += "  tool calls:     " + std::to_string(tu.tool_calls) + "\n";
+    s += "  input tokens:   " + format_commas(tu.input_tokens) +
+         " (" + format_commas(tu.cached_tokens) + " cached";
+    if ( tu.cache_creation_tokens > 0 )
+        s += ", " + format_commas(tu.cache_creation_tokens) + " created";
+    s += ", " + format_commas(uncached) + " uncached)\n";
+    s += "  output tokens:  " + format_commas(tu.output_tokens);
+    if ( tu.reasoning_tokens > 0 )
+        s += " (" + format_commas(tu.reasoning_tokens) + " reasoning)";
+    s += "\n";
+    s += "  first request:  " + format_commas(tu.first_request_tokens) + " tokens\n";
+    s += "  peak request:   " + format_commas(tu.peak_request_tokens) + " tokens\n";
+    s += "  wall time:      " + format_duration(tu.elapsed_ms);
+    return s;
+}
+
 // A line stating today's date, appended to the system prompt so the model does not
 // have to shell out to `date` (which busybox may lack) to know the current day.
 static std::string current_date_line() {
@@ -146,13 +191,9 @@ Repl::Repl(const Config& config)
     _conversation.load(conversation_path());
     _conversation.set_system(base_system_prompt());
 
-    // Expose the advisor tool if it was left enabled and the provider supports it.
-    sync_advisor_tool();
-    sync_workflow_tool();
-    sync_web_search_tool();
     reload_skills();      // discover skills on disk
-    sync_skill_tool();    // expose use_skill when any exist
     connect_mcp();
+    sync_effective_tools();
 
     // Snapshot files before write_file overwrites them, for /changes + revert.
     _registry.set_pre_run_callback([this](const std::string& n, const JSON& a) {
@@ -266,7 +307,7 @@ std::string Repl::changes_command(const std::string& args) {
     if ( sub == "revert" ) {
         if ( target.empty())
             return "usage: /changes revert <path|all>";
-        auto revert_one = [this](const std::string& abs, FileChange& fc) -> std::string {
+        auto revert_one = [](const std::string& abs, FileChange& fc) -> std::string {
             if ( !fc.tracked )
                 return "skip " + abs + " (too large to snapshot)";
             std::error_code ec;
@@ -470,6 +511,7 @@ void Repl::register_mcp_tools() {
             }, /*read_only=*/true));
         _mcp_tool_names.push_back(reg);
     }
+    _registry.apply_profile(_config.tool_profile);
 }
 
 std::string Repl::mcp_command(const std::string& args) {
@@ -489,6 +531,19 @@ std::string Repl::mcp_command(const std::string& args) {
         int n = _mcp.refresh();
         register_mcp_tools();
         return "refreshed MCP servers — " + std::to_string(n) + " tool(s) available";
+    }
+
+    if ( sub == "enable" || sub == "disable" ) {
+        std::string server;
+        iss >> server;
+        server = common::trim_ws(server);
+        if ( server.empty())
+            return "usage: /mcp " + sub + " <server>";
+        bool en = ( sub == "enable" );
+        if ( !_mcp.set_server_enabled(server, en))
+            return "no MCP server named '" + server + "'";
+        register_mcp_tools();
+        return "MCP server '" + server + "' " + ( en ? "enabled" : "disabled" );
     }
 
     if ( sub == "prompt" ) {
@@ -515,9 +570,9 @@ std::string Repl::mcp_command(const std::string& args) {
     auto st = _mcp.status();
     std::string s = "MCP servers:\n";
     for ( const auto& si : st ) {
-        s += std::string("\n  ") + ( si.connected ? "✓" : "✗" ) + " " + si.name +
-             "  [" + si.transport + "]";
-        if ( si.connected ) {
+        s += std::string("\n  ") + ( !si.enabled ? "○" : ( si.connected ? "✓" : "✗" )) + " " + si.name +
+             "  [" + si.transport + "]" + ( !si.enabled ? " [disabled]" : "" );
+        if ( si.connected && si.enabled ) {
             s += "\n      tools: ";
             if ( si.tool_names.empty()) s += "(none)";
             else for ( size_t i = 0; i < si.tool_names.size(); ++i )
@@ -531,12 +586,15 @@ std::string Repl::mcp_command(const std::string& args) {
                 for ( size_t i = 0; i < si.prompt_names.size(); ++i )
                     s += ( i ? ", " : "" ) + si.prompt_names[i];
             }
+        } else if ( !si.enabled ) {
+            s += "  — disabled (/mcp enable " + si.name + " to activate)";
         } else {
             s += "  — " + ( si.error.empty() ? std::string("not connected") : si.error );
         }
     }
     s += "\n\nmodel calls tools as mcp__<server>__<tool>"
-         "\n/mcp refresh — re-list · /mcp prompt <server> <name> [k=v] — load a prompt";
+         "\n/mcp refresh — re-list · /mcp prompt <server> <name> [k=v] — load a prompt"
+         "\n/mcp enable <server> · /mcp disable <server>";
     return s;
 }
 
@@ -551,6 +609,15 @@ void Repl::sync_web_search_tool() {
         _registry.add(std::make_unique<tools::FetchUrl>());
     else if ( !want && _registry.has("fetch_url"))
         _registry.remove("fetch_url");
+}
+
+void Repl::sync_effective_tools() {
+    sync_advisor_tool();
+    sync_workflow_tool();
+    sync_web_search_tool();
+    sync_skill_tool();
+    _registry.apply_profile(_config.tool_profile);
+    _config.plan_mode = _registry.plan_mode();
 }
 
 void Repl::sync_workflow_tool() {
@@ -657,8 +724,35 @@ void Repl::deliver_workflow_results() {
         std::string note = "Workflow #" + std::to_string(r.id) + " (" + r.name +
                            ") finished with status: " + r.status + ".\n";
         for ( size_t i = 0; i < r.steps.size(); ++i ) {
-            note += "\nStep " + std::to_string(i + 1) + " [" + r.steps[i].status + "]: " +
-                    r.steps[i].task + "\nResult: " + r.steps[i].result + "\n";
+            const auto& step = r.steps[i];
+            std::string res = common::trim_ws(step.result);
+
+            // Compact large step results to avoid unexpected token spikes in the prompt
+            static const size_t max_lines = 12;
+            static const size_t max_chars = 800;
+            if ( res.size() > max_chars || std::count(res.begin(), res.end(), '\n') > static_cast<long>(max_lines) ) {
+                std::vector<std::string> lines;
+                std::istringstream iss(res);
+                std::string line;
+                while ( std::getline(iss, line) )
+                    lines.push_back(line);
+
+                if ( lines.size() > max_lines ) {
+                    std::string head, tail;
+                    for ( size_t h = 0; h < 4 && h < lines.size(); ++h )
+                        head += lines[h] + "\n";
+                    for ( size_t t = lines.size() > 4 ? lines.size() - 4 : lines.size(); t < lines.size(); ++t )
+                        tail += lines[t] + ( t + 1 < lines.size() ? "\n" : "" );
+                    size_t omitted_lines = lines.size() - (4 + (lines.size() > 8 ? 4 : lines.size() - 4));
+                    res = head + "  [... " + std::to_string(omitted_lines) + " lines omitted from workflow log ...]\n" + tail;
+                } else if ( res.size() > max_chars ) {
+                    res = res.substr(0, 350) + "\n  [... " + std::to_string(res.size() - 700) +
+                          " bytes omitted ...]\n" + res.substr(res.size() - 350);
+                }
+            }
+
+            note += "\nStep " + std::to_string(i + 1) + " [" + step.status + "]: " +
+                    step.task + "\nResult: " + res + "\n";
         }
         _conversation.add_user(note);
     }
@@ -915,17 +1009,36 @@ std::string Repl::compact_history(size_t keep_tail) {
     size_t n = msgs.size();
     size_t first_nonsys = ( n > 0 && msgs[0].role == Role::SYSTEM ) ? 1 : 0;
     size_t tail_start = n;
-    if ( keep_tail > 0 ) {
-        size_t seen = 0;
-        for ( size_t i = n; i-- > first_nonsys; ) {
-            if ( msgs[i].role == Role::USER && ++seen == keep_tail ) { tail_start = i; break; }
+    size_t effective_keep = keep_tail;
+    size_t old_count = 0;
+
+    while ( true ) {
+        if ( effective_keep > 0 ) {
+            size_t seen = 0;
+            tail_start = n;
+            for ( size_t i = n; i-- > first_nonsys; ) {
+                if ( msgs[i].role == Role::USER && ++seen == effective_keep ) { tail_start = i; break; }
+            }
+            if ( seen < effective_keep )
+                tail_start = first_nonsys; // fewer than K exchanges — nothing old to summarise
+        } else {
+            tail_start = n; // keep nothing verbatim; summarise everything non-system
         }
-        if ( seen < keep_tail )
-            tail_start = first_nonsys; // fewer than K exchanges — nothing old to summarise
+        old_count = ( tail_start > first_nonsys ) ? ( tail_start - first_nonsys ) : 0;
+        if ( effective_keep == 0 )
+            old_count = n - first_nonsys;
+
+        if ( old_count >= 2 )
+            break;
+
+        if ( effective_keep > 1 ) {
+            effective_keep = 1;
+        } else if ( effective_keep == 1 && ( n - first_nonsys ) >= 4 ) {
+            effective_keep = 0;
+        } else {
+            return "nothing to compact (the recent tail is the whole conversation)";
+        }
     }
-    size_t old_count = ( tail_start > first_nonsys ) ? ( tail_start - first_nonsys ) : 0;
-    if ( old_count < 2 )
-        return "nothing to compact (the recent tail is the whole conversation)";
 
     // Copy the verbatim tail before we rebuild the history below.
     std::vector<Message> tail(msgs.begin() + tail_start, msgs.end());
@@ -944,11 +1057,20 @@ std::string Repl::compact_history(size_t keep_tail) {
 
     // One-shot summarisation (no tools, no streaming).
     Conversation summ;
-    summ.set_system("You compress a coding-assistant conversation into a concise briefing "
-        "the assistant can continue from. Preserve the user's goals, decisions made, key file "
-        "paths and code facts, and any unfinished tasks. Be faithful — do not invent details. "
-        "Output only the summary.");
-    summ.add_user("Summarise this conversation so it can replace the full history:\n\n" + transcript);
+    summ.set_system("You compress a coding-assistant conversation into a structured briefing "
+        "the assistant can continue from. Produce a clean, concise technical summary organized into these sections:\n"
+        "### Goal & Context\n"
+        "Brief summary of what the user is building or solving.\n\n"
+        "### Key Decisions & Architecture\n"
+        "Major technical choices, decisions, and patterns agreed upon.\n\n"
+        "### Files Changed & Verified\n"
+        "List of specific file paths modified, created, or read, with key findings.\n\n"
+        "### Tests Run & Current Status\n"
+        "Commands executed, test pass/fail results, current repository state.\n\n"
+        "### Open Tasks & Constraints\n"
+        "Next steps, unfinished work, user preferences or strict constraints.\n\n"
+        "Be completely faithful to the transcript — do not invent details. Output only the summary.");
+    summ.add_user("Summarise this conversation using the structured format so it can replace the older history:\n\n" + transcript);
 
     _provider->prepare_request(_client);
     JSON req = _provider->build_request(summ, JSON::Array{});
@@ -966,12 +1088,13 @@ std::string Repl::compact_history(size_t keep_tail) {
     std::string summary;
     if ( _provider->supports_streaming()) {
         req["stream"] = true;
+        _provider->prepare_stream_request(req);
         std::string body = req.dump_minified();
         std::string buffer;
         bool done = false;
         size_t got_chars = 0;
         _provider->stream_reset();
-        _client.post_stream(_provider->endpoint(), _provider->auth_header(),
+        _client.post_stream(_provider->stream_endpoint(), _provider->auth_header(),
             _provider->auth_value(), _provider->extra_headers(), body,
             [&](const std::string& chunk) {
                 providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
@@ -982,7 +1105,10 @@ std::string Repl::compact_history(size_t keep_tail) {
             }, &agent::turn_abort);
         if ( agent::turn_abort.load(std::memory_order_relaxed))
             return "compact cancelled";
-        summary = agent::normalize_text(_provider->stream_result().message);
+        auto sr = _provider->stream_result();
+        if ( !sr.success )
+            throws << "summarisation failed: " << sr.message << std::endl;
+        summary = agent::normalize_text(sr.message);
     } else {
         std::string body = req.dump_minified();
         std::string resp_str = _client.post(_provider->endpoint(), _provider->auth_header(),
@@ -1028,6 +1154,7 @@ std::string Repl::compact_history(size_t keep_tail) {
             _conversation.add_tool_result(m.tool_call_id.value_or(""), m.name.value_or(""), m.content);
     }
     save_conversation();
+    _stats.context_tokens.store(static_cast<long>(_conversation.estimate_tokens(_config.provider)), std::memory_order_relaxed);
 
     return "compacted " + std::to_string(old_count) + " older messages into a summary" +
            ( tail.empty() ? "" : " (kept the last " + std::to_string(tail.size()) + " verbatim)" );
@@ -1035,10 +1162,10 @@ std::string Repl::compact_history(size_t keep_tail) {
 
 std::string Repl::switch_provider(const std::string& name) {
     static const std::vector<std::string> supported =
-        { "openai", "codex", "ollama", "anthropic", "moonshot", "openrouter", "kimi", "claude" };
+        { "openai", "codex", "ollama", "anthropic", "moonshot", "openrouter", "kimi", "claude", "gemini" };
     if ( std::find(supported.begin(), supported.end(), name) == supported.end())
         return "unknown provider: " + name +
-               "  (openai, codex, ollama, anthropic, moonshot, openrouter, kimi, claude)";
+               "  (openai, codex, ollama, anthropic, moonshot, openrouter, kimi, claude, gemini)";
     if ( name == _config.provider )
         return "already using " + name;
 
@@ -1073,7 +1200,7 @@ std::string Repl::switch_provider(const std::string& name) {
     if ( np && !nc.thinking.empty())
         np->apply_provider_options(JSON::Object{{ "thinking", nc.thinking }});
 
-    if ( name == "kimi" || name == "claude" || name == "codex" ) {
+    if ( name == "kimi" || name == "claude" || name == "codex" || name == "gemini" ) {
         if ( !np->ready_noninteractive(_client))
             return "not logged in to " + name +
                    " — relaunch with `-p " + name + "` to log in first, then switch back.";
@@ -1102,8 +1229,7 @@ std::string Repl::switch_provider(const std::string& name) {
     _workflow_autoresume.store(_config.workflow_autoresume, std::memory_order_relaxed);
     _provider = std::move(np);
     _conversation.set_system(base_system_prompt());
-    sync_advisor_tool();  // advisor tool follows the provider (claude-only)
-    sync_workflow_tool(); // workflow tool follows the provider (claude-only)
+    sync_effective_tools(); // sync tools, advisor, workflows and profile for new provider
     save_conversation();
     Config::save_last_used(_config.home_dir, _config.provider, _config.model);
 
@@ -1424,12 +1550,11 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     save_conversation();
     _registry.begin_turn(); // reset any "allow for the rest of this turn" grant
 
-    // "ultracode" / "ultrathink": for this one turn, raise the Anthropic thinking
+    // "ultracode" / "ultrathink": for this one turn, raise thinking
     // effort to max. The keyword is intentionally kept in the prompt (the model
     // reacts to it — e.g. by orchestrating a workflow), and the previous effort is
     // restored afterwards on every exit path via the guard below.
-    bool anthropic_based = ( _config.provider == "claude" || _config.provider == "anthropic" );
-    bool ultra = anthropic_based && _provider && has_ultra_keyword(prompt);
+    bool ultra = _provider && _provider->supports_reasoning() && has_ultra_keyword(prompt);
     std::string saved_effort = _config.thinking;
     if ( ultra )
         _provider->apply_provider_options(JSON::Object{ { "thinking", "max" } });
@@ -1460,20 +1585,40 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     std::map<std::string, int> repeated_tools;
     std::mutex repeated_tools_mx;
 
+    auto turn_start = std::chrono::steady_clock::now();
+    TurnUsage cur_turn;
+    cur_turn.turn_number = ++_turn_counter;
+
+    struct TurnFinalizer {
+        TokenStats& stats;
+        TurnUsage& usage;
+        std::chrono::steady_clock::time_point start;
+        ~TurnFinalizer() {
+            usage.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start).count();
+            stats.record_turn(usage);
+        }
+    } turn_finalizer{ _stats, cur_turn, turn_start };
+
     auto apply_live_updates = [&]() {
         if ( !_live_update_cb ) return;
         size_t applied = 0;
         for ( const std::string& command : _live_update_cb() ) {
             std::string note = command;
-            if ( note.rfind("/btw", 0) == 0 ) note.erase(0, 4);
+            bool is_steer = false;
+            if ( note.rfind("/steer", 0) == 0 ) { note.erase(0, 6); is_steer = true; }
+            else if ( note.rfind("/btw", 0) == 0 ) note.erase(0, 4);
             else if ( note.rfind("/note", 0) == 0 ) note.erase(0, 5);
             note = common::trim_ws(note);
             if ( note.empty()) continue;
-            _conversation.add_user("[Live update from the user during the active turn]\n" + note);
+            if ( is_steer )
+                _conversation.add_user("[Steering update from the user — adjust your plan and actions accordingly]\n" + note);
+            else
+                _conversation.add_user("[Live update from the user during the active turn]\n" + note);
             ++applied;
         }
         if ( applied > 0 && _progress_cb )
-            _progress_cb("checkpoint: applied " + std::to_string(applied) + " btw update" +
+            _progress_cb("checkpoint: applied " + std::to_string(applied) + " update" +
                          ( applied == 1 ? "" : "s" ) + " from the queue");
     };
 
@@ -1518,14 +1663,16 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                     _provider->prepare_stream_request(request); // e.g. stream_options.include_usage
                     _last_request = request.dump(); // for /raw
                     std::string body = request.dump_minified();
-                    estimated_request_tokens = body.size() / 4;
+                    estimated_request_tokens = _provider ? _provider->estimate_tokens(body) : (body.size() / 4);
                     std::string buffer;
                     bool done = false;
                     _provider->stream_reset();
 
                     _client.post_stream(_provider->stream_endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body,
                         [&](const std::string& chunk) {
-                            logger::vverbose["http"] << "STREAM chunk\n" << chunk << std::endl;
+                            if ( logger::log_level >= logger::vverbose.id() ) {
+                                logger::vverbose["http"] << "STREAM chunk\n" << chunk << std::endl;
+                            }
                             providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
                             if ( _config.thinking_stream && !sc.reasoning.empty()) {
                                 if ( !showing_thinking ) {
@@ -1574,7 +1721,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                 } else {
                     _last_request = request.dump(); // for /raw
                     std::string body = request.dump_minified();
-                    estimated_request_tokens = body.size() / 4;
+                    estimated_request_tokens = _provider ? _provider->estimate_tokens(body) : (body.size() / 4);
                     std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body, abort_flag);
                     if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
                         _conversation.undo_last();
@@ -1647,17 +1794,30 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         if ( failed_over )
             continue;
 
-        _stats.record(resp.input_tokens, resp.output_tokens, resp.cached_input_tokens);
+        bool reported = (resp.input_tokens > 0);
+        long actual_in = reported ? resp.input_tokens : static_cast<long>(estimated_request_tokens);
+        long r_tok = resp.reasoning_tokens > 0 ? resp.reasoning_tokens : static_cast<long>(resp.thinking.size() / 4);
+        _stats.record(actual_in, resp.output_tokens, resp.cached_input_tokens, resp.cache_creation_input_tokens, r_tok, reported);
         ++model_round_trips;
-        turn_input_tokens += resp.input_tokens > 0 ? resp.input_tokens : static_cast<long>(estimated_request_tokens);
+        turn_input_tokens += actual_in;
         turn_output_tokens += resp.output_tokens;
+
+        cur_turn.model_requests = model_round_trips;
+        cur_turn.input_tokens += actual_in;
+        cur_turn.cached_tokens += resp.cached_input_tokens;
+        cur_turn.cache_creation_tokens += resp.cache_creation_input_tokens;
+        cur_turn.output_tokens += resp.output_tokens;
+        cur_turn.reasoning_tokens += r_tok;
+        if ( model_round_trips == 1 )
+            cur_turn.first_request_tokens = actual_in;
+        cur_turn.peak_request_tokens = std::max(cur_turn.peak_request_tokens, actual_in);
         if ( _progress_cb && ( model_round_trips > 1 || turn_input_tokens >= next_input_notice )) {
             _progress_cb("turn: " + std::to_string(model_round_trips) + " model request" +
                          ( model_round_trips == 1 ? "" : "s" ) + " · " +
                          std::to_string(tools_this_turn) + " tool call" +
                          ( tools_this_turn == 1 ? "" : "s" ) + " · ~" +
                          Config::format_tokens(static_cast<size_t>(std::max<long>(0, turn_input_tokens))) +
-                         " input");
+                         " in" + ( turn_output_tokens > 0 ? " / ~" + Config::format_tokens(static_cast<size_t>(turn_output_tokens)) + " out" : "" ));
         }
         while ( turn_input_tokens >= next_input_notice )
             next_input_notice *= 2;
@@ -1728,8 +1888,8 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                         std::to_string(configured) + " tokens)";
                 // When the cap is already the model's ceiling, raising the setting
                 // cannot help — say so instead of suggesting a dead end.
-                if ( _config.provider == "claude" || _config.provider == "anthropic" ) {
-                    long ceiling = providers::Anthropic::output_cap_for(_config.model);
+                long ceiling = _provider ? _provider->output_token_cap(_config.model) : 0;
+                if ( ceiling > 0 ) {
                     if ( static_cast<long>(configured) >= ceiling )
                         trunc += ", which is the ceiling for " + _config.model +
                                  ". Ask me to continue — long output has to be split across turns.";
@@ -1923,6 +2083,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         // keep going; a stop ends the turn (the work so far is kept, and a new
         // message continues). Non-interactive runs stop automatically.
         tools_this_turn += resp.tool_calls.size();
+        cur_turn.tool_calls = tools_this_turn;
         if ( _progress_cb && ( tools_this_turn == 20 || tools_this_turn == 50 ||
                                ( tools_this_turn > 50 && tools_this_turn % 25 == 0 ))) {
             _progress_cb("long tool chain: " + std::to_string(tools_this_turn) +
@@ -2070,20 +2231,46 @@ std::string Repl::handle_command(const std::string& line) {
     if ( cmd == "/context" ) {
         // The interactive REPL intercepts /context for a visual breakdown; this
         // is the plain-text fallback (non-interactive runs).
-        size_t sys = 0, msg = 0;
+        size_t sys = 0, msg = 0, tools_res = 0;
         for ( const auto& m : _conversation.messages()) {
-            size_t t = m.content.size() / 4;
-            if ( m.role == Role::SYSTEM ) sys += t; else msg += t;
+            size_t t = Conversation::estimate_message_tokens(m, _config.provider);
+            if ( m.role == Role::SYSTEM ) sys += t;
+            else if ( m.role == Role::TOOL ) tools_res += t;
+            else msg += t;
         }
+        size_t schema_tokens = _registry.schema().dump_minified().size() / 4;
+        size_t builtin_tokens = 0, mcp_tokens = 0;
+        for ( const auto& ti : _registry.list_tools() ) {
+            if ( ti.enabled ) {
+                if ( ti.group == "mcp" ) mcp_tokens += ti.schema_tokens;
+                else builtin_tokens += ti.schema_tokens;
+            }
+        }
+        size_t total = sys + msg + tools_res + schema_tokens;
         std::string s = "context (estimated tokens):\n";
         s += "  system prompt: " + std::to_string(sys) + "\n";
-        s += "  conversation:  " + std::to_string(msg) + "\n";
-        s += "  total:         " + std::to_string(sys + msg) + "\n";
+        s += "  messages:      " + std::to_string(msg) + "\n";
+        s += "  tool results:  " + std::to_string(tools_res) + "\n";
+        s += "  tools schema:  " + std::to_string(schema_tokens) +
+             " (" + std::to_string(builtin_tokens) + " built-in, " + std::to_string(mcp_tokens) + " mcp)\n";
+        s += "  tool profile:  " + _registry.active_profile() + "\n";
+        s += "  total:         " + std::to_string(total) + "\n";
         s += "  limit:         " + ( _config.context_auto
                  ? ( _config.context_budget() ? "auto (" + std::to_string(_config.context_budget()) + ")" : "auto (unlimited)" )
                  : ( _config.context_limit == 0 ? std::string("unlimited") : std::to_string(_config.context_limit)));
-        if ( _stats.context_tokens.load() > 0 )
-            s += "\n  last turn:     " + std::to_string(_stats.context_tokens.load());
+        if ( _stats.context_tokens.load() > 0 ) {
+            bool reported = _stats.context_is_reported.load();
+            s += "\n  last turn:     " + std::string(reported ? "" : "~") + std::to_string(_stats.context_tokens.load()) +
+                 (reported ? " tokens (reported)" : " tokens (estimated)");
+        }
+        long last_cached = _stats.last_cached.load();
+        if ( last_cached > 0 ) {
+            int disc = _config.provider_pricing_rules(_config.provider, _config.model).discount_pct();
+            s += "\n  last cached:   " + std::to_string(last_cached) + " (" + std::to_string(disc) + "% discount)";
+        }
+        long last_created = _stats.last_cache_creation.load();
+        if ( last_created > 0 )
+            s += "\n  last created:  " + std::to_string(last_created) + " (cache write)";
         return s;
     }
 
@@ -2108,6 +2295,9 @@ std::string Repl::handle_command(const std::string& line) {
             else s += "reported, reset time unknown";
             if ( !info.scope.empty()) s += " (" + info.scope + ")";
         }
+        TurnUsage last_tu = _stats.get_last_turn();
+        if ( last_tu.model_requests > 0 )
+            s += "\n\n" + format_turn_usage(last_tu);
         return s;
     }
 
@@ -2146,16 +2336,30 @@ std::string Repl::handle_command(const std::string& line) {
         long in = _stats.session_input.load(std::memory_order_relaxed);
         long out = _stats.session_output.load(std::memory_order_relaxed);
         long cached = _stats.session_cached.load(std::memory_order_relaxed);
+        long creation = _stats.session_cache_creation.load(std::memory_order_relaxed);
+        long reasoning = _stats.session_reasoning.load(std::memory_order_relaxed);
         long total = in + out;
-        std::string s = "session usage (" + _config.provider + " · " + _config.model + "):\n";
+
+        auto rules = _config.provider_pricing_rules(_config.provider, _config.model);
+        int read_pct = static_cast<int>(rules.cache_read_ratio * 100.0 + 0.5);
+
+        bool sess_reported = _stats.session_is_reported.load(std::memory_order_relaxed);
+        std::string s = "session usage (" + _config.provider + " · " + _config.model +
+                        (sess_reported ? "" : " · estimated") + "):\n";
         s += "  input:   " + std::to_string(in) + " tokens";
         if ( cached > 0 )
-            s += " (" + std::to_string(cached) + " cached, billed ~10%)";
+            s += " (" + std::to_string(cached) + " cached, billed at " + std::to_string(read_pct) + "%)";
+        if ( creation > 0 )
+            s += " [" + std::to_string(creation) + " written to cache, billed at " +
+                 std::to_string(static_cast<int>(rules.cache_write_ratio * 100.0 + 0.5)) + "%]";
         s += "\n";
-        s += "  output:  " + std::to_string(out) + " tokens\n";
+        s += "  output:  " + std::to_string(out) + " tokens";
+        if ( reasoning > 0 )
+            s += " (" + std::to_string(reasoning) + " reasoning)";
+        s += "\n";
         s += "  total:   " + std::to_string(total) + " tokens\n";
 
-        double cost = _config.session_cost(in, out, cached);
+        double cost = _config.session_cost(in, out, cached, creation);
         if ( cost < 0 ) {
             s += "  cost:    (no price configured for this model — usage only)\n";
             s += "           set one with `price." + _config.model + ": <in>/<out>` (USD per Mtok)";
@@ -2316,10 +2520,18 @@ std::string Repl::handle_command(const std::string& line) {
         return "noted — added to the context (no reply); the model will see it on your next message";
     }
 
+    if ( cmd == "/steer" ) {
+        if ( args.empty())
+            return "usage: /steer <prompt>  — steer active work at the next checkpoint, or send as a prompt";
+        _conversation.add_user(args);
+        save_conversation();
+        return "noted — steering prompt added to context; will guide the model on the next turn";
+    }
+
     if ( cmd == "/provider" ) {
         if ( args.empty())
             return "provider: " + _config.provider +
-                   "\nusage: /provider <openai|codex|ollama|anthropic|moonshot|openrouter|kimi|claude>";
+                   "\nusage: /provider <openai|codex|ollama|anthropic|moonshot|openrouter|kimi|claude|gemini>";
         return switch_provider(common::to_lower(common::trim_ws(args)));
     }
 
@@ -2477,10 +2689,21 @@ std::string Repl::handle_command(const std::string& line) {
                "  extended ctx:   " + ( Config::model_requests_1m_context(_config.model) ? "1M beta enabled" : "off" ) + "\n"
                "  capabilities:   " + caps + "\n"
                "  tools:          " + tools + "\n"
+               "  tool profile:   " + _registry.active_profile() + "\n"
                "  tool budget:    " + ( _config.tool_call_limit == 0 ? std::string("unlimited") : std::to_string(_config.tool_call_limit) ) + " per turn\n"
-               "  last context:   " + std::to_string(_stats.context_tokens.load()) + " tokens\n"
-               "  session tokens: " + std::to_string(_stats.session_total()) + " (" +
-                   std::to_string(_stats.session_cached.load()) + " cached)";
+               "  last context:   " + ( _stats.context_is_reported.load()
+                   ? ( std::to_string(_stats.context_tokens.load()) + " tokens\n" )
+                   : ( "~" + std::to_string(_stats.context_tokens.load()) + " tokens (estimated)\n" ) ) +
+               "  session tokens: " + ( _stats.session_is_reported.load() ? "" : "~" ) +
+                   std::to_string(_stats.session_total()) +
+                   ( _stats.session_is_reported.load() ? "" : " (estimated)" ) + " (" +
+                   std::to_string(_stats.session_cached.load()) + " cached" +
+                   ( _stats.session_cache_creation.load() > 0 ? ", " + std::to_string(_stats.session_cache_creation.load()) + " created" : "" ) + ")" +
+               ( [](const TokenStats& st) {
+                   TurnUsage tu = st.get_last_turn();
+                   if ( tu.model_requests > 0 ) return "\n\n" + format_turn_usage(tu);
+                   return std::string();
+               }(_stats));
     }
 
     if ( cmd == "/stop" || cmd == "/interrupt" ) {
@@ -2552,8 +2775,8 @@ std::string Repl::handle_command(const std::string& line) {
                 // clamps to it, so a larger number would silently do nothing.
                 auto with_ceiling = [this](size_t v) -> std::string {
                     std::string s = "max_tokens: " + Config::format_tokens(v);
-                    if ( _config.provider == "claude" || _config.provider == "anthropic" ) {
-                        long ceiling = providers::Anthropic::output_cap_for(_config.model);
+                    long ceiling = _provider ? _provider->output_token_cap(_config.model) : 0;
+                    if ( ceiling > 0 ) {
                         std::string c = Config::format_tokens(static_cast<size_t>(ceiling));
                         if ( static_cast<long>(v) > ceiling )
                             s += "  (clamped to " + c + " for " + _config.model + ")";
@@ -2647,7 +2870,16 @@ std::string Repl::handle_command(const std::string& line) {
                 _config.auto_compact_pct = p;
                 return "auto-compact threshold: " + std::to_string(_config.auto_compact_pct) + "% of the context budget";
             }
-            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, paste_preview, context, auto_compact, advisor, web_search, multiline; theme via /theme)";
+            if ( key == "auto_compact_max" || key == "auto_compact_max_tokens" || key == "auto_compact_limit" ) {
+                if ( val == "none" || val == "off" || val == "0" ) {
+                    _config.auto_compact_max_tokens = 0;
+                    return "auto-compact max tokens: none (full window)";
+                }
+                size_t m = Config::parse_size_suffixed(val, _config.auto_compact_max_tokens);
+                _config.auto_compact_max_tokens = m;
+                return "auto-compact max tokens: " + (m ? std::to_string(m) : "none (full window)");
+            }
+            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, paste_preview, context, auto_compact, auto_compact_max, advisor, web_search, multiline; theme via /theme)";
         }
 
         std::string tools = !_config.tools_enabled ? "off"
@@ -2668,7 +2900,8 @@ std::string Repl::handle_command(const std::string& line) {
         }
         s += "context:   " + ctx + "\n";
         s += "auto_compact: " + std::string( _config.auto_compact ? "on" : "off" ) +
-             ( _config.auto_compact ? "  (at " + std::to_string(_config.auto_compact_pct) + "%)" : "" ) + "\n";
+             ( _config.auto_compact ? "  (at " + std::to_string(_config.auto_compact_pct) + "%" +
+               ( _config.auto_compact_max_tokens > 0 ? ", max " + std::to_string(_config.auto_compact_max_tokens) + " tokens" : "" ) + ")" : "" ) + "\n";
         if ( provider_supports("advisor"))
             s += "advisor:   " + std::string( _config.advisor ? "on" : "off" ) +
                  "  (model: " + _config.advisor_model + ")\n";
@@ -2725,12 +2958,143 @@ std::string Repl::handle_command(const std::string& line) {
         return "model set to " + chosen;
     }
 
+    if ( cmd == "/profile" ) {
+        std::string p = common::to_lower(common::trim_ws(args));
+        if ( p.empty() ) {
+            std::string s = "active tool profile: " + _registry.active_profile() + "\n\navailable profiles:\n";
+            s += "  full      — all registered tools enabled (core, web, workflow, skills, mcp)\n";
+            s += "  code      — coding tools only (disables web search and workflows; saves tokens)\n";
+            s += "  research  — read-only exploration + web search (blocks mutating commands/writes)\n";
+            s += "  review    — read-only audit (no web or mutating tools; plan mode active)\n";
+            s += "  minimal   — read, edit, and bash only (minimum schema tokens)\n";
+            s += "\nusage: /profile <full|code|research|review|minimal>";
+            return s;
+        }
+        if ( !_registry.apply_profile(p) ) {
+            return "unknown profile '" + p + "'\navailable profiles: " +
+                   common::join_vector(_registry.available_profiles(), ", ");
+        }
+        _config.tool_profile = _registry.active_profile();
+        sync_effective_tools();
+        _conversation.set_system(base_system_prompt());
+        _config.save_settings(_config.home_dir);
+
+        auto tools = _registry.list_tools();
+        size_t enabled_count = 0;
+        size_t schema_tokens = 0;
+        for ( const auto& t : tools ) {
+            if ( t.enabled ) {
+                ++enabled_count;
+                schema_tokens += t.schema_tokens;
+            }
+        }
+        std::string s = "tool profile set to '" + _config.tool_profile + "' (" +
+                        std::to_string(enabled_count) + "/" + std::to_string(tools.size()) +
+                        " tools active, ~" + std::to_string(schema_tokens) + " schema tokens)";
+        if ( _config.plan_mode )
+            s += "\nplan mode ON — mutating tools disabled";
+        return s;
+    }
+
     if ( cmd == "/tools" ) {
-        std::string m = common::to_lower(args);
+        std::string trimmed_args = common::trim_ws(args);
+        if ( trimmed_args.empty() ) {
+            std::string mode_str = _config.insecure ? "insecure" : ( _config.confirm_tools ? "confirm" : "auto" );
+            std::string s = "tool confirmation mode: " + mode_str +
+                            "  (strict: " + ( _config.strict ? "on" : "off" ) +
+                            ", plan mode: " + ( _config.plan_mode ? "on" : "off" ) + ")\n";
+            s += "active profile:         " + _registry.active_profile() + "\n";
+            s += "groups:\n";
+            for ( const auto& grp : _registry.available_groups() ) {
+                bool en = _registry.is_group_enabled(grp);
+                s += "  " + grp + ( grp.size() < 10 ? std::string(10 - grp.size(), ' ') : " " ) +
+                     ": " + ( en ? "enabled" : "disabled" ) + "\n";
+            }
+            auto tools = _registry.list_tools();
+            size_t enabled_count = 0;
+            size_t schema_tokens = 0;
+            for ( const auto& t : tools ) {
+                if ( t.enabled ) {
+                    ++enabled_count;
+                    schema_tokens += t.schema_tokens;
+                }
+            }
+            s += "\ntools: " + std::to_string(enabled_count) + "/" + std::to_string(tools.size()) +
+                 " active (~" + std::to_string(schema_tokens) + " schema tokens)\n";
+            s += "\ncommands:\n"
+                 "  /tools <confirm|auto|insecure> — set confirmation mode\n"
+                 "  /tools list                   — list all tools and schema cost\n"
+                 "  /tools group <name> <on|off>  — enable or disable a tool group\n"
+                 "  /tools profile <name>         — switch active profile";
+            return s;
+        }
+
+        if ( trimmed_args == "list" ) {
+            auto tools = _registry.list_tools();
+            std::string s = "registered tools:\n\n";
+            s += "  NAME                     GROUP     STATUS    TOKENS  MUTATING  DESCRIPTION\n";
+            s += "  ───────────────────────  ────────  ────────  ──────  ────────  ───────────\n";
+            for ( const auto& t : tools ) {
+                std::string nm = t.name;
+                if ( nm.size() > 23 ) nm = nm.substr(0, 22) + "…";
+                else nm += std::string(23 - nm.size(), ' ');
+
+                std::string grp = t.group;
+                if ( grp.size() > 8 ) grp = grp.substr(0, 7) + "…";
+                else grp += std::string(8 - grp.size(), ' ');
+
+                std::string st = t.enabled ? "enabled " : "disabled";
+                std::string tok = std::to_string(t.schema_tokens);
+                if ( tok.size() < 6 ) tok = std::string(6 - tok.size(), ' ') + tok;
+                std::string mut = t.mutating ? "yes     " : "no      ";
+
+                std::string desc = t.description;
+                size_t nl = desc.find('\n');
+                if ( nl != std::string::npos ) desc = desc.substr(0, nl);
+                if ( desc.size() > 40 ) desc = desc.substr(0, 39) + "…";
+
+                s += "  " + nm + "  " + grp + "  " + st + "  " + tok + "  " + mut + "  " + desc + "\n";
+            }
+            return s;
+        }
+
+        if ( trimmed_args.rfind("group", 0) == 0 ) {
+            std::istringstream iss(trimmed_args.substr(5));
+            std::string grp, state;
+            iss >> grp >> state;
+            grp = common::to_lower(common::trim_ws(grp));
+            state = common::to_lower(common::trim_ws(state));
+            if ( grp.empty() ) {
+                std::string s = "tool groups:\n";
+                for ( const auto& g : _registry.available_groups() ) {
+                    s += "  " + g + ": " + ( _registry.is_group_enabled(g) ? "enabled" : "disabled" ) + "\n";
+                }
+                s += "\nusage: /tools group <name> <on|off>";
+                return s;
+            }
+            if ( state.empty() ) {
+                return "group '" + grp + "' is " +
+                       ( _registry.is_group_enabled(grp) ? "enabled" : "disabled" ) +
+                       "\nusage: /tools group " + grp + " <on|off>";
+            }
+            bool en = ( state == "on" || state == "true" || state == "1" || state == "yes" );
+            if ( !en && state != "off" && state != "false" && state != "0" && state != "no" ) {
+                return "usage: /tools group <name> <on|off>";
+            }
+            _registry.set_group_enabled(grp, en);
+            return "tool group '" + grp + "' " + ( en ? "enabled" : "disabled" );
+        }
+
+        if ( trimmed_args.rfind("profile", 0) == 0 ) {
+            std::string sub = common::trim_ws(trimmed_args.substr(7));
+            return handle_command("/profile " + sub);
+        }
+
+        std::string m = common::to_lower(trimmed_args);
         if ( m == "confirm" ) { _config.confirm_tools = true; _config.insecure = false; }
         else if ( m == "auto" || m == "yes" ) { _config.confirm_tools = false; _config.insecure = false; m = "auto"; }
         else if ( m == "insecure" ) { _config.insecure = true; }
-        else return "usage: /tools <confirm|auto|insecure>";
+        else return "usage: /tools <confirm|auto|insecure> | list | group <name> [on|off] | profile <name>";
         _registry.set_mode(tool_mode());
         _registry.set_strict(_config.strict);
         _registry.set_plan_mode(_config.plan_mode);
@@ -2809,8 +3173,8 @@ std::string Repl::handle_command(const std::string& line) {
         _config.thinking = common::to_lower(args);
         if ( _provider )
             _provider->apply_provider_options(JSON::Object{{ "thinking", _config.thinking }});
-        bool applies = ( _config.provider == "kimi" || _config.provider == "codex" || _config.provider == "claude" || _config.provider == "anthropic" );
-        std::string note = applies ? "" : "  (thinking is applied by Codex, Kimi and Claude/Anthropic)";
+        bool applies = _provider && _provider->supports_reasoning();
+        std::string note = applies ? "" : "  (thinking is not supported by provider " + _config.provider + ")";
         return "thinking: " + _config.thinking + note;
     }
 
@@ -2943,6 +3307,21 @@ void Repl::run_tty() {
     });
     inline_repl.set_command_callback([this](const std::string& cmd) { return handle_command(cmd); });
     inline_repl.set_workflows_provider([this] { return _workflows.snapshot(); });
+    inline_repl.set_tools_provider([this]() -> std::vector<InlineRepl::ToolItem> {
+        std::vector<InlineRepl::ToolItem> out;
+        for ( const auto& ti : _registry.list_tools() ) {
+            out.push_back({ ti.name, ti.group, ti.description, ti.mutating, ti.enabled, ti.schema_tokens });
+        }
+        return out;
+    });
+    inline_repl.set_mcp_provider([this]() -> std::vector<InlineRepl::McpServerItem> {
+        std::vector<InlineRepl::McpServerItem> out;
+        for ( const auto& si : _mcp.status() ) {
+            out.push_back({ si.name, si.transport, si.connected, si.enabled, si.error, si.tool_names });
+        }
+        return out;
+    });
+    inline_repl.set_capability_checker([this](const std::string& cap) { return provider_supports(cap); });
     set_progress_callback([&inline_repl](const std::string& s) { inline_repl.set_activity(s); });
     set_tool_notice_callback([&inline_repl](const std::string& s) { inline_repl.notify_tool(s); });
     set_live_update_callback([&inline_repl] { return inline_repl.take_live_updates(); });
@@ -3054,15 +3433,39 @@ void Repl::run_once(const std::string& prompt) {
         }
         save_conversation();
         if ( json ) {
+            JSON u = JSON::Object{
+                { "input_tokens", static_cast<long long>(_stats.session_input.load()) },
+                { "output_tokens", static_cast<long long>(_stats.session_output.load()) },
+                { "cached_input_tokens", static_cast<long long>(_stats.session_cached.load()) }
+            };
+            auto tu = _stats.get_last_turn();
+            if ( tu.turn_number > 0 ) {
+                long uncached = tu.input_tokens > tu.cached_tokens ? tu.input_tokens - tu.cached_tokens : 0;
+                u["turn"] = JSON::Object{
+                    { "turn_number", static_cast<long long>(tu.turn_number) },
+                    { "model_requests", static_cast<long long>(tu.model_requests) },
+                    { "tool_calls", static_cast<long long>(tu.tool_calls) },
+                    { "input_tokens", static_cast<long long>(tu.input_tokens) },
+                    { "cached_tokens", static_cast<long long>(tu.cached_tokens) },
+                    { "cache_creation_tokens", static_cast<long long>(tu.cache_creation_tokens) },
+                    { "uncached_tokens", static_cast<long long>(uncached) },
+                    { "output_tokens", static_cast<long long>(tu.output_tokens) },
+                    { "reasoning_tokens", static_cast<long long>(tu.reasoning_tokens) },
+                    { "elapsed_ms", static_cast<long long>(tu.elapsed_ms) }
+                };
+            }
+            u["session"] = JSON::Object{
+                { "input_tokens", static_cast<long long>(_stats.session_input.load()) },
+                { "output_tokens", static_cast<long long>(_stats.session_output.load()) },
+                { "cached_input_tokens", static_cast<long long>(_stats.session_cached.load()) },
+                { "cache_creation_input_tokens", static_cast<long long>(_stats.session_cache_creation.load()) },
+                { "reasoning_tokens", static_cast<long long>(_stats.session_reasoning.load()) }
+            };
             JSON out = JSON::Object{
                 { "provider", _config.provider },
                 { "model", _config.model },
                 { "response", agent::normalize_text(reply) },
-                { "usage", JSON::Object{
-                    { "input_tokens", static_cast<long long>(_stats.session_input.load()) },
-                    { "output_tokens", static_cast<long long>(_stats.session_output.load()) },
-                    { "cached_input_tokens", static_cast<long long>(_stats.session_cached.load()) }
-                }}
+                { "usage", u }
             };
             std::cout << out.dump() << std::endl;
         }

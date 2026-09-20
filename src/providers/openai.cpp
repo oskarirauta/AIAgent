@@ -158,6 +158,9 @@ Response OpenAI::parse_response(const JSON& response) {
         if ( u.contains("prompt_tokens_details") && u["prompt_tokens_details"] == JSON::TYPE::OBJECT &&
              u["prompt_tokens_details"].contains("cached_tokens"))
             r.cached_input_tokens = json_long(u["prompt_tokens_details"]["cached_tokens"]);
+        if ( u.contains("completion_tokens_details") && u["completion_tokens_details"] == JSON::TYPE::OBJECT &&
+             u["completion_tokens_details"].contains("reasoning_tokens"))
+            r.reasoning_tokens = json_long(u["completion_tokens_details"]["reasoning_tokens"]);
     }
 
     return r;
@@ -179,6 +182,7 @@ void OpenAI::stream_reset() {
     _s_output_tokens = 0;
     _s_truncated = false;
     _s_cached_tokens = 0;
+    _s_reasoning_tokens = 0;
 }
 
 StreamChunk OpenAI::parse_stream(const std::string& chunk, std::string& buffer, bool& done) {
@@ -214,6 +218,9 @@ StreamChunk OpenAI::parse_stream(const std::string& chunk, std::string& buffer, 
                 if ( u.contains("prompt_tokens_details") && u["prompt_tokens_details"] == JSON::TYPE::OBJECT &&
                      u["prompt_tokens_details"].contains("cached_tokens"))
                     _s_cached_tokens = json_long(u["prompt_tokens_details"]["cached_tokens"]);
+                if ( u.contains("completion_tokens_details") && u["completion_tokens_details"] == JSON::TYPE::OBJECT &&
+                     u["completion_tokens_details"].contains("reasoning_tokens"))
+                    _s_reasoning_tokens = json_long(u["completion_tokens_details"]["reasoning_tokens"]);
             };
             // Usage is top-level with stream_options.include_usage, but Kimi puts
             // it inside choices[0] on the final chunk.
@@ -275,6 +282,8 @@ Response OpenAI::stream_result() {
     r.output_tokens = _s_output_tokens;
     r.truncated = _s_truncated;
     r.cached_input_tokens = _s_cached_tokens;
+    r.reasoning_tokens = _s_reasoning_tokens > 0 ? _s_reasoning_tokens
+                        : static_cast<long>(_s_reasoning.size() / 4);
     for ( const auto& [idx, p] : _s_tools ) {
         if ( p.name.empty())
             continue;

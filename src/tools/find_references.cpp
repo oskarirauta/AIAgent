@@ -14,11 +14,11 @@ namespace agent::tools {
 
 namespace {
 
-constexpr size_t MAX_MATCHES     = 200;
+constexpr size_t MAX_MATCHES     = 40;
 constexpr size_t MAX_FILES       = 6000;
 constexpr size_t MAX_FILE_BYTES  = 1000000;
 constexpr size_t MAX_LINE_CHARS  = 300;
-constexpr size_t MAX_TOTAL_BYTES = 60000;
+constexpr size_t MAX_TOTAL_BYTES = 12000;
 
 bool ignored_dir(const std::string& name) {
     static const std::vector<std::string> skip = {

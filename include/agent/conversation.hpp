@@ -50,11 +50,20 @@ public:
     const std::vector<Message>& messages() const { return _messages; }
     void clear();
 
-    // Messages to send under an approximate token budget (4 chars ≈ 1 token):
+    // Approximate total tokens across all messages (provider-aware tokenization and framing):
+    size_t estimate_tokens(const std::string& provider = "") const;
+
+    // Approximate tokens for a single message using provider-aware tokenization and framing:
+    static size_t estimate_message_tokens(const Message& msg, const std::string& provider = "");
+
+    // Approximate tokens for raw text:
+    static size_t estimate_text_tokens(const std::string& text, const std::string& provider = "");
+
+    // Messages to send under an approximate token budget:
     // keep a leading system message plus the most recent messages that fit.
     // 0 means no limit (returns the full history). Leading orphaned tool
     // results — whose assistant tool_call got trimmed — are dropped.
-    std::vector<Message> within_token_budget(size_t max_tokens) const;
+    std::vector<Message> within_token_budget(size_t max_tokens, std::vector<Message> msgs = {}, const std::string& provider = "") const;
 
     // Remove the most recent exchange: everything from the last user message to
     // the end (its assistant reply and any tool messages). Returns the removed
