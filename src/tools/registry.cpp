@@ -69,6 +69,132 @@ bool Registry::is_group_enabled(const std::string& group) const {
     return _disabled_groups.find(group) == _disabled_groups.end();
 }
 
+void Registry::set_tool_enabled(const std::string& name, bool enabled) {
+    if ( enabled ) {
+        if ( _disabled_tools.erase(name) > 0 )
+            _schema_dirty = true;
+    } else {
+        if ( _disabled_tools.insert(name).second )
+            _schema_dirty = true;
+    }
+}
+
+bool Registry::is_tool_enabled(const std::string& name) const {
+    if ( _disabled_tools.find(name) != _disabled_tools.end() )
+        return false;
+    auto it = _tools.find(name);
+    if ( it != _tools.end() && it->second ) {
+        std::string grp = it->second->group();
+        if ( !grp.empty() && !is_group_enabled(grp) )
+            return false;
+    }
+    return true;
+}
+
+std::vector<Registry::ToolInfo> Registry::list_tools() const {
+    std::vector<ToolInfo> out;
+    for ( const auto& [name, tool] : _tools ) {
+        if ( !tool ) continue;
+        ToolInfo ti;
+        ti.name = tool->name();
+        ti.group = tool->group().empty() ? "core" : tool->group();
+        ti.description = tool->description();
+        ti.mutating = tool->mutates();
+        ti.enabled = is_tool_enabled(name);
+        JSON entry = JSON::Object{
+            { "name", tool->name() },
+            { "description", tool->description() },
+            { "parameters", tool->parameters() }
+        };
+        ti.schema_tokens = entry.dump_minified().size() / 4;
+        out.push_back(std::move(ti));
+    }
+    return out;
+}
+
+std::vector<std::string> Registry::available_profiles() {
+    return { "full", "code", "research", "review", "minimal" };
+}
+
+std::vector<std::string> Registry::available_groups() {
+    return { "core", "web", "workflow", "skills", "mcp" };
+}
+
+bool Registry::apply_profile(const std::string& profile) {
+    std::string p = common::to_lower(common::trim_ws(profile));
+    if ( p == "audit" ) p = "review";
+    if ( p == "coding" ) p = "code";
+
+    if ( p == "full" || p == "all" || p == "default" ) {
+        _active_profile = "full";
+        _disabled_groups.clear();
+        _disabled_tools.clear();
+        _plan_mode = false;
+        _schema_dirty = true;
+        return true;
+    }
+
+    if ( p == "code" ) {
+        _active_profile = "code";
+        _disabled_groups.clear();
+        _disabled_tools.clear();
+        _disabled_groups.insert("web");
+        _disabled_groups.insert("workflow");
+        _plan_mode = false;
+        _schema_dirty = true;
+        return true;
+    }
+
+    if ( p == "research" ) {
+        _active_profile = "research";
+        _disabled_groups.clear();
+        _disabled_tools.clear();
+        _disabled_groups.insert("workflow");
+        _disabled_groups.insert("skills");
+        _disabled_tools.insert("write_file");
+        _disabled_tools.insert("edit_file");
+        _disabled_tools.insert("run_command");
+        _plan_mode = true;
+        _schema_dirty = true;
+        return true;
+    }
+
+    if ( p == "review" ) {
+        _active_profile = "review";
+        _disabled_groups.clear();
+        _disabled_tools.clear();
+        _disabled_groups.insert("web");
+        _disabled_groups.insert("workflow");
+        _disabled_groups.insert("skills");
+        _disabled_groups.insert("mcp");
+        _disabled_tools.insert("write_file");
+        _disabled_tools.insert("edit_file");
+        _disabled_tools.insert("run_command");
+        _plan_mode = true;
+        _schema_dirty = true;
+        return true;
+    }
+
+    if ( p == "minimal" ) {
+        _active_profile = "minimal";
+        _disabled_groups.clear();
+        _disabled_tools.clear();
+        _disabled_groups.insert("web");
+        _disabled_groups.insert("workflow");
+        _disabled_groups.insert("skills");
+        _disabled_groups.insert("mcp");
+        for ( const auto& [name, tool] : _tools ) {
+            if ( name != "read_file" && name != "edit_file" && name != "run_command" )
+                _disabled_tools.insert(name);
+        }
+        _plan_mode = false;
+        _schema_dirty = true;
+        return true;
+    }
+
+    return false;
+}
+
 JSON Registry::schema() const {
     if ( !_schema_dirty )
         return _cached_schema;
@@ -76,6 +202,8 @@ JSON Registry::schema() const {
     JSON arr = JSON::Array{};
     for ( const auto& [name, tool] : _tools ) {
         if ( !tool ) continue;
+        if ( !is_tool_enabled(name) )
+            continue;
         std::string grp = tool->group();
         if ( !grp.empty() && !is_group_enabled(grp) )
             continue;
@@ -637,6 +765,9 @@ std::string Registry::execute(const std::string& name, const JSON& args) {
         throws << "unknown tool: " << name << std::endl;
 
     Tool* tool = it->second.get();
+
+    if ( !is_tool_enabled(name) )
+        return "tool '" + name + "' is disabled in the current profile ('" + _active_profile + "')";
 
     // Plan mode: read-only tools work; anything that writes or runs is refused
     // so the model produces a plan instead of acting.

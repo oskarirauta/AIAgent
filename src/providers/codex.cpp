@@ -268,7 +268,7 @@ void Codex::apply_provider_options(const JSON& options) {
 
 void Codex::stream_reset() {
     _s_content.clear(); _s_reasoning.clear(); _s_tools.clear();
-    _s_input_tokens = _s_output_tokens = _s_cached_tokens = 0;
+    _s_input_tokens = _s_output_tokens = _s_cached_tokens = _s_reasoning_tokens = 0;
     _s_truncated = false;
 }
 
@@ -309,6 +309,8 @@ StreamChunk Codex::parse_stream(const std::string& chunk, std::string& buffer, b
                     if ( u.contains("output_tokens")) _s_output_tokens = json_long(u["output_tokens"]);
                     if ( u.contains("input_tokens_details") && u["input_tokens_details"] == JSON::TYPE::OBJECT && u["input_tokens_details"].contains("cached_tokens"))
                         _s_cached_tokens = json_long(u["input_tokens_details"]["cached_tokens"]);
+                    if ( u.contains("output_tokens_details") && u["output_tokens_details"] == JSON::TYPE::OBJECT && u["output_tokens_details"].contains("reasoning_tokens"))
+                        _s_reasoning_tokens = json_long(u["output_tokens_details"]["reasoning_tokens"]);
                 }
                 done = true;
             } else if ( type == "response.incomplete" ) { _s_truncated = true; done = true; }
@@ -325,6 +327,7 @@ Response Codex::stream_result() {
     r.message = _s_content; r.thinking = _s_reasoning;
     r.input_tokens = _s_input_tokens; r.output_tokens = _s_output_tokens;
     r.cached_input_tokens = _s_cached_tokens; r.truncated = _s_truncated;
+    r.reasoning_tokens = _s_reasoning_tokens;
     for ( const auto& [id, tc] : _s_tools ) r.tool_calls.push_back(tc);
     return r;
 }

@@ -67,9 +67,28 @@ public:
     size_t revoke_grant(const std::string& key);
     size_t revoke_all_grants();
 
+    struct ToolInfo {
+        std::string name;
+        std::string group;
+        std::string description;
+        bool mutating = false;
+        bool enabled = true;
+        size_t schema_tokens = 0;
+    };
+
+    std::vector<ToolInfo> list_tools() const;
+    bool apply_profile(const std::string& profile);
+    std::string active_profile() const { return _active_profile; }
+    static std::vector<std::string> available_profiles();
+    static std::vector<std::string> available_groups();
+
     void set_group_enabled(const std::string& group, bool enabled);
     bool is_group_enabled(const std::string& group) const;
     std::set<std::string> disabled_groups() const { return _disabled_groups; }
+
+    void set_tool_enabled(const std::string& name, bool enabled);
+    bool is_tool_enabled(const std::string& name) const;
+    std::set<std::string> disabled_tools() const { return _disabled_tools; }
 
     JSON schema() const;
     std::string execute(const std::string& name, const JSON& args);
@@ -111,7 +130,9 @@ private:
     ConfirmMode _mode = ConfirmMode::confirm;
     bool _strict = false;
     bool _plan_mode = false;
+    std::string _active_profile = "full";
     std::set<std::string> _disabled_groups;
+    std::set<std::string> _disabled_tools;
 
     // Session-scoped approvals granted via "allow session" / "allow similar".
     std::set<std::string> _allow_exact;   // full command / action strings

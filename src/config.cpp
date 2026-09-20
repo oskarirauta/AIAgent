@@ -869,6 +869,8 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.tool_call_limit = static_cast<size_t>(static_cast<long long>(s["tool_call_limit"]));
             if ( s.contains("max_tokens") && s["max_tokens"] == JSON::TYPE::INT )
                 last.max_tokens = static_cast<size_t>(static_cast<long long>(s["max_tokens"]));
+            if ( s.contains("tool_profile") && s["tool_profile"] == JSON::TYPE::STRING )
+                last.tool_profile = s["tool_profile"].to_string();
 
             // Migrate a settings block written before context_auto/auto_compact
             // defaulted to on. Applied here, on the loaded state itself, so that
@@ -924,7 +926,8 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "advisor_model", last.advisor_model },
             { "paste_preview", static_cast<long long>(last.paste_preview) },
             { "tool_call_limit", static_cast<long long>(last.tool_call_limit) },
-            { "max_tokens", static_cast<long long>(last.max_tokens) }
+            { "max_tokens", static_cast<long long>(last.max_tokens) },
+            { "tool_profile", last.tool_profile }
         };
     }
 
@@ -983,6 +986,7 @@ void Config::save_settings(const std::string& home_dir) const {
     last.paste_preview = paste_preview;
     last.tool_call_limit = tool_call_limit;
     last.max_tokens = max_tokens;
+    last.tool_profile = tool_profile;
     write_state(home_dir, last);
 }
 
@@ -1005,6 +1009,8 @@ void Config::apply_settings(const LastUsed& last) {
         confirm_tools = last.confirm_tools;
         insecure = last.insecure;
     }
+    if ( !last.tool_profile.empty() )
+        tool_profile = last.tool_profile;
     bell = last.bell;
     advisor = last.advisor;
     if ( !last.advisor_model.empty())

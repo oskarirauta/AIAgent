@@ -36,6 +36,9 @@ struct Response {
     // Portion of input_tokens served from the prompt cache (billed ~10%).
     // input_tokens is the TOTAL prompt size; cached_input_tokens is the subset.
     long cached_input_tokens = 0;
+
+    // Output reasoning/thinking tokens reported by the provider (0 if unknown).
+    long reasoning_tokens = 0;
 };
 
 // Visible deltas produced by one streamed chunk. Content and reasoning are

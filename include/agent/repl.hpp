@@ -35,6 +35,8 @@ public:
         return _provider && _provider->supports(capability);
     }
 
+    static std::string format_turn_usage(const TurnUsage& tu);
+
 private:
     void run_tty();
     void run_plain();
@@ -157,6 +159,7 @@ private:
     // main thread reassigns it (switch_provider) or edits it (/settings).
     std::atomic<bool> _workflow_autoresume{ false };
     mcp::Client _mcp;
+    size_t _turn_counter = 0;
 };
 
 } // namespace agent

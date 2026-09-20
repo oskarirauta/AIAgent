@@ -47,6 +47,7 @@ public:
     bool tool_mode_explicit = false; // a CLI flag (-T/-Y/-I) set the mode; don't let saved state override it
     bool strict = false;        // in confirm mode, ignore the safe-command allowlist
     bool plan_mode = false;     // read-only planning: mutating tools are blocked (session-only)
+    std::string tool_profile = "full"; // active tool profile: full|code|research|review|minimal
     bool steal_lock = false;    // --steal-lock: take over a session locked by a live agent (session-only)
     // Named session within this project: several conversations can live side by
     // side in one directory (e.g. one building, one reviewing), each with its own
@@ -170,6 +171,7 @@ public:
         size_t paste_preview = 8;
         size_t tool_call_limit = 100;
         size_t max_tokens = 64000;
+        std::string tool_profile = "full";
     };
     static LastUsed load_last_used(const std::string& home_dir);
     static void save_last_used(const std::string& home_dir, const std::string& provider, const std::string& model);

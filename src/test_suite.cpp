@@ -12,6 +12,7 @@
 
 #include "agent/config.hpp"
 #include "agent/conversation.hpp"
+#include "agent/repl.hpp"
 #include "agent/repl_inline.hpp"
 #include "agent/memory.hpp"
 #include "agent/token_stats.hpp"
@@ -1825,6 +1826,70 @@ static void test_tool_groups() {
     check(r.disabled_groups().empty(), "disabled_groups empty after restoring");
 }
 
+static void test_tool_profiles() {
+    std::cout << "tool profiles and dynamic selection" << std::endl;
+    agent::tools::Registry r;
+    r.register_defaults();
+    r.add(std::make_unique<agent::tools::WebSearch>("https://example.com"));
+    r.add(std::make_unique<agent::tools::FetchUrl>());
+    r.add(std::make_unique<agent::tools::WorkflowTool>(nullptr));
+    r.add(std::make_unique<agent::tools::SkillTool>(nullptr, nullptr));
+
+    check(r.active_profile() == "full", "default profile is full");
+    auto profiles = agent::tools::Registry::available_profiles();
+    check(profiles.size() == 5, "5 profiles available");
+
+    check(r.apply_profile("code"), "apply_profile code succeeds");
+    check(r.active_profile() == "code", "active profile is code");
+    check(!r.is_group_enabled("web"), "web group disabled in code profile");
+    check(!r.is_group_enabled("workflow"), "workflow group disabled in code profile");
+    check(r.is_group_enabled("core"), "core group enabled in code profile");
+    check(!r.plan_mode(), "plan mode is off in code profile");
+
+    check(r.apply_profile("research"), "apply_profile research succeeds");
+    check(r.active_profile() == "research", "active profile is research");
+    check(r.is_group_enabled("web"), "web group enabled in research profile");
+    check(r.plan_mode(), "plan mode is on in research profile");
+    check(!r.is_tool_enabled("write_file"), "write_file disabled in research profile");
+    check(!r.is_tool_enabled("edit_file"), "edit_file disabled in research profile");
+    check(r.is_tool_enabled("read_file"), "read_file enabled in research profile");
+
+    JSON wargs = JSON::Object{{ "path", "/tmp/ai_agent_profile_test.txt" }, { "content", "x" }};
+    std::string wres = r.execute("write_file", wargs);
+    check(wres.find("disabled") != std::string::npos, "executing disabled tool returns error");
+
+    check(r.apply_profile("review"), "apply_profile review succeeds");
+    check(r.active_profile() == "review", "active profile is review");
+    check(!r.is_group_enabled("web"), "web disabled in review profile");
+    check(r.plan_mode(), "plan mode is on in review profile");
+    check(!r.is_tool_enabled("write_file"), "write_file disabled in review profile");
+    check(r.is_tool_enabled("read_file"), "read_file enabled in review profile");
+
+    check(r.apply_profile("minimal"), "apply_profile minimal succeeds");
+    check(r.active_profile() == "minimal", "active profile is minimal");
+    check(r.is_tool_enabled("read_file"), "read_file enabled in minimal");
+    check(r.is_tool_enabled("edit_file"), "edit_file enabled in minimal");
+    check(r.is_tool_enabled("run_command"), "run_command enabled in minimal");
+    check(!r.is_tool_enabled("write_file"), "write_file disabled in minimal");
+    check(!r.is_tool_enabled("list_directory"), "list_directory disabled in minimal");
+
+    check(r.apply_profile("full"), "apply_profile full succeeds");
+    check(r.active_profile() == "full", "active profile is full");
+    check(r.is_tool_enabled("write_file"), "write_file enabled in full");
+    check(r.is_group_enabled("web"), "web enabled in full");
+
+    auto tools = r.list_tools();
+    check(!tools.empty(), "list_tools returns tools");
+    check(tools[0].schema_tokens > 0, "tool schema tokens estimated");
+}
+
+static void test_mcp_server_toggle() {
+    std::cout << "mcp server enable/disable" << std::endl;
+    agent::mcp::Client mcp;
+    check(!mcp.set_server_enabled("nonexistent", false), "set_server_enabled returns false for nonexistent");
+    check(!mcp.is_server_enabled("nonexistent"), "is_server_enabled returns false for nonexistent");
+}
+
 static void test_expand_tilde() {
     std::cout << "tilde expansion" << std::endl;
     setenv("HOME", "/home/tester", 1);
@@ -3125,6 +3190,34 @@ static void test_token_usage() {
     stats.record(1500, 40);
     check(stats.context_tokens.load() == 1500, "context tracks latest request");
     check(stats.session_total() == 1200 + 34 + 1500 + 40, "session total accumulates");
+
+    agent::TurnUsage tu;
+    tu.turn_number = 37;
+    tu.model_requests = 14;
+    tu.tool_calls = 13;
+    tu.input_tokens = 1842391;
+    tu.cached_tokens = 1521804;
+    tu.output_tokens = 18422;
+    tu.reasoning_tokens = 9817;
+    tu.first_request_tokens = 182440;
+    tu.peak_request_tokens = 201438;
+    tu.elapsed_ms = 222000;
+    stats.record_turn(tu);
+
+    agent::TurnUsage got = stats.get_last_turn();
+    check(got.turn_number == 37, "turn_number captured");
+    check(got.model_requests == 14, "model_requests captured");
+    check(got.tool_calls == 13, "tool_calls captured");
+    check(got.input_tokens == 1842391, "input_tokens captured");
+    check(got.cached_tokens == 1521804, "cached_tokens captured");
+
+    std::string formatted = agent::Repl::format_turn_usage(got);
+    check(formatted.find("turn #37 usage:") != std::string::npos, "formatted header present");
+    check(formatted.find("1,842,391") != std::string::npos, "formatted input tokens present");
+    check(formatted.find("1,521,804 cached") != std::string::npos, "formatted cached tokens present");
+    check(formatted.find("320,587 uncached") != std::string::npos, "formatted uncached tokens present");
+    check(formatted.find("9,817 reasoning") != std::string::npos, "formatted reasoning present");
+    check(formatted.find("3m 42s") != std::string::npos, "formatted duration present");
 }
 
 static void test_trust_grants() {
@@ -3704,6 +3797,8 @@ int main() {
     test_stream_tool_calls();
     test_tools();
     test_tool_groups();
+    test_tool_profiles();
+    test_mcp_server_toggle();
     test_run_command_robustness();
     test_read_file_robustness();
     test_parallel_tool_safety();

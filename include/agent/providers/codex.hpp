@@ -46,7 +46,7 @@ private:
     std::string _reasoning_effort = "medium";
     std::string _s_content, _s_reasoning;
     std::map<std::string, ToolCall> _s_tools;
-    long _s_input_tokens = 0, _s_output_tokens = 0, _s_cached_tokens = 0;
+    long _s_input_tokens = 0, _s_output_tokens = 0, _s_cached_tokens = 0, _s_reasoning_tokens = 0;
     bool _s_truncated = false;
 };
 

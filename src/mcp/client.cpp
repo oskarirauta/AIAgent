@@ -596,7 +596,7 @@ Client::Server* Client::find(const std::string& name) {
 std::vector<ToolDef> Client::tools() const {
     std::vector<ToolDef> out;
     for ( const auto& sp : _servers )
-        if ( sp->connected )
+        if ( sp->connected && sp->enabled )
             for ( const auto& t : sp->tools ) out.push_back(t);
     return out;
 }
@@ -604,7 +604,7 @@ std::vector<ToolDef> Client::tools() const {
 std::vector<ResourceDef> Client::resources() const {
     std::vector<ResourceDef> out;
     for ( const auto& sp : _servers )
-        if ( sp->connected )
+        if ( sp->connected && sp->enabled )
             for ( const auto& r : sp->resources ) out.push_back(r);
     return out;
 }
@@ -612,14 +612,30 @@ std::vector<ResourceDef> Client::resources() const {
 std::vector<PromptDef> Client::prompts() const {
     std::vector<PromptDef> out;
     for ( const auto& sp : _servers )
-        if ( sp->connected )
+        if ( sp->connected && sp->enabled )
             for ( const auto& p : sp->prompts ) out.push_back(p);
     return out;
+}
+
+bool Client::set_server_enabled(const std::string& name, bool enabled) {
+    Server* s = find(name);
+    if ( s ) {
+        s->enabled = enabled;
+        return true;
+    }
+    return false;
+}
+
+bool Client::is_server_enabled(const std::string& name) const {
+    for ( const auto& sp : _servers )
+        if ( sp->name == name ) return sp->enabled;
+    return false;
 }
 
 std::string Client::call_tool(const std::string& server, const std::string& tool, const JSON& args) {
     Server* s = find(server);
     if ( !s ) return "error: no MCP server named '" + server + "'";
+    if ( !s->enabled ) return "error: MCP server '" + server + "' is disabled";
     if ( !s->connected ) return "error: MCP server '" + server + "' is not connected";
     try {
         JSON params = JSON::Object{
@@ -703,6 +719,7 @@ std::vector<Client::ServerInfo> Client::status() const {
         si.name = sp->name;
         si.transport = ( sp->transport == Transport::http ) ? "http" : "stdio";
         si.connected = sp->connected;
+        si.enabled = sp->enabled;
         si.error = sp->error;
         si.command = ( sp->transport == Transport::http ) ? sp->url : sp->command;
         for ( const auto& t : sp->tools ) si.tool_names.push_back(t.tool);

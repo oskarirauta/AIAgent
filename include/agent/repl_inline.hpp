@@ -83,10 +83,30 @@ public:
     // accepted per real user message — returns false when dropped by the cap.
     bool enqueue_prompt(const std::string& text);
 
+    struct ToolItem {
+        std::string name;
+        std::string group;
+        std::string description;
+        bool mutating = false;
+        bool enabled = true;
+        size_t schema_tokens = 0;
+    };
+
+    struct McpServerItem {
+        std::string name;
+        std::string transport;
+        bool connected = false;
+        bool enabled = true;
+        std::string error;
+        std::vector<std::string> tool_names;
+    };
+
     // Handler for slash commands (other than /exit and /quit), run locally on the
     // main thread; returns text to show as a system message.
     void set_command_callback(command_cb_t cb) { _command_cb = std::move(cb); }
     void set_workflows_provider(std::function<std::vector<WorkflowRun>()> fn) { _wf_provider = std::move(fn); }
+    void set_tools_provider(std::function<std::vector<ToolItem>()> fn) { _tools_provider = std::move(fn); }
+    void set_mcp_provider(std::function<std::vector<McpServerItem>()> fn) { _mcp_provider = std::move(fn); }
     // Multi-level workflows drill-down: runs → steps → one step's content. Public so
     // the navigation can be driven directly (dispatch + tests); run_id >= 0 opens
     // straight into that run's steps.
@@ -360,6 +380,8 @@ private:
     bool _wf_active = false;            // the open list menu is the workflow drill-down
     int _wf_level = 0;                  // 0 = runs, 1 = steps (content uses _list_detail)
     int _wf_run_id = -1;               // the run whose steps are shown at level 1
+    std::function<std::vector<ToolItem>()> _tools_provider;
+    std::function<std::vector<McpServerItem>()> _mcp_provider;
 
     bool _in_settings = false;
     bool _settings_editing = false;    // typing a free-text value into the selected row

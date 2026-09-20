@@ -909,7 +909,9 @@ std::string InlineRepl::status_line() const {
     std::string tools = !_config.tools_enabled ? "tools off"
                         : _config.insecure ? "tools: insecure"
                         : (_config.confirm_tools ? "tools: confirm" : "tools: auto");
-    if ( _config.plan_mode )
+    if ( !_config.tool_profile.empty() && _config.tool_profile != "full" )
+        tools += " [" + _config.tool_profile + "]";
+    else if ( _config.plan_mode )
         tools += " · plan";
 
     std::string s = _config.provider + " · " + _config.model + " · " + cwd;
@@ -1402,7 +1404,7 @@ namespace {
 
 const std::vector<std::string>& slash_commands() {
     static const std::vector<std::string> cmds = {
-        "/help", "/about", "/info", "/settings", "/provider", "/model", "/btw", "/note", "/steer",
+        "/help", "/about", "/info", "/settings", "/provider", "/model", "/profile", "/btw", "/note", "/steer",
         "/tools", "/strict", "/thinking", "/effort", "/theme", "/stream", "/bell",
         "/memories", "/roadmap", "/context", "/cost", "/history", "/retry", "/undo", "/tasks",
         "/pin", "/pins", "/unpin", "/queue", "/trust", "/skills", "/skill", "/plan",
@@ -1447,7 +1449,37 @@ void InlineRepl::handle_tab() {
     if ( is_command ) {
         for ( const auto& c : slash_commands())
             if ( c.rfind(token, 0) == 0 ) { matches.push_back(c); display.push_back(c); }
-    } else if ( !token.empty() || !at_prefix.empty()) {
+    } else {
+        std::string prefix_before = common::trim_ws(_input.substr(0, start));
+        std::vector<std::string> sub_candidates;
+        if ( prefix_before == "/profile" || prefix_before == "/tools profile" ) {
+            sub_candidates = { "full", "code", "research", "review", "minimal" };
+        } else if ( prefix_before == "/tools" ) {
+            sub_candidates = { "confirm", "auto", "insecure", "list", "group", "profile" };
+        } else if ( prefix_before == "/tools group" ) {
+            sub_candidates = { "core", "web", "workflow", "skills", "mcp" };
+        } else if ( prefix_before.rfind("/tools group ", 0) == 0 ) {
+            sub_candidates = { "on", "off" };
+        } else if ( prefix_before == "/mcp" ) {
+            sub_candidates = { "refresh", "prompt", "enable", "disable" };
+        } else if ( prefix_before == "/mcp enable" || prefix_before == "/mcp disable" ) {
+            if ( _mcp_provider ) {
+                for ( const auto& s : _mcp_provider())
+                    sub_candidates.push_back(s.name);
+            }
+        }
+
+        if ( !sub_candidates.empty()) {
+            for ( const auto& c : sub_candidates ) {
+                if ( token.empty() || c.rfind(token, 0) == 0 ) {
+                    matches.push_back(c);
+                    display.push_back(c);
+                }
+            }
+        }
+    }
+
+    if ( matches.empty() && ( !token.empty() || !at_prefix.empty())) {
         // Path completion: split into a directory part and a name prefix.
         std::string dir, prefix;
         size_t slash = token.rfind('/');
@@ -2870,6 +2902,85 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
         m.current = _config.bell.empty() ? "attention" : _config.bell;
         open_list_menu(std::move(m));
         return;
+    }
+    if ( trimmed == "/profile" ) {
+        ListMenu m;
+        m.title = "tool profile";
+        m.rows = {
+            "full      — all registered tools enabled",
+            "code      — coding tools (disables web, workflow)",
+            "research  — read-only exploration + web search",
+            "review    — read-only audit (no web/mutations)",
+            "minimal   — read, edit, and bash only"
+        };
+        m.keys = { "full", "code", "research", "review", "minimal" };
+        m.select_cmd = "/profile ";
+        m.current = _config.tool_profile.empty() ? "full" : _config.tool_profile;
+        open_list_menu(std::move(m));
+        return;
+    }
+    if ( trimmed == "/tools list" ) {
+        if ( _tools_provider ) {
+            auto tools = _tools_provider();
+            if ( !tools.empty()) {
+                ListMenu m;
+                m.title = "tools";
+                for ( const auto& t : tools ) {
+                    std::string glyph = t.enabled ? "✓" : "○";
+                    std::string row = glyph + " " + t.name;
+                    if ( row.size() < 24 ) row += std::string(24 - row.size(), ' ');
+                    row += " [" + t.group + "]  ~" + std::to_string(t.schema_tokens) + " tok";
+                    if ( t.mutating ) row += "  (mutating)";
+                    m.rows.push_back(row);
+                    m.keys.push_back(t.name);
+
+                    std::string detail = "Tool: " + t.name + "\n";
+                    detail += "Group: " + t.group + "\n";
+                    detail += "Status: " + std::string(t.enabled ? "enabled" : "disabled") + "\n";
+                    detail += "Mutating: " + std::string(t.mutating ? "yes" : "no") + "\n";
+                    detail += "Estimated schema tokens: ~" + std::to_string(t.schema_tokens) + "\n\n";
+                    detail += "Description:\n" + t.description + "\n";
+                    m.details.push_back(detail);
+                }
+                m.hint = "↑↓ select · Enter details · esc close";
+                open_list_menu(std::move(m));
+                return;
+            }
+        }
+    }
+    if ( trimmed == "/mcp" ) {
+        if ( _mcp_provider ) {
+            auto servers = _mcp_provider();
+            if ( !servers.empty()) {
+                ListMenu m;
+                m.title = "MCP servers";
+                for ( const auto& s : servers ) {
+                    std::string glyph = !s.enabled ? "○" : ( s.connected ? "✓" : "✗" );
+                    std::string row = glyph + " " + s.name + "  [" + s.transport + "]";
+                    if ( !s.enabled ) row += "  (disabled)";
+                    else if ( !s.connected ) row += "  (" + (s.error.empty() ? "disconnected" : s.error) + ")";
+                    else row += "  (" + std::to_string(s.tool_names.size()) + " tools)";
+                    m.rows.push_back(row);
+                    m.keys.push_back(s.name);
+
+                    std::string detail = "MCP Server: " + s.name + "\n";
+                    detail += "Transport: " + s.transport + "\n";
+                    detail += "Status: " + std::string(!s.enabled ? "disabled" : (s.connected ? "connected" : "disconnected")) + "\n";
+                    if ( !s.error.empty()) detail += "Error: " + s.error + "\n";
+                    detail += "\nExposed tools (" + std::to_string(s.tool_names.size()) + "):\n";
+                    for ( const auto& tn : s.tool_names )
+                        detail += "  • " + tn + "\n";
+                    m.details.push_back(detail);
+                }
+                m.actions.push_back({ 'e', "/mcp enable ", "enable" });
+                m.actions.push_back({ 'd', "/mcp disable ", "disable" });
+                m.actions.push_back({ 'r', "/mcp refresh", "refresh" });
+                m.reopen_cmd = "/mcp";
+                m.hint = "↑↓ select · Enter details · e enable · d disable · r refresh · esc close";
+                open_list_menu(std::move(m));
+                return;
+            }
+        }
     }
     if ( trimmed == "/tools" || trimmed == "/stream" || trimmed == "/strict" || trimmed == "/plan" ) {
         ListMenu m;

@@ -53,6 +53,49 @@ static std::string raw_response_dump(const providers::Response& r) {
     return s;
 }
 
+static std::string format_commas(long n) {
+    std::string s = std::to_string(n);
+    if ( s.size() <= 3 ) return s;
+    std::string out;
+    int rem = s.size() % 3;
+    if ( rem > 0 ) {
+        out += s.substr(0, rem);
+        if ( rem < static_cast<int>(s.size())) out += ",";
+    }
+    for ( size_t i = rem; i < s.size(); i += 3 ) {
+        if ( i > static_cast<size_t>(rem) ) out += ",";
+        out += s.substr(i, 3);
+    }
+    return out;
+}
+
+static std::string format_duration(long ms) {
+    long sec = ms / 1000;
+    if ( sec < 60 ) return std::to_string(sec) + "s";
+    long min = sec / 60;
+    sec = sec % 60;
+    return std::to_string(min) + "m " + std::to_string(sec) + "s";
+}
+
+std::string Repl::format_turn_usage(const TurnUsage& tu) {
+    if ( tu.model_requests == 0 ) return "";
+    long uncached = std::max<long>(0, tu.input_tokens - tu.cached_tokens);
+    std::string s = "turn #" + std::to_string(tu.turn_number) + " usage:\n";
+    s += "  model requests: " + std::to_string(tu.model_requests) + "\n";
+    s += "  tool calls:     " + std::to_string(tu.tool_calls) + "\n";
+    s += "  input tokens:   " + format_commas(tu.input_tokens) +
+         " (" + format_commas(tu.cached_tokens) + " cached, " +
+         format_commas(uncached) + " uncached)\n";
+    s += "  output tokens:  " + format_commas(tu.output_tokens);
+    if ( tu.reasoning_tokens > 0 )
+        s += " (" + format_commas(tu.reasoning_tokens) + " reasoning)";
+    s += "\n";
+    s += "  first request:  " + format_commas(tu.first_request_tokens) + " tokens\n";
+    s += "  peak request:   " + format_commas(tu.peak_request_tokens) + " tokens\n";
+    s += "  wall time:      " + format_duration(tu.elapsed_ms);
+    return s;
+}
+
 // A line stating today's date, appended to the system prompt so the model does not
 // have to shell out to `date` (which busybox may lack) to know the current day.
 static std::string current_date_line() {
@@ -153,6 +196,11 @@ Repl::Repl(const Config& config)
     reload_skills();      // discover skills on disk
     sync_skill_tool();    // expose use_skill when any exist
     connect_mcp();
+
+    if ( !_config.tool_profile.empty() && _config.tool_profile != "full" ) {
+        _registry.apply_profile(_config.tool_profile);
+        _config.plan_mode = _registry.plan_mode();
+    }
 
     // Snapshot files before write_file overwrites them, for /changes + revert.
     _registry.set_pre_run_callback([this](const std::string& n, const JSON& a) {
@@ -491,6 +539,19 @@ std::string Repl::mcp_command(const std::string& args) {
         return "refreshed MCP servers — " + std::to_string(n) + " tool(s) available";
     }
 
+    if ( sub == "enable" || sub == "disable" ) {
+        std::string server;
+        iss >> server;
+        server = common::trim_ws(server);
+        if ( server.empty())
+            return "usage: /mcp " + sub + " <server>";
+        bool en = ( sub == "enable" );
+        if ( !_mcp.set_server_enabled(server, en))
+            return "no MCP server named '" + server + "'";
+        register_mcp_tools();
+        return "MCP server '" + server + "' " + ( en ? "enabled" : "disabled" );
+    }
+
     if ( sub == "prompt" ) {
         std::string server, name;
         iss >> server >> name;
@@ -515,9 +576,9 @@ std::string Repl::mcp_command(const std::string& args) {
     auto st = _mcp.status();
     std::string s = "MCP servers:\n";
     for ( const auto& si : st ) {
-        s += std::string("\n  ") + ( si.connected ? "✓" : "✗" ) + " " + si.name +
-             "  [" + si.transport + "]";
-        if ( si.connected ) {
+        s += std::string("\n  ") + ( !si.enabled ? "○" : ( si.connected ? "✓" : "✗" )) + " " + si.name +
+             "  [" + si.transport + "]" + ( !si.enabled ? " [disabled]" : "" );
+        if ( si.connected && si.enabled ) {
             s += "\n      tools: ";
             if ( si.tool_names.empty()) s += "(none)";
             else for ( size_t i = 0; i < si.tool_names.size(); ++i )
@@ -531,12 +592,15 @@ std::string Repl::mcp_command(const std::string& args) {
                 for ( size_t i = 0; i < si.prompt_names.size(); ++i )
                     s += ( i ? ", " : "" ) + si.prompt_names[i];
             }
+        } else if ( !si.enabled ) {
+            s += "  — disabled (/mcp enable " + si.name + " to activate)";
         } else {
             s += "  — " + ( si.error.empty() ? std::string("not connected") : si.error );
         }
     }
     s += "\n\nmodel calls tools as mcp__<server>__<tool>"
-         "\n/mcp refresh — re-list · /mcp prompt <server> <name> [k=v] — load a prompt";
+         "\n/mcp refresh — re-list · /mcp prompt <server> <name> [k=v] — load a prompt"
+         "\n/mcp enable <server> · /mcp disable <server>";
     return s;
 }
 
@@ -1493,6 +1557,21 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     std::map<std::string, int> repeated_tools;
     std::mutex repeated_tools_mx;
 
+    auto turn_start = std::chrono::steady_clock::now();
+    TurnUsage cur_turn;
+    cur_turn.turn_number = ++_turn_counter;
+
+    struct TurnFinalizer {
+        TokenStats& stats;
+        TurnUsage& usage;
+        std::chrono::steady_clock::time_point start;
+        ~TurnFinalizer() {
+            usage.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start).count();
+            stats.record_turn(usage);
+        }
+    } turn_finalizer{ _stats, cur_turn, turn_start };
+
     auto apply_live_updates = [&]() {
         if ( !_live_update_cb ) return;
         size_t applied = 0;
@@ -1692,6 +1771,16 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         ++model_round_trips;
         turn_input_tokens += actual_in;
         turn_output_tokens += resp.output_tokens;
+
+        cur_turn.model_requests = model_round_trips;
+        cur_turn.input_tokens += actual_in;
+        cur_turn.cached_tokens += resp.cached_input_tokens;
+        cur_turn.output_tokens += resp.output_tokens;
+        long r_tok = resp.reasoning_tokens > 0 ? resp.reasoning_tokens : static_cast<long>(resp.thinking.size() / 4);
+        cur_turn.reasoning_tokens += r_tok;
+        if ( model_round_trips == 1 )
+            cur_turn.first_request_tokens = actual_in;
+        cur_turn.peak_request_tokens = std::max(cur_turn.peak_request_tokens, actual_in);
         if ( _progress_cb && ( model_round_trips > 1 || turn_input_tokens >= next_input_notice )) {
             _progress_cb("turn: " + std::to_string(model_round_trips) + " model request" +
                          ( model_round_trips == 1 ? "" : "s" ) + " · " +
@@ -1964,6 +2053,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         // keep going; a stop ends the turn (the work so far is kept, and a new
         // message continues). Non-interactive runs stop automatically.
         tools_this_turn += resp.tool_calls.size();
+        cur_turn.tool_calls = tools_this_turn;
         if ( _progress_cb && ( tools_this_turn == 20 || tools_this_turn == 50 ||
                                ( tools_this_turn > 50 && tools_this_turn % 25 == 0 ))) {
             _progress_cb("long tool chain: " + std::to_string(tools_this_turn) +
@@ -2119,11 +2209,20 @@ std::string Repl::handle_command(const std::string& line) {
             else msg += t;
         }
         size_t schema_tokens = _registry.schema().dump_minified().size() / 4;
+        size_t builtin_tokens = 0, mcp_tokens = 0;
+        for ( const auto& ti : _registry.list_tools() ) {
+            if ( ti.enabled ) {
+                if ( ti.group == "mcp" ) mcp_tokens += ti.schema_tokens;
+                else builtin_tokens += ti.schema_tokens;
+            }
+        }
         std::string s = "context (estimated tokens):\n";
         s += "  system prompt: " + std::to_string(sys) + "\n";
         s += "  messages:      " + std::to_string(msg) + "\n";
         s += "  tool results:  " + std::to_string(tools_res) + "\n";
-        s += "  tools schema:  " + std::to_string(schema_tokens) + "\n";
+        s += "  tools schema:  " + std::to_string(schema_tokens) +
+             " (" + std::to_string(builtin_tokens) + " built-in, " + std::to_string(mcp_tokens) + " mcp)\n";
+        s += "  tool profile:  " + _registry.active_profile() + "\n";
         s += "  total:         " + std::to_string(sys + msg + tools_res) + "\n";
         s += "  limit:         " + ( _config.context_auto
                  ? ( _config.context_budget() ? "auto (" + std::to_string(_config.context_budget()) + ")" : "auto (unlimited)" )
@@ -2157,6 +2256,9 @@ std::string Repl::handle_command(const std::string& line) {
             else s += "reported, reset time unknown";
             if ( !info.scope.empty()) s += " (" + info.scope + ")";
         }
+        TurnUsage last_tu = _stats.get_last_turn();
+        if ( last_tu.model_requests > 0 )
+            s += "\n\n" + format_turn_usage(last_tu);
         return s;
     }
 
@@ -2534,10 +2636,16 @@ std::string Repl::handle_command(const std::string& line) {
                "  extended ctx:   " + ( Config::model_requests_1m_context(_config.model) ? "1M beta enabled" : "off" ) + "\n"
                "  capabilities:   " + caps + "\n"
                "  tools:          " + tools + "\n"
+               "  tool profile:   " + _registry.active_profile() + "\n"
                "  tool budget:    " + ( _config.tool_call_limit == 0 ? std::string("unlimited") : std::to_string(_config.tool_call_limit) ) + " per turn\n"
                "  last context:   " + std::to_string(_stats.context_tokens.load()) + " tokens\n"
                "  session tokens: " + std::to_string(_stats.session_total()) + " (" +
-                   std::to_string(_stats.session_cached.load()) + " cached)";
+                   std::to_string(_stats.session_cached.load()) + " cached)" +
+               ( [](const TokenStats& st) {
+                   TurnUsage tu = st.get_last_turn();
+                   if ( tu.model_requests > 0 ) return "\n\n" + format_turn_usage(tu);
+                   return std::string();
+               }(_stats));
     }
 
     if ( cmd == "/stop" || cmd == "/interrupt" ) {
@@ -2792,12 +2900,143 @@ std::string Repl::handle_command(const std::string& line) {
         return "model set to " + chosen;
     }
 
+    if ( cmd == "/profile" ) {
+        std::string p = common::to_lower(common::trim_ws(args));
+        if ( p.empty() ) {
+            std::string s = "active tool profile: " + _registry.active_profile() + "\n\navailable profiles:\n";
+            s += "  full      — all registered tools enabled (core, web, workflow, skills, mcp)\n";
+            s += "  code      — coding tools only (disables web search and workflows; saves tokens)\n";
+            s += "  research  — read-only exploration + web search (blocks mutating commands/writes)\n";
+            s += "  review    — read-only audit (no web or mutating tools; plan mode active)\n";
+            s += "  minimal   — read, edit, and bash only (minimum schema tokens)\n";
+            s += "\nusage: /profile <full|code|research|review|minimal>";
+            return s;
+        }
+        if ( !_registry.apply_profile(p) ) {
+            return "unknown profile '" + p + "'\navailable profiles: " +
+                   common::join_vector(_registry.available_profiles(), ", ");
+        }
+        _config.tool_profile = _registry.active_profile();
+        _config.plan_mode = _registry.plan_mode();
+        _conversation.set_system(base_system_prompt());
+        _config.save_settings(_config.home_dir);
+
+        auto tools = _registry.list_tools();
+        size_t enabled_count = 0;
+        size_t schema_tokens = 0;
+        for ( const auto& t : tools ) {
+            if ( t.enabled ) {
+                ++enabled_count;
+                schema_tokens += t.schema_tokens;
+            }
+        }
+        std::string s = "tool profile set to '" + _config.tool_profile + "' (" +
+                        std::to_string(enabled_count) + "/" + std::to_string(tools.size()) +
+                        " tools active, ~" + std::to_string(schema_tokens) + " schema tokens)";
+        if ( _config.plan_mode )
+            s += "\nplan mode ON — mutating tools disabled";
+        return s;
+    }
+
     if ( cmd == "/tools" ) {
-        std::string m = common::to_lower(args);
+        std::string trimmed_args = common::trim_ws(args);
+        if ( trimmed_args.empty() ) {
+            std::string mode_str = _config.insecure ? "insecure" : ( _config.confirm_tools ? "confirm" : "auto" );
+            std::string s = "tool confirmation mode: " + mode_str +
+                            "  (strict: " + ( _config.strict ? "on" : "off" ) +
+                            ", plan mode: " + ( _config.plan_mode ? "on" : "off" ) + ")\n";
+            s += "active profile:         " + _registry.active_profile() + "\n";
+            s += "groups:\n";
+            for ( const auto& grp : _registry.available_groups() ) {
+                bool en = _registry.is_group_enabled(grp);
+                s += "  " + grp + ( grp.size() < 10 ? std::string(10 - grp.size(), ' ') : " " ) +
+                     ": " + ( en ? "enabled" : "disabled" ) + "\n";
+            }
+            auto tools = _registry.list_tools();
+            size_t enabled_count = 0;
+            size_t schema_tokens = 0;
+            for ( const auto& t : tools ) {
+                if ( t.enabled ) {
+                    ++enabled_count;
+                    schema_tokens += t.schema_tokens;
+                }
+            }
+            s += "\ntools: " + std::to_string(enabled_count) + "/" + std::to_string(tools.size()) +
+                 " active (~" + std::to_string(schema_tokens) + " schema tokens)\n";
+            s += "\ncommands:\n"
+                 "  /tools <confirm|auto|insecure> — set confirmation mode\n"
+                 "  /tools list                   — list all tools and schema cost\n"
+                 "  /tools group <name> <on|off>  — enable or disable a tool group\n"
+                 "  /tools profile <name>         — switch active profile";
+            return s;
+        }
+
+        if ( trimmed_args == "list" ) {
+            auto tools = _registry.list_tools();
+            std::string s = "registered tools:\n\n";
+            s += "  NAME                     GROUP     STATUS    TOKENS  MUTATING  DESCRIPTION\n";
+            s += "  ───────────────────────  ────────  ────────  ──────  ────────  ───────────\n";
+            for ( const auto& t : tools ) {
+                std::string nm = t.name;
+                if ( nm.size() > 23 ) nm = nm.substr(0, 22) + "…";
+                else nm += std::string(23 - nm.size(), ' ');
+
+                std::string grp = t.group;
+                if ( grp.size() > 8 ) grp = grp.substr(0, 7) + "…";
+                else grp += std::string(8 - grp.size(), ' ');
+
+                std::string st = t.enabled ? "enabled " : "disabled";
+                std::string tok = std::to_string(t.schema_tokens);
+                if ( tok.size() < 6 ) tok = std::string(6 - tok.size(), ' ') + tok;
+                std::string mut = t.mutating ? "yes     " : "no      ";
+
+                std::string desc = t.description;
+                size_t nl = desc.find('\n');
+                if ( nl != std::string::npos ) desc = desc.substr(0, nl);
+                if ( desc.size() > 40 ) desc = desc.substr(0, 39) + "…";
+
+                s += "  " + nm + "  " + grp + "  " + st + "  " + tok + "  " + mut + "  " + desc + "\n";
+            }
+            return s;
+        }
+
+        if ( trimmed_args.rfind("group", 0) == 0 ) {
+            std::istringstream iss(trimmed_args.substr(5));
+            std::string grp, state;
+            iss >> grp >> state;
+            grp = common::to_lower(common::trim_ws(grp));
+            state = common::to_lower(common::trim_ws(state));
+            if ( grp.empty() ) {
+                std::string s = "tool groups:\n";
+                for ( const auto& g : _registry.available_groups() ) {
+                    s += "  " + g + ": " + ( _registry.is_group_enabled(g) ? "enabled" : "disabled" ) + "\n";
+                }
+                s += "\nusage: /tools group <name> <on|off>";
+                return s;
+            }
+            if ( state.empty() ) {
+                return "group '" + grp + "' is " +
+                       ( _registry.is_group_enabled(grp) ? "enabled" : "disabled" ) +
+                       "\nusage: /tools group " + grp + " <on|off>";
+            }
+            bool en = ( state == "on" || state == "true" || state == "1" || state == "yes" );
+            if ( !en && state != "off" && state != "false" && state != "0" && state != "no" ) {
+                return "usage: /tools group <name> <on|off>";
+            }
+            _registry.set_group_enabled(grp, en);
+            return "tool group '" + grp + "' " + ( en ? "enabled" : "disabled" );
+        }
+
+        if ( trimmed_args.rfind("profile", 0) == 0 ) {
+            std::string sub = common::trim_ws(trimmed_args.substr(7));
+            return handle_command("/profile " + sub);
+        }
+
+        std::string m = common::to_lower(trimmed_args);
         if ( m == "confirm" ) { _config.confirm_tools = true; _config.insecure = false; }
         else if ( m == "auto" || m == "yes" ) { _config.confirm_tools = false; _config.insecure = false; m = "auto"; }
         else if ( m == "insecure" ) { _config.insecure = true; }
-        else return "usage: /tools <confirm|auto|insecure>";
+        else return "usage: /tools <confirm|auto|insecure> | list | group <name> [on|off] | profile <name>";
         _registry.set_mode(tool_mode());
         _registry.set_strict(_config.strict);
         _registry.set_plan_mode(_config.plan_mode);
@@ -3010,6 +3249,20 @@ void Repl::run_tty() {
     });
     inline_repl.set_command_callback([this](const std::string& cmd) { return handle_command(cmd); });
     inline_repl.set_workflows_provider([this] { return _workflows.snapshot(); });
+    inline_repl.set_tools_provider([this]() -> std::vector<InlineRepl::ToolItem> {
+        std::vector<InlineRepl::ToolItem> out;
+        for ( const auto& ti : _registry.list_tools() ) {
+            out.push_back({ ti.name, ti.group, ti.description, ti.mutating, ti.enabled, ti.schema_tokens });
+        }
+        return out;
+    });
+    inline_repl.set_mcp_provider([this]() -> std::vector<InlineRepl::McpServerItem> {
+        std::vector<InlineRepl::McpServerItem> out;
+        for ( const auto& si : _mcp.status() ) {
+            out.push_back({ si.name, si.transport, si.connected, si.enabled, si.error, si.tool_names });
+        }
+        return out;
+    });
     set_progress_callback([&inline_repl](const std::string& s) { inline_repl.set_activity(s); });
     set_tool_notice_callback([&inline_repl](const std::string& s) { inline_repl.notify_tool(s); });
     set_live_update_callback([&inline_repl] { return inline_repl.take_live_updates(); });

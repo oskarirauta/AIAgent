@@ -119,10 +119,17 @@ const std::vector<CommandDoc>& command_catalog() {
       "hides it once the answer is done, leaving only the answer in the transcript." },
 
     // ── Tools & safety ───────────────────────────────────────────────────
-    { "/tools", "", "<confirm|auto|insecure>", "Tools & safety", "tool confirmation mode",
-      "confirm: ask before mutating tools (read-only run freely). auto: run "
-      "ordinary tools without asking; danger-listed commands still warn. insecure: "
-      "run everything without asking. Not persisted — resets each session." },
+    { "/tools", "", "[<confirm|auto|insecure> | list | group <name> [on|off] | profile <name>]", "Tools & safety",
+      "tool mode, profiles and group toggles",
+      "With no argument, shows active tool confirmation mode, profile, and enabled groups. "
+      "`/tools <confirm|auto|insecure>` sets confirmation mode. `/tools list` lists all tools "
+      "with estimated schema tokens. `/tools group <name> <on|off>` enables/disables a group. "
+      "`/tools profile <name>` switches profile." },
+    { "/profile", "", "[full|code|research|review|minimal]", "Tools & safety", "select active tool profile",
+      "Switches tool profile to restrict active tools and reduce schema tokens sent on "
+      "every turn. full: all tools. code: disables web and workflow tools. research: read-only "
+      "exploration with web search. review: read-only audit (no web/mutations). minimal: read, "
+      "edit, and run command only." },
     { "/plan", "", "[on|off]", "Tools & safety", "read-only planning mode",
       "Blocks every mutating tool (write_file, edit_file, run_command, non-read-only "
       "MCP tools) so the model investigates and proposes a plan instead of acting. "
@@ -137,10 +144,11 @@ const std::vector<CommandDoc>& command_catalog() {
     { "/changes", "", "[diff|revert <path|all>]", "Tools & safety", "files the agent changed",
       "Lists files created or modified this session. `/changes diff <path>` shows the "
       "diff vs the session-start version; `/changes revert <path|all>` restores it." },
-    { "/mcp", "", "[refresh|prompt <server> <name> [k=v]]", "Tools & safety",
+    { "/mcp", "", "[refresh|prompt <server> <name> [k=v]|enable <server>|disable <server>]", "Tools & safety",
       "MCP servers, tools, resources, prompts",
       "Shows configured MCP servers and their tools/resources/prompts. `refresh` "
-      "reconnects; `prompt <server> <name> [k=v]` loads a server prompt into context." },
+      "reconnects; `prompt <server> <name> [k=v]` loads a server prompt into context. "
+      "`enable <server>` and `disable <server>` dynamically toggle servers." },
     { "/advisor", "", "<on|off|model N>", "Tools & safety", "(claude) consult a stronger model",
       "Exposes a consult_advisor tool letting the model ask a stronger advisor model "
       "(default claude-opus) for a second opinion. `model <name>` sets which." },
