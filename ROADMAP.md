@@ -385,7 +385,18 @@ this project follows: one change, build, tests, try it live, then the next.
 
 ## Backlog (next)
 
-Nothing outstanding beyond the speculative V3 section below.
+- **Claude Hard Steering / Interruption Transaction** — today's `/steer` queues
+  steering guidance applied safely at the next tool boundary or checkpoint.
+  The deeper hard steering capability will support cancelling an active
+  in-flight HTTP request safely, preventing partial thinking/tool-use state from
+  corrupting the Anthropic conversation structure, appending the steering
+  instruction as a valid user turn, and immediately restarting model completion.
+- **Tool Profiles & Dynamic Tool Loading** — dynamically restrict or group tool schemas
+  by task type (e.g. read-only audit, code edits, shell execution, research) to reduce
+  tool schema overhead and input tokens on turns that do not need the full tool catalogue.
+- **Provider-Aware Token Accounting** — refine model-specific token counts and cache
+  hit ratios across providers (Gemini, Claude, OpenAI, Kimi) to accurately reflect
+  native cache discounts and prompt serialization formats.
 
 ## ROADMAP TO V3
 

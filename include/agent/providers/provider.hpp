@@ -119,21 +119,21 @@ public:
     const Config& config() const { return _config; }
     std::string request_model() const { return Config::base_model_name(_config.model); }
 
-protected:
-    Provider(const Config& cfg) : _config(cfg) {}
-    Config _config;
-
     // The messages to send, trimmed to the configured context budget (if any).
     // build_request implementations iterate this instead of conv.messages() so
     // history that would overflow a small context window (e.g. local models) is
     // dropped from the request while the full history stays saved.
     std::vector<Message> request_messages(const Conversation& conv) const {
-        auto msgs = conv.within_token_budget(_config.context_budget());
+        auto msgs = conv.messages();
         if ( _config.supersede_tools )
             msgs = Conversation::supersede_stale_tools(std::move(msgs));
         msgs = Conversation::elide_old_large_tool_results(std::move(msgs));
-        return msgs;
+        return conv.within_token_budget(_config.context_budget(), std::move(msgs));
     }
+
+protected:
+    Provider(const Config& cfg) : _config(cfg) {}
+    Config _config;
 
     std::string build_endpoint(const std::string& path) const {
         std::string url = _config.api_url;

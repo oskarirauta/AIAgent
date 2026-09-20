@@ -206,6 +206,10 @@ const std::vector<std::string>& Config::known_models_for(const std::string& prov
     // ChatGPT/Codex family in the picker, best/newest first; users can still pass
     // any future/entitled slug explicitly with -m.
     static const std::vector<std::string> codex_models = {
+        "gpt-6-astra",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
         "gpt-5.6",
         "gpt-5.5",
         "gpt-5.4",
@@ -261,6 +265,11 @@ static const ModelAlias model_aliases[] = {
     { "gpt4",    "gpt-4o" },
     { "gpt",     "gpt-4o" },
     { "3.5",     "gpt-3.5-turbo" },
+    // Codex / ChatGPT Desktop
+    { "astra",   "gpt-6-astra" },
+    { "sol",     "gpt-5.6-sol" },
+    { "terra",   "gpt-5.6-terra" },
+    { "luna",    "gpt-5.6-luna" },
     // OpenRouter
     { "auto",    "openrouter/auto" },
     { "free",    "openrouter/free" },
@@ -533,6 +542,8 @@ size_t Config::context_window_for(const std::string& model) {
         return 1000000;
     if ( has("claude") || has("opus") || has("sonnet") || has("haiku") || has("fable") )
         return 200000;
+    if ( has("gpt-6") || has("astra") || has("sol") || has("terra") || has("luna") )
+        return 272000;
     if ( has("kimi") || has("moonshot") ) return 256000;
     if ( has("gpt-5.6") ) return 1050000;
     if ( has("gpt-5.5") ) return 1000000;
@@ -670,6 +681,7 @@ void Config::load(const std::string& path) {
         }
         else if ( key == "auto_compact" ) auto_compact = parse_bool(value);
         else if ( key == "auto_compact_pct" ) auto_compact_pct = parse_size(value, auto_compact_pct, key);
+        else if ( key == "auto_compact_max_tokens" || key == "auto_compact_limit" ) auto_compact_max_tokens = parse_token_value(value, auto_compact_max_tokens, key);
         else if ( key == "workflow_autoresume" ) workflow_autoresume = parse_bool(value);
         else if ( key == "bell" ) bell = common::to_lower(value);
         else if ( key == "supersede_tools" ) supersede_tools = parse_bool(value);
@@ -834,6 +846,8 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.context_limit = static_cast<size_t>(static_cast<long long>(s["context_limit"]));
             if ( s.contains("auto_compact") && s["auto_compact"] == JSON::TYPE::BOOL )
                 last.auto_compact = s["auto_compact"].to_bool();
+            if ( s.contains("auto_compact_max_tokens") && s["auto_compact_max_tokens"] == JSON::TYPE::INT )
+                last.auto_compact_max_tokens = static_cast<size_t>(static_cast<long long>(s["auto_compact_max_tokens"]));
             if ( s.contains("workflow_autoresume") && s["workflow_autoresume"] == JSON::TYPE::BOOL )
                 last.workflow_autoresume = s["workflow_autoresume"].to_bool();
             if ( s.contains("confirm_tools") && s["confirm_tools"] == JSON::TYPE::BOOL )
@@ -901,6 +915,7 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "context_auto", last.context_auto },
             { "context_limit", static_cast<long long>(last.context_limit) },
             { "auto_compact", last.auto_compact },
+            { "auto_compact_max_tokens", static_cast<long long>(last.auto_compact_max_tokens) },
             { "confirm_tools", last.confirm_tools },
             { "insecure", last.insecure },
             { "workflow_autoresume", last.workflow_autoresume },
@@ -952,6 +967,7 @@ void Config::save_settings(const std::string& home_dir) const {
     last.context_auto = context_auto;
     last.context_limit = context_limit;
     last.auto_compact = auto_compact;
+    last.auto_compact_max_tokens = auto_compact_max_tokens;
     last.workflow_autoresume = workflow_autoresume;
     // A CLI flag (-Y/-I/-T) sets the mode for this session only — it must NOT
     // overwrite the user's saved preference. `last` already holds the persisted
@@ -981,6 +997,7 @@ void Config::apply_settings(const LastUsed& last) {
     context_auto = last.context_auto;
     context_limit = last.context_limit;
     auto_compact = last.auto_compact;
+    auto_compact_max_tokens = last.auto_compact_max_tokens;
     workflow_autoresume = last.workflow_autoresume;
     // Tool confirmation mode is persisted (user opted in), but an explicit CLI
     // flag (-T/-Y/-I) for this launch always wins over the saved mode.

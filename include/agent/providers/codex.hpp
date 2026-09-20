@@ -24,6 +24,7 @@ public:
     bool ready_noninteractive(api::Client& client) override;
     bool reauthenticate(api::Client& client) override;
     void prepare_request(api::Client& client) override;
+    std::vector<std::string> list_models(api::Client& client) override;
 
     JSON build_request(const Conversation& conv, const JSON& tools_schema) override;
     Response parse_response(const JSON& response) override;

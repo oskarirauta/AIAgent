@@ -13,10 +13,10 @@ namespace {
 // A runaway command must neither hang the agent nor flood the model's context.
 // A user Ctrl-C (agent::turn_abort) also interrupts the command.
 constexpr int    COMMAND_TIMEOUT_MS = 120000;
-constexpr size_t MAX_OUTPUT_BYTES   = 100 * 1024;      // what the model receives
+constexpr size_t MAX_OUTPUT_BYTES   = 10 * 1024;       // what the model receives (10 KB)
 constexpr size_t CAPTURE_GUARD_BYTES = 2 * 1024 * 1024; // hard cap at the process
-constexpr size_t HEAD_BYTES         = 16 * 1024;        // kept from the start
-constexpr size_t TAIL_BYTES         = 80 * 1024;        // kept from the end
+constexpr size_t HEAD_BYTES         = 2 * 1024;         // kept from the start (2 KB)
+constexpr size_t TAIL_BYTES         = 8 * 1024;        // kept from the end (8 KB)
 
 // Keep the head AND the tail of over-long output. Builds print thousands of
 // warnings before the one error that matters, and test runners put their

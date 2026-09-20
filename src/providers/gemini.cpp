@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include <mutex>
 
 #include "agent/text_utils.hpp"
 #include "common.hpp"
@@ -108,6 +109,16 @@ std::vector<std::string> Gemini::list_models(api::Client& client) {
         std::vector<std::string> out;
         for ( size_t i = 0; i < j["models"].size(); ++i ) {
             const JSON& m = j["models"][i];
+            if ( m.contains("supportedGenerationMethods") && m["supportedGenerationMethods"] == JSON::TYPE::ARRAY ) {
+                bool can_generate = false;
+                for ( size_t k = 0; k < m["supportedGenerationMethods"].size(); ++k ) {
+                    if ( m["supportedGenerationMethods"][k].to_string() == "generateContent" ) {
+                        can_generate = true;
+                        break;
+                    }
+                }
+                if ( !can_generate ) continue;
+            }
             if ( m.contains("name") && m["name"] == JSON::TYPE::STRING ) {
                 std::string n = m["name"].to_string();
                 if ( n.rfind("models/", 0) == 0 ) n = n.substr(7);
@@ -144,8 +155,14 @@ std::vector<std::pair<std::string, std::string>> Gemini::extra_headers() const {
 }
 
 bool Gemini::refresh_now(api::Client& client) {
+    static std::mutex refresh_mx;
+    std::lock_guard<std::mutex> lock(refresh_mx);
     auto tok = auth::load_gemini_token(_config.home_dir);
     if ( !tok || tok->refresh_token.empty() ) return false;
+    if ( !auth::gemini_token_needs_refresh(*tok) ) {
+        _token = tok;
+        return true;
+    }
     try {
         _token = auth::refresh_gemini_token(client, *tok);
         return _token.has_value() && !_token->access_token.empty();
@@ -510,10 +527,11 @@ StreamChunk Gemini::parse_stream(const std::string& chunk, std::string& buffer, 
     buffer += chunk;
     StreamChunk sc;
 
+    size_t start = 0;
     size_t pos = 0;
-    while ( (pos = buffer.find('\n')) != std::string::npos ) {
-        std::string line = buffer.substr(0, pos);
-        buffer.erase(0, pos + 1);
+    while ( (pos = buffer.find('\n', start)) != std::string::npos ) {
+        std::string line = buffer.substr(start, pos - start);
+        start = pos + 1;
 
         line = common::trim_ws(line);
         if ( line.empty() || line[0] == ':' ) continue;
@@ -577,6 +595,8 @@ StreamChunk Gemini::parse_stream(const std::string& chunk, std::string& buffer, 
             }
         }
     }
+    if ( start > 0 )
+        buffer.erase(0, start);
 
     return sc;
 }

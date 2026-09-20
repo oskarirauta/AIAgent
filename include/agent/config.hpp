@@ -65,6 +65,7 @@ public:
     size_t tool_call_limit = 100;
     bool auto_compact = true;   // summarise history automatically when it nears the context budget
     size_t auto_compact_pct = 80; // trigger threshold as a percentage of context_budget()
+    size_t auto_compact_max_tokens = 30000; // upper ceiling for auto-compact trigger (prevents 1M-window models from running up massive context before compacting)
     bool workflow_autoresume = false; // a finished workflow starts a turn by itself (bounded; see repl)
     std::string bell = "attention"; // terminal bell policy: never|question|attention|always
     bool supersede_tools = true; // elide stale tool results (older read/run of the same target)
@@ -154,6 +155,7 @@ public:
         size_t context_limit = 0;
         bool context_auto = false;
         bool auto_compact = false;
+        size_t auto_compact_max_tokens = 50000;
         // Schema version of the persisted settings block. Absent/0 means a state
         // written before context_auto and auto_compact defaulted to on; such a
         // state is migrated once so an existing user is not left with an

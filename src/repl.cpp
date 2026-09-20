@@ -266,7 +266,7 @@ std::string Repl::changes_command(const std::string& args) {
     if ( sub == "revert" ) {
         if ( target.empty())
             return "usage: /changes revert <path|all>";
-        auto revert_one = [this](const std::string& abs, FileChange& fc) -> std::string {
+        auto revert_one = [](const std::string& abs, FileChange& fc) -> std::string {
             if ( !fc.tracked )
                 return "skip " + abs + " (too large to snapshot)";
             std::error_code ec;
@@ -915,17 +915,36 @@ std::string Repl::compact_history(size_t keep_tail) {
     size_t n = msgs.size();
     size_t first_nonsys = ( n > 0 && msgs[0].role == Role::SYSTEM ) ? 1 : 0;
     size_t tail_start = n;
-    if ( keep_tail > 0 ) {
-        size_t seen = 0;
-        for ( size_t i = n; i-- > first_nonsys; ) {
-            if ( msgs[i].role == Role::USER && ++seen == keep_tail ) { tail_start = i; break; }
+    size_t effective_keep = keep_tail;
+    size_t old_count = 0;
+
+    while ( true ) {
+        if ( effective_keep > 0 ) {
+            size_t seen = 0;
+            tail_start = n;
+            for ( size_t i = n; i-- > first_nonsys; ) {
+                if ( msgs[i].role == Role::USER && ++seen == effective_keep ) { tail_start = i; break; }
+            }
+            if ( seen < effective_keep )
+                tail_start = first_nonsys; // fewer than K exchanges — nothing old to summarise
+        } else {
+            tail_start = n; // keep nothing verbatim; summarise everything non-system
         }
-        if ( seen < keep_tail )
-            tail_start = first_nonsys; // fewer than K exchanges — nothing old to summarise
+        old_count = ( tail_start > first_nonsys ) ? ( tail_start - first_nonsys ) : 0;
+        if ( effective_keep == 0 )
+            old_count = n - first_nonsys;
+
+        if ( old_count >= 2 )
+            break;
+
+        if ( effective_keep > 1 ) {
+            effective_keep = 1;
+        } else if ( effective_keep == 1 && ( n - first_nonsys ) >= 4 ) {
+            effective_keep = 0;
+        } else {
+            return "nothing to compact (the recent tail is the whole conversation)";
+        }
     }
-    size_t old_count = ( tail_start > first_nonsys ) ? ( tail_start - first_nonsys ) : 0;
-    if ( old_count < 2 )
-        return "nothing to compact (the recent tail is the whole conversation)";
 
     // Copy the verbatim tail before we rebuild the history below.
     std::vector<Message> tail(msgs.begin() + tail_start, msgs.end());
@@ -944,11 +963,20 @@ std::string Repl::compact_history(size_t keep_tail) {
 
     // One-shot summarisation (no tools, no streaming).
     Conversation summ;
-    summ.set_system("You compress a coding-assistant conversation into a concise briefing "
-        "the assistant can continue from. Preserve the user's goals, decisions made, key file "
-        "paths and code facts, and any unfinished tasks. Be faithful — do not invent details. "
-        "Output only the summary.");
-    summ.add_user("Summarise this conversation so it can replace the full history:\n\n" + transcript);
+    summ.set_system("You compress a coding-assistant conversation into a structured briefing "
+        "the assistant can continue from. Produce a clean, concise technical summary organized into these sections:\n"
+        "### Goal & Context\n"
+        "Brief summary of what the user is building or solving.\n\n"
+        "### Key Decisions & Architecture\n"
+        "Major technical choices, decisions, and patterns agreed upon.\n\n"
+        "### Files Changed & Verified\n"
+        "List of specific file paths modified, created, or read, with key findings.\n\n"
+        "### Tests Run & Current Status\n"
+        "Commands executed, test pass/fail results, current repository state.\n\n"
+        "### Open Tasks & Constraints\n"
+        "Next steps, unfinished work, user preferences or strict constraints.\n\n"
+        "Be completely faithful to the transcript — do not invent details. Output only the summary.");
+    summ.add_user("Summarise this conversation using the structured format so it can replace the older history:\n\n" + transcript);
 
     _provider->prepare_request(_client);
     JSON req = _provider->build_request(summ, JSON::Array{});
@@ -966,12 +994,13 @@ std::string Repl::compact_history(size_t keep_tail) {
     std::string summary;
     if ( _provider->supports_streaming()) {
         req["stream"] = true;
+        _provider->prepare_stream_request(req);
         std::string body = req.dump_minified();
         std::string buffer;
         bool done = false;
         size_t got_chars = 0;
         _provider->stream_reset();
-        _client.post_stream(_provider->endpoint(), _provider->auth_header(),
+        _client.post_stream(_provider->stream_endpoint(), _provider->auth_header(),
             _provider->auth_value(), _provider->extra_headers(), body,
             [&](const std::string& chunk) {
                 providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
@@ -982,7 +1011,10 @@ std::string Repl::compact_history(size_t keep_tail) {
             }, &agent::turn_abort);
         if ( agent::turn_abort.load(std::memory_order_relaxed))
             return "compact cancelled";
-        summary = agent::normalize_text(_provider->stream_result().message);
+        auto sr = _provider->stream_result();
+        if ( !sr.success )
+            throws << "summarisation failed: " << sr.message << std::endl;
+        summary = agent::normalize_text(sr.message);
     } else {
         std::string body = req.dump_minified();
         std::string resp_str = _client.post(_provider->endpoint(), _provider->auth_header(),
@@ -1028,6 +1060,7 @@ std::string Repl::compact_history(size_t keep_tail) {
             _conversation.add_tool_result(m.tool_call_id.value_or(""), m.name.value_or(""), m.content);
     }
     save_conversation();
+    _stats.context_tokens.store(static_cast<long>(_conversation.estimate_tokens()), std::memory_order_relaxed);
 
     return "compacted " + std::to_string(old_count) + " older messages into a summary" +
            ( tail.empty() ? "" : " (kept the last " + std::to_string(tail.size()) + " verbatim)" );
@@ -1035,10 +1068,10 @@ std::string Repl::compact_history(size_t keep_tail) {
 
 std::string Repl::switch_provider(const std::string& name) {
     static const std::vector<std::string> supported =
-        { "openai", "codex", "ollama", "anthropic", "moonshot", "openrouter", "kimi", "claude" };
+        { "openai", "codex", "ollama", "anthropic", "moonshot", "openrouter", "kimi", "claude", "gemini" };
     if ( std::find(supported.begin(), supported.end(), name) == supported.end())
         return "unknown provider: " + name +
-               "  (openai, codex, ollama, anthropic, moonshot, openrouter, kimi, claude)";
+               "  (openai, codex, ollama, anthropic, moonshot, openrouter, kimi, claude, gemini)";
     if ( name == _config.provider )
         return "already using " + name;
 
@@ -1073,7 +1106,7 @@ std::string Repl::switch_provider(const std::string& name) {
     if ( np && !nc.thinking.empty())
         np->apply_provider_options(JSON::Object{{ "thinking", nc.thinking }});
 
-    if ( name == "kimi" || name == "claude" || name == "codex" ) {
+    if ( name == "kimi" || name == "claude" || name == "codex" || name == "gemini" ) {
         if ( !np->ready_noninteractive(_client))
             return "not logged in to " + name +
                    " — relaunch with `-p " + name + "` to log in first, then switch back.";
@@ -1465,15 +1498,20 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         size_t applied = 0;
         for ( const std::string& command : _live_update_cb() ) {
             std::string note = command;
-            if ( note.rfind("/btw", 0) == 0 ) note.erase(0, 4);
+            bool is_steer = false;
+            if ( note.rfind("/steer", 0) == 0 ) { note.erase(0, 6); is_steer = true; }
+            else if ( note.rfind("/btw", 0) == 0 ) note.erase(0, 4);
             else if ( note.rfind("/note", 0) == 0 ) note.erase(0, 5);
             note = common::trim_ws(note);
             if ( note.empty()) continue;
-            _conversation.add_user("[Live update from the user during the active turn]\n" + note);
+            if ( is_steer )
+                _conversation.add_user("[Steering update from the user — adjust your plan and actions accordingly]\n" + note);
+            else
+                _conversation.add_user("[Live update from the user during the active turn]\n" + note);
             ++applied;
         }
         if ( applied > 0 && _progress_cb )
-            _progress_cb("checkpoint: applied " + std::to_string(applied) + " btw update" +
+            _progress_cb("checkpoint: applied " + std::to_string(applied) + " update" +
                          ( applied == 1 ? "" : "s" ) + " from the queue");
     };
 
@@ -1525,7 +1563,9 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
 
                     _client.post_stream(_provider->stream_endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body,
                         [&](const std::string& chunk) {
-                            logger::vverbose["http"] << "STREAM chunk\n" << chunk << std::endl;
+                            if ( logger::log_level >= logger::vverbose.id() ) {
+                                logger::vverbose["http"] << "STREAM chunk\n" << chunk << std::endl;
+                            }
                             providers::StreamChunk sc = _provider->parse_stream(chunk, buffer, done);
                             if ( _config.thinking_stream && !sc.reasoning.empty()) {
                                 if ( !showing_thinking ) {
@@ -1647,9 +1687,10 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         if ( failed_over )
             continue;
 
-        _stats.record(resp.input_tokens, resp.output_tokens, resp.cached_input_tokens);
+        long actual_in = resp.input_tokens > 0 ? resp.input_tokens : static_cast<long>(estimated_request_tokens);
+        _stats.record(actual_in, resp.output_tokens, resp.cached_input_tokens);
         ++model_round_trips;
-        turn_input_tokens += resp.input_tokens > 0 ? resp.input_tokens : static_cast<long>(estimated_request_tokens);
+        turn_input_tokens += actual_in;
         turn_output_tokens += resp.output_tokens;
         if ( _progress_cb && ( model_round_trips > 1 || turn_input_tokens >= next_input_notice )) {
             _progress_cb("turn: " + std::to_string(model_round_trips) + " model request" +
@@ -1657,7 +1698,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                          std::to_string(tools_this_turn) + " tool call" +
                          ( tools_this_turn == 1 ? "" : "s" ) + " · ~" +
                          Config::format_tokens(static_cast<size_t>(std::max<long>(0, turn_input_tokens))) +
-                         " input");
+                         " in" + ( turn_output_tokens > 0 ? " / ~" + Config::format_tokens(static_cast<size_t>(turn_output_tokens)) + " out" : "" ));
         }
         while ( turn_input_tokens >= next_input_notice )
             next_input_notice *= 2;
@@ -2070,20 +2111,28 @@ std::string Repl::handle_command(const std::string& line) {
     if ( cmd == "/context" ) {
         // The interactive REPL intercepts /context for a visual breakdown; this
         // is the plain-text fallback (non-interactive runs).
-        size_t sys = 0, msg = 0;
+        size_t sys = 0, msg = 0, tools_res = 0;
         for ( const auto& m : _conversation.messages()) {
             size_t t = m.content.size() / 4;
-            if ( m.role == Role::SYSTEM ) sys += t; else msg += t;
+            if ( m.role == Role::SYSTEM ) sys += t;
+            else if ( m.role == Role::TOOL ) tools_res += t;
+            else msg += t;
         }
+        size_t schema_tokens = _registry.schema().dump_minified().size() / 4;
         std::string s = "context (estimated tokens):\n";
         s += "  system prompt: " + std::to_string(sys) + "\n";
-        s += "  conversation:  " + std::to_string(msg) + "\n";
-        s += "  total:         " + std::to_string(sys + msg) + "\n";
+        s += "  messages:      " + std::to_string(msg) + "\n";
+        s += "  tool results:  " + std::to_string(tools_res) + "\n";
+        s += "  tools schema:  " + std::to_string(schema_tokens) + "\n";
+        s += "  total:         " + std::to_string(sys + msg + tools_res) + "\n";
         s += "  limit:         " + ( _config.context_auto
                  ? ( _config.context_budget() ? "auto (" + std::to_string(_config.context_budget()) + ")" : "auto (unlimited)" )
                  : ( _config.context_limit == 0 ? std::string("unlimited") : std::to_string(_config.context_limit)));
         if ( _stats.context_tokens.load() > 0 )
             s += "\n  last turn:     " + std::to_string(_stats.context_tokens.load());
+        long last_cached = _stats.last_cached.load();
+        if ( last_cached > 0 )
+            s += "\n  last cached:   " + std::to_string(last_cached);
         return s;
     }
 
@@ -2316,10 +2365,18 @@ std::string Repl::handle_command(const std::string& line) {
         return "noted — added to the context (no reply); the model will see it on your next message";
     }
 
+    if ( cmd == "/steer" ) {
+        if ( args.empty())
+            return "usage: /steer <prompt>  — steer active work at the next checkpoint, or send as a prompt";
+        _conversation.add_user(args);
+        save_conversation();
+        return "noted — steering prompt added to context; will guide the model on the next turn";
+    }
+
     if ( cmd == "/provider" ) {
         if ( args.empty())
             return "provider: " + _config.provider +
-                   "\nusage: /provider <openai|codex|ollama|anthropic|moonshot|openrouter|kimi|claude>";
+                   "\nusage: /provider <openai|codex|ollama|anthropic|moonshot|openrouter|kimi|claude|gemini>";
         return switch_provider(common::to_lower(common::trim_ws(args)));
     }
 
@@ -2647,7 +2704,16 @@ std::string Repl::handle_command(const std::string& line) {
                 _config.auto_compact_pct = p;
                 return "auto-compact threshold: " + std::to_string(_config.auto_compact_pct) + "% of the context budget";
             }
-            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, paste_preview, context, auto_compact, advisor, web_search, multiline; theme via /theme)";
+            if ( key == "auto_compact_max" || key == "auto_compact_max_tokens" || key == "auto_compact_limit" ) {
+                if ( val == "none" || val == "off" || val == "0" ) {
+                    _config.auto_compact_max_tokens = 0;
+                    return "auto-compact max tokens: none (full window)";
+                }
+                size_t m = Config::parse_size_suffixed(val, _config.auto_compact_max_tokens);
+                _config.auto_compact_max_tokens = m;
+                return "auto-compact max tokens: " + (m ? std::to_string(m) : "none (full window)");
+            }
+            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, paste_preview, context, auto_compact, auto_compact_max, advisor, web_search, multiline; theme via /theme)";
         }
 
         std::string tools = !_config.tools_enabled ? "off"
@@ -2668,7 +2734,8 @@ std::string Repl::handle_command(const std::string& line) {
         }
         s += "context:   " + ctx + "\n";
         s += "auto_compact: " + std::string( _config.auto_compact ? "on" : "off" ) +
-             ( _config.auto_compact ? "  (at " + std::to_string(_config.auto_compact_pct) + "%)" : "" ) + "\n";
+             ( _config.auto_compact ? "  (at " + std::to_string(_config.auto_compact_pct) + "%" +
+               ( _config.auto_compact_max_tokens > 0 ? ", max " + std::to_string(_config.auto_compact_max_tokens) + " tokens" : "" ) + ")" : "" ) + "\n";
         if ( provider_supports("advisor"))
             s += "advisor:   " + std::string( _config.advisor ? "on" : "off" ) +
                  "  (model: " + _config.advisor_model + ")\n";

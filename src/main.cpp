@@ -40,7 +40,7 @@ static usage_t make_usage(int argc, char **argv) {
             { "help", { "h", "help", "show usage help" }},
             { "version", { "v", "version", "show version" }},
             { "config", { "c", "config", "path to config file", usage_t::OPTIONAL }},
-            { "provider", { "p", "provider", "ai provider: openai, codex, ollama, anthropic, moonshot, openrouter, kimi or claude", usage_t::OPTIONAL }},
+            { "provider", { "p", "provider", "ai provider: openai, codex, ollama, anthropic, moonshot, openrouter, kimi, claude or gemini", usage_t::OPTIONAL }},
             { "model", { "m", "model", "model name", usage_t::OPTIONAL }},
             { "api_url", { "u", "api-url", "api endpoint url", usage_t::OPTIONAL }},
             { "api_key", { "k", "api-key", "api key / token", usage_t::OPTIONAL }},
@@ -152,8 +152,9 @@ int main(int argc, char **argv) {
     if ( config.provider != "openai" && config.provider != "ollama" &&
          config.provider != "anthropic" && config.provider != "moonshot" &&
          config.provider != "openrouter" &&
-         config.provider != "kimi" && config.provider != "claude" && config.provider != "codex" ) {
-        logger::error << "unsupported provider: " << config.provider << ". use openai, codex, ollama, anthropic, moonshot, openrouter, kimi or claude." << std::endl;
+         config.provider != "kimi" && config.provider != "claude" && config.provider != "codex" &&
+         config.provider != "gemini" ) {
+        logger::error << "unsupported provider: " << config.provider << ". use openai, codex, ollama, anthropic, moonshot, openrouter, kimi, claude or gemini." << std::endl;
         return 1;
     }
 
@@ -193,10 +194,11 @@ int main(int argc, char **argv) {
     }
 
     // API-key providers: if no key was given (-k / config), fall back to the
-    // conventional environment variables, then a generic one. (Codex/Kimi/Claude
-    // use OAuth and Ollama needs none.)
+    // conventional environment variables, then a generic one. (Codex/Kimi/Claude/Gemini
+    // use OAuth or their own credential loading and Ollama needs none.)
     if ( config.api_key.empty() && config.provider != "ollama" &&
-         config.provider != "kimi" && config.provider != "claude" && config.provider != "codex" ) {
+         config.provider != "kimi" && config.provider != "claude" && config.provider != "codex" &&
+         config.provider != "gemini" ) {
         const char* provider_var =
             config.provider == "openrouter" ? "OPENROUTER_API_KEY" :
             config.provider == "moonshot"  ? "MOONSHOT_API_KEY" :
@@ -212,7 +214,8 @@ int main(int argc, char **argv) {
     }
 
     if ( config.api_key.empty() && config.provider != "ollama" &&
-         config.provider != "kimi" && config.provider != "claude" && config.provider != "codex" ) {
+         config.provider != "kimi" && config.provider != "claude" && config.provider != "codex" &&
+         config.provider != "gemini" ) {
         std::string var =
             config.provider == "openrouter" ? "OPENROUTER_API_KEY" :
             config.provider == "moonshot"  ? "MOONSHOT_API_KEY" :
@@ -240,7 +243,7 @@ int main(int argc, char **argv) {
     logger::info["agent"] << "provider: " << config.provider << ", model: " << config.model << std::endl;
     logger::info["agent"] << "home dir: " << config.home_dir << std::endl;
 
-    if ( config.provider == "kimi" || config.provider == "claude" || config.provider == "codex" ) {
+    if ( config.provider == "kimi" || config.provider == "claude" || config.provider == "codex" || config.provider == "gemini" ) {
         agent::api::Client client;
         auto provider = agent::providers::create(config);
         if ( !provider->authenticate(client, usage["login"]) ) {

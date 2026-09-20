@@ -157,8 +157,17 @@ bool Client::spawn(Server& s) {
     };
     // O_CLOEXEC so a concurrently-forked sibling child (parallel connect_all)
     // never inherits these pipe fds; close every fd on any failure path.
+#if defined(__APPLE__) || !defined(O_CLOEXEC)
+    if ( pipe(to_child) != 0 ) { s.error = "pipe() failed"; return false; }
+    if ( pipe(from_child) != 0 ) { s.error = "pipe() failed"; close_all(); return false; }
+    fcntl(to_child[0], F_SETFD, FD_CLOEXEC);
+    fcntl(to_child[1], F_SETFD, FD_CLOEXEC);
+    fcntl(from_child[0], F_SETFD, FD_CLOEXEC);
+    fcntl(from_child[1], F_SETFD, FD_CLOEXEC);
+#else
     if ( pipe2(to_child, O_CLOEXEC) != 0 ) { s.error = "pipe() failed"; return false; }
     if ( pipe2(from_child, O_CLOEXEC) != 0 ) { s.error = "pipe() failed"; close_all(); return false; }
+#endif
 
     // Build the child's environment in the PARENT: setenv() between fork() and
     // exec() is not async-signal-safe in a multithreaded process (it may take a
@@ -192,7 +201,12 @@ bool Client::spawn(Server& s) {
         dup2(from_child[1], STDOUT_FILENO);
         int devnull = open("/dev/null", O_WRONLY);
         if ( devnull >= 0 ) { dup2(devnull, STDERR_FILENO); close(devnull); }
+#if defined(__APPLE__)
+        environ = envp.data();
+        execvp(s.command.c_str(), argv.data());
+#else
         execvpe(s.command.c_str(), argv.data(), envp.data());
+#endif
         _exit(127);
     }
     ::close(to_child[0]); ::close(from_child[1]);

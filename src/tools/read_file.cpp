@@ -13,9 +13,9 @@ namespace agent::tools {
 
 namespace {
 
-constexpr size_t DEFAULT_LINES   = 800;     // lines returned when no limit is given
+constexpr size_t DEFAULT_LINES   = 160;     // lines returned when no limit is given
 constexpr size_t MAX_LINE_CHARS  = 2000;    // per-line cap (avoids one huge line flooding context)
-constexpr size_t MAX_TOTAL_BYTES = 50000;   // overall output cap (keep tool results cheap to replay)
+constexpr size_t MAX_TOTAL_BYTES = 12000;   // overall output cap (keep tool results cheap to replay)
 constexpr size_t BINARY_SNIFF_BYTES = 8000; // enough for the binary heuristic without loading the file
 constexpr size_t MAX_INPUT_BYTES = 64u * 1024u * 1024u; // explicit safety cap for read_file
 

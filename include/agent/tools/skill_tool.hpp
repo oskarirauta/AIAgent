@@ -20,6 +20,7 @@ public:
         : _describe(std::move(describe)), _loader(std::move(loader)) {}
 
     std::string name() const override { return "use_skill"; }
+    std::string group() const override { return "skills"; }
     std::string description() const override { return _describe ? _describe() : "Load a skill."; }
 
     JSON parameters() const override {

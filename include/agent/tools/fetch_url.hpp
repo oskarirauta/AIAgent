@@ -16,6 +16,7 @@ std::string html_to_text(const std::string& html);
 class FetchUrl : public Tool {
 public:
     std::string name() const override { return "fetch_url"; }
+    std::string group() const override { return "web"; }
     std::string description() const override {
         return "Fetch a web page or text document by URL and return its text content "
                "(HTML is stripped to readable text). Use it to read documentation or a "

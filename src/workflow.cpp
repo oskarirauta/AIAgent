@@ -32,11 +32,27 @@ static std::string headless_loop(providers::Provider& provider, api::Client& cli
         JSON request = provider.build_request(conv, tools);
         std::string body = request.dump_minified();
 
-        // No prepare_request(): a sub-agent reuses the already-valid token loaded
-        // at construction, so it never triggers an interactive re-login.
-        std::string resp_str = client.post(provider.endpoint(), provider.auth_header(),
-                                            provider.auth_value(), provider.extra_headers(),
-                                            body, abort);
+        // Post request with 401 retry handling for sub-agent workflows
+        std::string resp_str;
+        try {
+            resp_str = client.post(provider.endpoint(), provider.auth_header(),
+                                   provider.auth_value(), provider.extra_headers(),
+                                   body, abort);
+        } catch ( const std::exception& e ) {
+            std::string err = e.what();
+            // If 401 Unauthorized occurs mid-workflow, attempt silent token refresh and retry once
+            if ( err.find("401") != std::string::npos && provider.ready_noninteractive(client) ) {
+                try {
+                    resp_str = client.post(provider.endpoint(), provider.auth_header(),
+                                           provider.auth_value(), provider.extra_headers(),
+                                           body, abort);
+                } catch ( const std::exception& ex ) {
+                    return std::string("error: ") + ex.what();
+                }
+            } else {
+                return std::string("error: ") + err;
+            }
+        }
         if ( abort && abort->load(std::memory_order_relaxed))
             return "cancelled";
         if ( resp_str.empty())
@@ -83,6 +99,10 @@ std::string run_workflow_step(const Config& cfg, const std::string& task,
         return "error: could not create provider";
     if ( !cfg.thinking.empty())
         provider->apply_provider_options(JSON::Object{ { "thinking", cfg.thinking } });
+
+    // Ensure the provider credentials are valid and refreshed silently if needed
+    if ( !provider->ready_noninteractive(client))
+        return "error: provider authentication not ready or could not be refreshed";
 
     // Sub-agents get read-only tools only and run them without confirmation:
     // no writes or shell execution happen unattended in the background.

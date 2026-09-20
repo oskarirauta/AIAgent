@@ -74,7 +74,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
 
 static std::string pending_kind_label(InlineRepl::PendingKind kind) {
     switch ( kind ) {
-    case InlineRepl::PendingKind::LiveNote: return "btw";
+    case InlineRepl::PendingKind::LiveNote: return "steer/btw";
     case InlineRepl::PendingKind::Shell: return "shell";
     case InlineRepl::PendingKind::Command: return "command";
     default: return "message";
@@ -240,6 +240,8 @@ std::string InlineRepl::theme_overrides_summary() const {
 }
 
 InlineRepl::~InlineRepl() {
+    if ( _worker.joinable())
+        _worker.join();
     teardown();
 }
 
@@ -1400,7 +1402,7 @@ namespace {
 
 const std::vector<std::string>& slash_commands() {
     static const std::vector<std::string> cmds = {
-        "/help", "/about", "/info", "/settings", "/provider", "/model", "/btw", "/note",
+        "/help", "/about", "/info", "/settings", "/provider", "/model", "/btw", "/note", "/steer",
         "/tools", "/strict", "/thinking", "/effort", "/theme", "/stream", "/bell",
         "/memories", "/roadmap", "/context", "/cost", "/history", "/retry", "/undo", "/tasks",
         "/pin", "/pins", "/unpin", "/queue", "/trust", "/skills", "/skill", "/plan",
@@ -1872,17 +1874,36 @@ void InlineRepl::on_enter() {
         // starts work (clear, undo, compact, model/provider switch, …) queues so
         // it runs when the turn finishes, instead of interleaving with the output.
         if ( _turn_running && !command_runs_immediately(trimmed)) {
-            PendingKind kind = trimmed.rfind("/btw", 0) == 0 || trimmed.rfind("/note", 0) == 0
+            bool is_steer = trimmed.rfind("/steer", 0) == 0;
+            PendingKind kind = ( is_steer || trimmed.rfind("/btw", 0) == 0 || trimmed.rfind("/note", 0) == 0 )
                 ? PendingKind::LiveNote : ( trimmed[0] == '!' ? PendingKind::Shell : PendingKind::Command );
             if ( kind == PendingKind::LiveNote ) {
                 std::lock_guard<std::mutex> lk(_mx);
                 _live_updates.push_back(trimmed);
-                _notices.push({ "btw update queued for the next checkpoint", false });
+                _notices.push({ is_steer ? "steering update queued for the next checkpoint"
+                                         : "btw update queued for the next checkpoint", false });
             } else {
                 enqueue_pending(trimmed, kind);
             }
             tcflush(STDIN_FILENO, TCIFLUSH);
             draw_live();
+            return;
+        }
+        if ( trimmed.rfind("/steer", 0) == 0 ) {
+            std::string prompt = common::trim_ws(trimmed.substr(6));
+            if ( prompt.empty()) {
+                echo_user(trimmed);
+                wr(_theme.warn + "usage: /steer <prompt>  — steer active work at the next checkpoint, or send as a prompt\n" + Theme::reset);
+                _input.clear(); _cursor = 0; _input_window_start = 0;
+                draw_live();
+                return;
+            }
+            _prompt_history.push_back(line);
+            _history_index = _prompt_history.size();
+            _stashed_input.clear();
+            _input.clear(); _cursor = 0; _input_window_start = 0;
+            echo_user(prompt);
+            start_turn(prompt, prompt, /*already_echoed=*/true);
             return;
         }
         run_command_line(trimmed);
@@ -2279,14 +2300,23 @@ bool InlineRepl::maybe_auto_compact() {
     if ( !_config.auto_compact )
         return false;
     size_t budget = _config.compaction_budget();
-    if ( budget == 0 )
-        return false; // unknown model window — nothing reliable to measure against
+    if ( budget == 0 ) {
+        if ( _config.auto_compact_max_tokens > 0 )
+            budget = _config.auto_compact_max_tokens;
+        else
+            return false; // unknown model window — nothing reliable to measure against
+    }
     long ctx = _stats.context_tokens.load(std::memory_order_relaxed);
+    if ( ctx <= 0 )
+        ctx = static_cast<long>(_conversation.estimate_tokens());
     if ( ctx <= 0 )
         return false; // no usage reported yet
     size_t pct = ( _config.auto_compact_pct >= 10 && _config.auto_compact_pct <= 100 )
                ? _config.auto_compact_pct : 80;
-    if ( static_cast<size_t>(ctx) < budget * pct / 100 )
+    size_t target = budget * pct / 100;
+    if ( _config.auto_compact_max_tokens > 0 && target > _config.auto_compact_max_tokens )
+        target = _config.auto_compact_max_tokens;
+    if ( static_cast<size_t>(ctx) < target )
         return false;
     // Need at least a couple of exchanges to be worth summarising; compact_history
     // itself declines a near-empty history, but avoid the spinner flash for it.
@@ -2296,9 +2326,9 @@ bool InlineRepl::maybe_auto_compact() {
     if ( non_system < 4 )
         return false;
 
-    int used = static_cast<int>(static_cast<long long>(ctx) * 100 / static_cast<long long>(budget));
+    int used = static_cast<int>(static_cast<long long>(ctx) * 100 / static_cast<long long>(target));
     start_async_command("/compact", "auto-compacting",
-                        "auto-compact (context " + std::to_string(used) + "% of budget)");
+                        "auto-compact (context " + std::to_string(used) + "% of trigger limit)");
     return true;
 }
 
@@ -3026,6 +3056,8 @@ void InlineRepl::render_context() {
     if ( _config.supersede_tools )
         effective = Conversation::supersede_stale_tools(std::move(effective));
     effective = Conversation::elide_old_large_tool_results(std::move(effective));
+    if ( _config.context_budget() > 0 )
+        effective = _conversation.within_token_budget(_config.context_budget(), std::move(effective));
 
     auto raw = estimate(saved);
     auto eff = estimate(effective);
@@ -3033,7 +3065,12 @@ void InlineRepl::render_context() {
     size_t raw_bytes = raw_tool_bytes(saved), eff_bytes = raw_tool_bytes(effective);
     size_t saved_bytes = raw_bytes > eff_bytes ? raw_bytes - eff_bytes : 0;
     size_t mem = load_memories(_config.home_dir, _config.provider).size() / 4;
+    std::string proj_instr_text;
+    try { proj_instr_text = load_project_instructions(std::filesystem::current_path().string()); } catch (...) {}
+    size_t proj_instr_tokens = proj_instr_text.size() / 4;
     long actual = _stats.context_tokens.load(std::memory_order_relaxed);
+    long last_cached = _stats.last_cached.load(std::memory_order_relaxed);
+    long session_cached = _stats.session_cached.load(std::memory_order_relaxed);
 
     auto pct = [eff_total](size_t n) -> std::string {
         if ( eff_total == 0 ) return "0%";
@@ -3054,14 +3091,16 @@ void InlineRepl::render_context() {
 
     wr("  " + _theme.ai + "●" + Theme::reset + " system prompt   " + fmt(eff.system) + "  " +
        _theme.dim + "(" + pct(eff.system) + ")" + Theme::reset + "\n");
+    if ( proj_instr_tokens > 0 )
+        wr("    " + _theme.dim + "└ instructions  " + fmt(proj_instr_tokens) + "  (AGENTS.md)" + Theme::reset + "\n");
+    if ( mem > 0 )
+        wr("    " + _theme.dim + "└ memories      " + fmt(mem) + Theme::reset + "\n");
     wr("  " + _theme.command + "●" + Theme::reset + " messages        " + fmt(eff.messages) + "  " +
        _theme.dim + "(" + pct(eff.messages) + ")" + Theme::reset + "\n");
     wr("  " + _theme.command + "●" + Theme::reset + " tool results    " + fmt(eff.tool_results) + "  " +
        _theme.dim + "(" + pct(eff.tool_results) + ")" + Theme::reset + "\n");
     if ( eff.tool_calls > 0 )
         wr("    " + _theme.dim + "└ tool calls    " + fmt(eff.tool_calls) + Theme::reset + "\n");
-    if ( mem > 0 )
-        wr("    " + _theme.dim + "└ memories      " + fmt(mem) + Theme::reset + "\n");
 
     if ( raw_total != eff_total || eff.elided > 0 ) {
         wr("\n  " + _theme.dim + "effective request: " + fmt(eff_total) + " tokens; saved transcript: " +
@@ -3081,7 +3120,12 @@ void InlineRepl::render_context() {
     std::string footer = "  " + _theme.dim + "context limit: " + limit_str;
     if ( actual > 0 )
         footer += " · last turn reported " + fmt(static_cast<size_t>(actual));
+    if ( last_cached > 0 )
+        footer += " (" + fmt(static_cast<size_t>(last_cached)) + " cached)";
     footer += Theme::reset + std::string("\n");
+    if ( session_cached > 0 )
+        footer += "  " + _theme.dim + "prompt cache:   " + fmt(static_cast<size_t>(session_cached)) +
+                  " tokens cached this session (~90% cost reduction)" + Theme::reset + "\n";
     wr(footer);
 
     draw_live();

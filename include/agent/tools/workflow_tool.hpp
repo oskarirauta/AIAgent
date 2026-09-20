@@ -22,6 +22,7 @@ public:
     explicit WorkflowTool(launch_fn launcher) : _launcher(std::move(launcher)) {}
 
     std::string name() const override { return "run_workflow"; }
+    std::string group() const override { return "workflow"; }
 
     std::string description() const override {
         return "Launch a background workflow to take on a larger task. Provide a short "

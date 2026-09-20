@@ -55,12 +55,30 @@ void Registry::set_confirm_callback(confirm_cb_t cb) {
     _confirm_cb = std::move(cb);
 }
 
+void Registry::set_group_enabled(const std::string& group, bool enabled) {
+    if ( enabled ) {
+        if ( _disabled_groups.erase(group) > 0 )
+            _schema_dirty = true;
+    } else {
+        if ( _disabled_groups.insert(group).second )
+            _schema_dirty = true;
+    }
+}
+
+bool Registry::is_group_enabled(const std::string& group) const {
+    return _disabled_groups.find(group) == _disabled_groups.end();
+}
+
 JSON Registry::schema() const {
     if ( !_schema_dirty )
         return _cached_schema;
 
     JSON arr = JSON::Array{};
     for ( const auto& [name, tool] : _tools ) {
+        if ( !tool ) continue;
+        std::string grp = tool->group();
+        if ( !grp.empty() && !is_group_enabled(grp) )
+            continue;
         JSON entry = JSON::Object{
             { "type", "function" },
             { "function", JSON::Object{

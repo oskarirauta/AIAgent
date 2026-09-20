@@ -31,6 +31,10 @@ const std::vector<CommandDoc>& command_catalog() {
     { "/btw", "/note", "<note>", "Conversation", "add a note to the context, no reply",
       "Injects a note as a user message without triggering a model turn — for facts "
       "or constraints you want in context before your next real prompt." },
+    { "/steer", "", "<prompt>", "Conversation", "steer active work at the next checkpoint",
+      "When a turn is running, queues a steering prompt to guide the model at the next "
+      "tool boundary/checkpoint without interrupting the turn. When idle, sends the "
+      "prompt immediately." },
     { "/pin", "/pins, /unpin", "[text]", "Conversation", "keep a note in context through /compact",
       "`/pin <text>` (or `/pin` alone to pin the last reply) keeps a note in the "
       "system prompt so it survives /compact and auto-compact. `/pins` lists them, "

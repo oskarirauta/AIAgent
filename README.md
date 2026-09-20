@@ -421,6 +421,7 @@ Slash commands run locally (never sent to the model):
 | `/stats` | Session usage, estimated cost and provider limits. |
 | `/diagnose` | Combined runtime and provider diagnostic report. |
 | `/stop` | Request the active turn to stop safely (alias `/interrupt`). |
+| `/steer <prompt>` | Steer active work at the next checkpoint/tool boundary, or send as a prompt when idle. |
 | `/settings` | Open the interactive settings menu (↑/↓ select, ←/→ change, Enter edit/apply, Esc close). |
 | `/settings <key> <value>` | Set a value directly: `context` (`auto`, `64K`, or `0` = unlimited), `multiline` (`on`/`off`), `model`, `tools`, `strict`, `thinking`. |
 | `/model [name]` | Show or change the active model. Short or misspelled names are resolved (`fable` → `claude-fable-5`). |

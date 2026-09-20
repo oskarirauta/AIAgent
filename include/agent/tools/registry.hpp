@@ -67,6 +67,10 @@ public:
     size_t revoke_grant(const std::string& key);
     size_t revoke_all_grants();
 
+    void set_group_enabled(const std::string& group, bool enabled);
+    bool is_group_enabled(const std::string& group) const;
+    std::set<std::string> disabled_groups() const { return _disabled_groups; }
+
     JSON schema() const;
     std::string execute(const std::string& name, const JSON& args);
     bool has(const std::string& name) const;
@@ -107,6 +111,7 @@ private:
     ConfirmMode _mode = ConfirmMode::confirm;
     bool _strict = false;
     bool _plan_mode = false;
+    std::set<std::string> _disabled_groups;
 
     // Session-scoped approvals granted via "allow session" / "allow similar".
     std::set<std::string> _allow_exact;   // full command / action strings

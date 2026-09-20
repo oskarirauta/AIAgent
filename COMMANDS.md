@@ -28,6 +28,10 @@ Saves the transcript as Markdown. With no argument a timestamped file is written
 
 Injects a note as a user message without triggering a model turn — for facts or constraints you want in context before your next real prompt.
 
+### `/steer <prompt>`
+
+When a turn is running, queues a steering prompt to guide the model at the next tool boundary/checkpoint without interrupting the turn. When idle, sends the prompt immediately.
+
 ### `/pin [text]`  — alias `/pins, /unpin`
 
 `/pin <text>` (or `/pin` alone to pin the last reply) keeps a note in the system prompt so it survives /compact and auto-compact. `/pins` lists them, `/unpin <n|all>` removes.

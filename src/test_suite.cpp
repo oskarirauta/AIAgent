@@ -21,6 +21,7 @@
 #include "agent/tools/edit_file.hpp"
 #include "agent/providers/provider.hpp"
 #include "agent/api/rate_limit.hpp"
+#include "agent/api/client.hpp"
 #include "agent/providers/openai.hpp"
 #include "agent/providers/ollama.hpp"
 #include "agent/providers/anthropic.hpp"
@@ -29,6 +30,7 @@
 #include "agent/providers/kimi.hpp"
 #include "agent/providers/claude.hpp"
 #include "agent/providers/codex.hpp"
+#include "agent/providers/gemini.hpp"
 #include "agent/auth/claude_oauth.hpp"
 #include "agent/tools/registry.hpp"
 #include "agent/skills.hpp"
@@ -134,10 +136,14 @@ static void test_codex_provider() {
     std::cout << "codex Responses API provider" << std::endl;
     check(agent::Config::default_model_for("codex") == "gpt-5.6", "codex default model is gpt-5.6");
     const auto& codex_models = agent::Config::known_models_for("codex");
-    check(codex_models.size() >= 4 && codex_models[0] == "gpt-5.6" &&
-          codex_models[1] == "gpt-5.5" && codex_models[2] == "gpt-5.4" &&
-          codex_models[3] == "gpt-5.4-mini",
+    check(codex_models.size() >= 8 && codex_models[0] == "gpt-6-astra" &&
+          codex_models[1] == "gpt-5.6-sol" && codex_models[2] == "gpt-5.6-terra" &&
+          codex_models[3] == "gpt-5.6-luna",
           "codex model shortlist includes the ChatGPT/Codex family");
+    check(agent::Config::resolve_model("codex", "astra").model == "gpt-6-astra", "astra alias resolves to gpt-6-astra");
+    check(agent::Config::resolve_model("codex", "sol").model == "gpt-5.6-sol", "sol alias resolves to gpt-5.6-sol");
+    check(agent::Config::resolve_model("codex", "terra").model == "gpt-5.6-terra", "terra alias resolves to gpt-5.6-terra");
+    check(agent::Config::resolve_model("codex", "luna").model == "gpt-5.6-luna", "luna alias resolves to gpt-5.6-luna");
 
     agent::Config cfg; cfg.provider = "codex"; cfg.model = "gpt-5.5";
     agent::providers::Codex p(cfg);
@@ -200,6 +206,48 @@ static void test_codex_provider() {
         buffer, done);
     check(thinking.reasoning == "ajatellaan ensin" && p.stream_result().thinking == "ajatellaan ensin",
           "Codex live stream preserves multiple reasoning deltas in one HTTP chunk");
+
+    agent::api::Client client;
+    auto codex_live_models = p.list_models(client);
+    check(!codex_live_models.empty() && codex_live_models[0] == "gpt-6-astra",
+          "Codex list_models returns desktop app models starting with gpt-6-astra");
+}
+
+static void test_gemini_provider() {
+    std::cout << "gemini provider & SSE streaming" << std::endl;
+    check(agent::Config::default_model_for("gemini") == "gemini-3.6-flash", "gemini default model is gemini-3.6-flash");
+
+    agent::Config cfg;
+    cfg.provider = "gemini";
+    cfg.model = "gemini-3.6-flash";
+    cfg.api_key = "test_key";
+    agent::providers::Gemini p(cfg);
+    check(p.name() == "gemini", "gemini provider name");
+
+    agent::Conversation c;
+    c.set_system("sys");
+    c.add_user("hello");
+    JSON req = p.build_request(c, JSON::Array{});
+    check(req.contains("contents"), "gemini request has contents");
+    check(req.contains("systemInstruction"), "gemini request has systemInstruction");
+    check(!req.contains("stream"), "gemini request does not contain stream flag in body");
+
+    // Test SSE parse_stream with comments, multiple chunks and single-pass buffer draining
+    std::string buffer;
+    bool done = false;
+    p.stream_reset();
+
+    std::string sse_chunk1 = ":keepalive\ndata: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello \"}]}}]}\n\n";
+    auto sc1 = p.parse_stream(sse_chunk1, buffer, done);
+    check(sc1.content == "Hello ", "first chunk parsed");
+    check(buffer.empty(), "buffer drained after full frame");
+
+    std::string sse_chunk2 = "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"World!\"}]}}]}\n\ndata: [DONE]\n\n";
+    auto sc2 = p.parse_stream(sse_chunk2, buffer, done);
+    check(sc2.content == "World!", "second chunk parsed");
+    check(done, "done marker set");
+    auto res = p.stream_result();
+    check(res.message == "Hello World!", "stream_result matches complete text");
 }
 
 static void test_reasoning_content() {
@@ -1718,6 +1766,65 @@ static void test_tools() {
     std::filesystem::remove("/tmp/ai_agent_tool_test.txt");
 }
 
+static void test_tool_groups() {
+    std::cout << "tool groups filtering" << std::endl;
+    agent::tools::Registry r;
+    r.register_defaults();
+    r.add(std::make_unique<agent::tools::WebSearch>("https://example.com"));
+    r.add(std::make_unique<agent::tools::FetchUrl>());
+    r.add(std::make_unique<agent::tools::WorkflowTool>(nullptr));
+    r.add(std::make_unique<agent::tools::SkillTool>(nullptr, nullptr));
+
+    check(r.is_group_enabled("core"), "core enabled by default");
+    check(r.is_group_enabled("web"), "web enabled by default");
+    check(r.is_group_enabled("workflow"), "workflow enabled by default");
+    check(r.is_group_enabled("skills"), "skills enabled by default");
+    check(r.disabled_groups().empty(), "no disabled groups initially");
+
+    auto has_tool = [](const JSON& s, const std::string& name) {
+        for ( size_t i = 0; i < s.size(); ++i ) {
+            if ( s[i].contains("function") && s[i]["function"].contains("name") ) {
+                if ( s[i]["function"]["name"].to_string() == name ) return true;
+            }
+        }
+        return false;
+    };
+
+    JSON full_schema = r.schema();
+    check(has_tool(full_schema, "read_file"), "read_file present");
+    check(has_tool(full_schema, "web_search"), "web_search present in full schema");
+    check(has_tool(full_schema, "fetch_url"), "fetch_url present in full schema");
+    check(has_tool(full_schema, "run_workflow"), "run_workflow present in full schema");
+    check(has_tool(full_schema, "use_skill"), "use_skill present in full schema");
+
+    r.set_group_enabled("web", false);
+    check(!r.is_group_enabled("web"), "web is now disabled");
+    check(r.disabled_groups().count("web") == 1, "web in disabled_groups set");
+
+    JSON filtered = r.schema();
+    check(has_tool(filtered, "read_file"), "read_file still present when web disabled");
+    check(!has_tool(filtered, "web_search"), "web_search omitted when web disabled");
+    check(!has_tool(filtered, "fetch_url"), "fetch_url omitted when web disabled");
+    check(has_tool(filtered, "run_workflow"), "run_workflow still present");
+
+    r.set_group_enabled("workflow", false);
+    r.set_group_enabled("skills", false);
+    JSON filtered2 = r.schema();
+    check(!has_tool(filtered2, "run_workflow"), "run_workflow omitted");
+    check(!has_tool(filtered2, "use_skill"), "use_skill omitted");
+    check(has_tool(filtered2, "read_file"), "core read_file still present");
+
+    r.set_group_enabled("web", true);
+    r.set_group_enabled("workflow", true);
+    r.set_group_enabled("skills", true);
+    JSON restored = r.schema();
+    check(has_tool(restored, "web_search"), "web_search restored");
+    check(has_tool(restored, "fetch_url"), "fetch_url restored");
+    check(has_tool(restored, "run_workflow"), "run_workflow restored");
+    check(has_tool(restored, "use_skill"), "use_skill restored");
+    check(r.disabled_groups().empty(), "disabled_groups empty after restoring");
+}
+
 static void test_expand_tilde() {
     std::cout << "tilde expansion" << std::endl;
     setenv("HOME", "/home/tester", 1);
@@ -1831,6 +1938,56 @@ static void test_tool_supersession() {
     check(a_valid, "elided result keeps its tool_call_id");
 }
 
+static void test_tool_supersession_extended() {
+    std::cout << "extended tool supersession (grep, dir, symbol, refs)" << std::endl;
+    using agent::Message; using agent::Role; using agent::ToolCall;
+    std::string big(500, 'X');
+    auto assistant = [](const std::string& id, const std::string& tool, const std::string& args) {
+        Message m(Role::ASSISTANT, "");
+        m.tool_calls.push_back(ToolCall{ id, tool, args });
+        return m;
+    };
+    auto result = [](const std::string& id, const std::string& body) {
+        return Message(Role::TOOL, body, id, "tool");
+    };
+
+    std::vector<Message> msgs = {
+        Message(Role::SYSTEM, "s"),
+        assistant("d1", "list_directory", "{\"path\":\".\"}"),
+        result("d1", "DIR1 " + big),
+        assistant("d2", "list_directory", "{\"path\":\".\"}"),
+        result("d2", "DIR2 " + big),
+        assistant("g1", "grep", "{\"pattern\":\"foo\",\"path\":\".\"}"),
+        result("g1", "GREP1 " + big),
+        assistant("g2", "grep", "{\"pattern\":\"foo\",\"path\":\".\"}"),
+        result("g2", "GREP2 " + big),
+        assistant("s1", "find_symbol", "{\"name\":\"MyClass\"}"),
+        result("s1", "SYM1 " + big),
+        assistant("s2", "find_symbol", "{\"name\":\"MyClass\"}"),
+        result("s2", "SYM2 " + big),
+        assistant("r1", "find_references", "{\"name\":\"my_fn\"}"),
+        result("r1", "REF1 " + big),
+        assistant("r2", "find_references", "{\"name\":\"my_fn\"}"),
+        result("r2", "REF2 " + big),
+    };
+
+    auto out = agent::Conversation::supersede_stale_tools(msgs);
+    auto body = [&](const std::string& id) {
+        for ( const auto& m : out )
+            if ( m.role == Role::TOOL && m.tool_call_id.value_or("") == id ) return m.content;
+        return std::string("<missing>");
+    };
+
+    check(body("d1").find("superseded by a later listing of .") != std::string::npos, "older list_directory elided");
+    check(body("d2").find("DIR2") != std::string::npos, "newest list_directory kept");
+    check(body("g1").find("superseded by a later grep in .") != std::string::npos, "older grep elided");
+    check(body("g2").find("GREP2") != std::string::npos, "newest grep kept");
+    check(body("s1").find("superseded by a later lookup of MyClass") != std::string::npos, "older find_symbol elided");
+    check(body("s2").find("SYM2") != std::string::npos, "newest find_symbol kept");
+    check(body("r1").find("superseded by a later reference search for my_fn") != std::string::npos, "older find_references elided");
+    check(body("r2").find("REF2") != std::string::npos, "newest find_references kept");
+}
+
 static void test_large_tool_result_elision() {
     std::cout << "large old tool-result elision" << std::endl;
     using agent::Message; using agent::Role;
@@ -1849,6 +2006,42 @@ static void test_large_tool_result_elision() {
     check(out[2].content.find("older large tool result elided") != std::string::npos,
           "second old large result is elided");
     check(out.back().content.find("LLLL") != std::string::npos, "recent large tool result stays intact");
+
+    // Test with 4 messages: older than 2 are elided if > 2500 chars, kept if <= 2500 chars
+    std::vector<Message> small_flow;
+    small_flow.push_back(Message(Role::SYSTEM, "sys"));
+    small_flow.push_back(Message(Role::TOOL, std::string(3000, 'A'), "t1", "read_file")); // >2500, old -> elide
+    small_flow.push_back(Message(Role::TOOL, std::string(1500, 'B'), "t2", "read_file")); // <=2500, old -> keep
+    small_flow.push_back(Message(Role::TOOL, std::string(4000, 'C'), "t3", "read_file")); // recent -> keep
+    small_flow.push_back(Message(Role::TOOL, std::string(4000, 'D'), "t4", "read_file")); // recent -> keep
+
+    auto out2 = agent::Conversation::elide_old_large_tool_results(small_flow);
+    check(out2[1].content.find("older large tool result elided") != std::string::npos, "old >2500 result elided");
+    check(out2[2].content == std::string(1500, 'B'), "old <=2500 result kept intact");
+    check(out2[3].content == std::string(4000, 'C'), "recent large result 1 kept intact");
+    check(out2[4].content == std::string(4000, 'D'), "recent large result 2 kept intact");
+
+    // Pre-elision budgeting: A conversation with old large tool results should NOT
+    // drop the first user turn when budgeted if the elided size easily fits in budget.
+    agent::Conversation c_elide;
+    c_elide.set_system("system prompt");
+    c_elide.add_user("first user message");
+    c_elide.add_tool_result("t1", std::string(10000, 'X'), "read_file"); // old large
+    c_elide.add_tool_result("t2", std::string(10000, 'Y'), "read_file"); // old large
+    c_elide.add_user("second user message");
+    c_elide.add_tool_result("t3", "short1", "read_file");
+    c_elide.add_tool_result("t4", "short2", "read_file");
+    c_elide.add_user("third user message");
+
+    agent::Config test_cfg;
+    test_cfg.context_limit = 1500;
+    test_cfg.context_auto = false;
+    test_cfg.provider = "openai";
+    agent::providers::OpenAI prov(test_cfg);
+    auto req_msgs = prov.request_messages(c_elide);
+    check(req_msgs.size() == c_elide.messages().size(),
+          "pre-elision budgeting keeps history that fits after eliding large tools");
+    check(req_msgs[1].content == "first user message", "first user message preserved");
 }
 
 static void test_trim_hysteresis() {
@@ -2323,6 +2516,8 @@ static void test_compaction_budget() {
     c.context_auto = false;
     c.context_limit = 50000;
     check(c.compaction_budget() == 50000, "explicit context limit is used");
+    check(c.auto_compact_max_tokens == 30000, "default auto_compact_max_tokens is 30000");
+    check(c.auto_compact_pct == 80, "default auto_compact_pct is 80");
 
     // "unlimited" used to disable auto-compaction entirely: the trigger compared
     // against a budget of 0 and never fired, so the sessions most in need of
@@ -2343,6 +2538,59 @@ static void test_compaction_budget() {
     u.context_auto = false;
     u.context_limit = 0;
     check(u.compaction_budget() == 0, "unknown model has no compaction budget");
+}
+
+static void test_auto_compact() {
+    std::cout << "auto-compact trigger & estimation" << std::endl;
+    agent::Conversation conv;
+    conv.set_system("You are a helpful assistant.");
+    conv.add_user("Please read this file.");
+    conv.add_assistant("Reading file...", { agent::ToolCall{"call_1", "read_file", "{\"path\":\"foo.txt\"}"} });
+    conv.add_tool_result("call_1", "read_file", "File contents here...");
+    conv.add_assistant("Here is the content.");
+
+    size_t est = conv.estimate_tokens();
+    check(est > 20, "conversation estimate_tokens produces reasonable count");
+
+    agent::Config cfg;
+    cfg.auto_compact = true;
+    cfg.auto_compact_max_tokens = 30000;
+    cfg.auto_compact_pct = 80;
+    cfg.context_auto = false;
+    cfg.context_limit = 30000;
+
+    agent::TokenStats stats;
+    // Context well below threshold
+    stats.context_tokens.store(5000);
+    agent::InlineRepl repl1(nullptr, cfg, conv, stats);
+    check(!repl1.maybe_auto_compact(), "does not trigger when context is below target");
+
+    // Disabled auto_compact
+    cfg.auto_compact = false;
+    stats.context_tokens.store(35000);
+    agent::InlineRepl repl2(nullptr, cfg, conv, stats);
+    check(!repl2.maybe_auto_compact(), "does not trigger when auto_compact is off");
+    cfg.auto_compact = true;
+
+    // Unknown model window falls back to auto_compact_max_tokens
+    agent::Config ucfg;
+    ucfg.model = "unknown-model";
+    ucfg.auto_compact = true;
+    ucfg.auto_compact_max_tokens = 10000;
+    ucfg.auto_compact_pct = 80;
+    ucfg.context_auto = false;
+    ucfg.context_limit = 0; // budget == 0
+    stats.context_tokens.store(8500); // >= 80% of 10000
+    agent::InlineRepl repl3(nullptr, ucfg, conv, stats);
+    check(repl3.maybe_auto_compact(), "unknown model falls back to auto_compact_max_tokens");
+
+    // Zero context_tokens in stats falls back to conversation token estimation
+    stats.context_tokens.store(0);
+    ucfg.auto_compact_max_tokens = 50;
+    ucfg.auto_compact_pct = 80;
+    conv.add_user("A longer prompt to push conversation token estimation over the small limit for testing.");
+    agent::InlineRepl repl4(nullptr, ucfg, conv, stats);
+    check(repl4.maybe_auto_compact(), "stats context_tokens == 0 falls back to conversation estimate");
 }
 
 static void test_context_auto() {
@@ -3387,6 +3635,7 @@ int main() {
     test_context_budget();
     test_trim_role_invariants();
     test_tool_supersession();
+    test_tool_supersession_extended();
     test_large_tool_result_elision();
     test_trim_hysteresis();
     test_settings_persistence();
@@ -3394,6 +3643,7 @@ int main() {
     test_token_formatting();
     test_budget_persistence();
     test_compaction_budget();
+    test_auto_compact();
     test_output_cap();
     test_rate_limit_parsing();
     test_context_defaults();
@@ -3405,6 +3655,7 @@ int main() {
     test_memory_listing();
     test_openai_request();
     test_codex_provider();
+    test_gemini_provider();
     test_reasoning_content();
     test_reasoning_effort();
     test_openrouter_provider();
@@ -3452,6 +3703,7 @@ int main() {
     test_stream_parsers();
     test_stream_tool_calls();
     test_tools();
+    test_tool_groups();
     test_run_command_robustness();
     test_read_file_robustness();
     test_parallel_tool_safety();

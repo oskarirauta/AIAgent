@@ -107,6 +107,8 @@ public:
     // Last-resort restore from the signal handler before a forced exit.
     static void emergency_teardown();
 
+    bool maybe_auto_compact(); // auto-summarise history when it nears the context budget; true if started
+
     enum class PendingKind { Message, Command, Shell, LiveNote };
 
 private:
@@ -167,7 +169,6 @@ private:
     void start_turn(const std::string& line, const std::string& display, bool already_echoed = false);
     void start_async_command(const std::string& cmd, const std::string& activity,
                              const std::string& echo_label = ""); // run a slow command off-thread
-    bool maybe_auto_compact(); // auto-summarise history when it nears the context budget; true if started
     std::string budget_warning(); // one-shot warning text when the session nears its cost/token budget
     std::string disk_space_warning(); // one-shot warning when the data dir's disk is nearly full
     void shell_command();             // /shell: hand the terminal to $SHELL, restore on exit

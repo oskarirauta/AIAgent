@@ -32,6 +32,7 @@ public:
     }
     // Only a server-declared read-only tool is safe in plan mode.
     bool mutates() const override { return !_read_only; }
+    std::string group() const override { return "mcp"; }
 
     std::string name() const override { return _name; }
     std::string description() const override {

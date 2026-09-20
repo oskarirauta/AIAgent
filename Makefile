@@ -3,11 +3,11 @@ all: world
 CXX?=g++
 STRIP?=strip
 # Production defaults: optimised, no debug symbols. For a debug build, override on
-# the command line, e.g. `make CXXFLAGS='--std=c++17 -Wall -fPIC -I./include -g'`.
+# the command line, e.g. `make CXXFLAGS='--std=c++20 -Wall -fPIC -I./include -g'`.
 # -Wall only: -Wextra was evaluated but floods 1500+ warnings from the vendored
 # submodule headers (json.hpp ignored-qualifiers in every TU, usage/ field
 # initializers); the app's own code is clean under -Wall.
-CXXFLAGS?=--std=c++17 -Wall -fPIC -I./include -O2
+CXXFLAGS?=--std=c++20 -Wall -fPIC -I./include -O2
 # Emit header dependency files (.d) so changing a header recompiles every source
 # that includes it — mixing objects built against different struct layouts causes
 # memory corruption at runtime.
@@ -19,7 +19,12 @@ LDFLAGS?=-L/usr/lib
 # tool output overflowed the worker thread's stack (SIGSEGV in _Executor::_M_dfs).
 # 8 MiB matches the usual main-stack ulimit; glibc ignores this (its threads
 # already default to 8 MiB).
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+LDFLAGS+=-Wl,-stack_size,0x800000
+else
 LDFLAGS+=-Wl,-z,stack-size=8388608
+endif
 
 # Prefer pkg-config for curl when available, fallback to plain flags. The inline
 # REPL uses raw ANSI/termios, so no curses dependency is needed.
