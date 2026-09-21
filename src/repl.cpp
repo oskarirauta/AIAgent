@@ -1623,7 +1623,8 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         for ( const std::string& command : updates ) {
             std::string note = command;
             bool is_steer = false;
-            if ( note.rfind("/steer", 0) == 0 ) { note.erase(0, 6); is_steer = true; }
+            if ( note.rfind("/steer!", 0) == 0 ) { note.erase(0, 7); is_steer = true; }
+            else if ( note.rfind("/steer", 0) == 0 ) { note.erase(0, 6); is_steer = true; }
             else if ( note.rfind("/btw", 0) == 0 ) note.erase(0, 4);
             else if ( note.rfind("/note", 0) == 0 ) note.erase(0, 5);
             note = common::trim_ws(note);
