@@ -405,14 +405,14 @@ this project follows: one change, build, tests, try it live, then the next.
   across `/cost`, `/context`, `/status`, and `/stats`. Provider-aware token estimation
   in `Conversation::estimate_tokens`.
 
-## Backlog (next)
+- ✅ **Hard Steering / Interruption Transaction** — safely cancels an active
+  in-flight HTTP request via `turn_steer_interrupt`, cleanly preserving conversation
+  history without corrupting Anthropic/Gemini/OpenAI role alternation. Appends the
+  steering instruction as a valid user turn and immediately restarts model completion
+  within the same active turn. Full mode support (`checkpoint`, `immediate`, `next_turn`)
+  via `/settings steering_mode` and explicit forced redirection via `/steer! <prompt>`.
 
-- **Claude Hard Steering / Interruption Transaction** — today's `/steer` queues
-  steering guidance applied safely at the next tool boundary or checkpoint.
-  The deeper hard steering capability will support cancelling an active
-  in-flight HTTP request safely, preventing partial thinking/tool-use state from
-  corrupting the Anthropic conversation structure, appending the steering
-  instruction as a valid user turn, and immediately restarting model completion.
+## Backlog (next)
 
 ## ROADMAP TO V3
 

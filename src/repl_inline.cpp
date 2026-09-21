@@ -2034,9 +2034,24 @@ void InlineRepl::on_enter() {
             _pastes.clear();
             draw_live();
             return;
+        } else if ( _config.steering_mode == "checkpoint" ) {
+            {
+                std::lock_guard<std::mutex> lk(_mx);
+                _live_updates.push_back("/steer " + line);
+            }
+            notify_quiet("● steering update queued for next checkpoint: " + line);
+            drain_notices();
+            { std::lock_guard<std::mutex> lk(_mx); _auto_since_user = 0; }
+            _input.clear();
+            _cursor = 0;
+            _input_window_start = 0;
+            for ( auto& p : _pastes ) _sent_pastes.push_back(p);
+            _pastes.clear();
+            draw_live();
+            return;
         }
 
-        // A turn is in flight — queue this one to auto-send when it finishes.
+        // A turn is in flight (mode == "next_turn") — queue this one to auto-send when it finishes.
         enqueue_pending(line, PendingKind::Message);
         notify_quiet("● message queued for next turn (use /steer! to redirect immediately)");
         drain_notices();
@@ -2614,7 +2629,8 @@ void InlineRepl::queue_command(const std::string& line) {
             for ( size_t i = 0; i < _live_updates.size(); ++i ) {
                 if ( i == 0 ) { rows.push_back("── live updates ──"); keys.push_back(""); }
                 ++btw_count;
-                rows.push_back("L" + std::to_string(i + 1) + ".  live note  ·  " + queue_preview(_live_updates[i], 92));
+                std::string label = _live_updates[i].rfind("/steer", 0) == 0 ? "steering" : "live note";
+                rows.push_back("L" + std::to_string(i + 1) + ".  " + label + "  ·  " + queue_preview(_live_updates[i], 92));
                 keys.push_back("live:" + std::to_string(i + 1));
             }
             for ( size_t i = 0; i < _pending.size(); ++i ) {
