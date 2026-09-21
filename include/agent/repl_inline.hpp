@@ -76,6 +76,8 @@ public:
     // end-of-turn digest. Thread-safe (parallel tool batches).
     void notify_tool(const std::string& line);
     std::vector<std::string> take_live_updates();
+    void deliver_user_message(const std::string& text);
+    void drain_delivered_user_messages();
 
     // Queue a synthetic prompt (workflow auto-resume). Thread-safe; it joins the
     // SAME pending queue as user messages, so it runs through the normal turn
@@ -309,6 +311,7 @@ private:
     bool _reply_has_content = false;
     bool _notice_gap_done = false;  // blank line already printed before this turn's ⚙ group
     bool _last_output_was_notice = false; // previous transcript block was a ⚙ notice group
+    bool _last_output_was_steer = false;  // previous transcript block was a steering / interactive notice
     bool _reply_first_line = false; // the reply's first printed line gets the AI marker
     bool _reply_dim = false;        // inside a streamed "thinking" region (rendered dim, 💭 marker)
 
@@ -412,6 +415,7 @@ private:
     int _tool_rollup_count = 0;
     void flush_tool_rollup_locked();
     void drain_notices();                  // print queued notices above the live block
+    std::vector<std::string> _delivered_user_messages; // user messages delivered mid-turn (guarded by _mx)
 
     // While true, draw_live() is a no-op: the main loop is feeding a burst of
     // buffered input (an unbracketed paste) and will redraw once at the end —

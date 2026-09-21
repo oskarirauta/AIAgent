@@ -354,7 +354,11 @@ int InlineRepl::emit_styled_line(const std::string& line) {
     // Each reply line is left-padded 2 columns (matching the "> " on user
     // messages); combined with the wrap width below this leaves a 2-column right
     // margin. The very first line of a reply gets the AI marker instead of pad.
-    auto next_prefix = [this]() -> std::string {
+    auto next_prefix = [this, &line]() -> std::string {
+        if ( line.rfind("●", 0) == 0 ) {
+            _reply_first_line = false;
+            return "";
+        }
         if ( _reply_first_line ) {
             _reply_first_line = false;
             if ( _reply_dim )
@@ -539,6 +543,13 @@ void InlineRepl::echo_user(const std::string& display) {
                 which = &p;
             }
         }
+        for ( const auto& p : _sent_pastes ) {
+            size_t f = msg.find(p.placeholder, pos);
+            if ( f != std::string::npos && ( best == std::string::npos || f < best )) {
+                best = f;
+                which = &p;
+            }
+        }
 
         size_t text_end = ( best == std::string::npos ) ? msg.size() : best;
         if ( text_end > pos )
@@ -648,6 +659,7 @@ void InlineRepl::begin_reply() {
     _reply_dim = false;
     _notice_gap_done = false;
     _last_output_was_notice = false;
+    _last_output_was_steer = false;
     _think_preview.clear();
     _stream_in_think = false;
 }
@@ -675,7 +687,7 @@ void InlineRepl::emit_reply_line(const std::string& raw_line) {
         return;
     }
 
-    if ( _last_output_was_notice )
+    if ( _last_output_was_notice || _last_output_was_steer )
         _pending_blanks = 0; // notice separators are handled explicitly; avoid stacked blank gaps
 
     int spacer_lines = 0;
@@ -683,12 +695,14 @@ void InlineRepl::emit_reply_line(const std::string& raw_line) {
         wr("\n");                 // the single blank line before the reply
         _reply_has_content = true;
         _last_output_was_notice = false;
+        _last_output_was_steer = false;
         spacer_lines = 1;
     } else {
-        if ( _last_output_was_notice ) {
-            wr("\n");             // single separator between ⚙ group and next assistant text
+        if ( _last_output_was_notice || _last_output_was_steer ) {
+            wr("\n");             // single separator between ⚙ group / steer notice and next assistant text
             ++spacer_lines;
             _last_output_was_notice = false;
+            _last_output_was_steer = false;
         }
         for ( int i = 0; i < _pending_blanks; ++i ) {
             wr("\n");
@@ -1044,7 +1058,34 @@ void InlineRepl::enqueue_pending(std::string text, PendingKind kind) {
     _pending.push_back({ kind, std::move(text) });
 }
 
+void InlineRepl::deliver_user_message(const std::string& text) {
+    std::lock_guard<std::mutex> lk(_mx);
+    _delivered_user_messages.push_back(text);
+}
+
+void InlineRepl::drain_delivered_user_messages() {
+    std::vector<std::string> msgs;
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        if ( _delivered_user_messages.empty())
+            return;
+        msgs = std::move(_delivered_user_messages);
+        _delivered_user_messages.clear();
+    }
+    for ( const auto& msg : msgs ) {
+        echo_user(msg);
+        _notice_gap_done = false;
+        _reply_has_content = false;
+        _reply_first_line = true;
+        _last_output_was_notice = false;
+        _last_output_was_steer = false;
+        _pending_blanks = 0;
+    }
+    draw_live();
+}
+
 void InlineRepl::drain_notices() {
+    drain_delivered_user_messages();
     std::vector<Notice> lines;
     {
         std::lock_guard<std::mutex> lk(_mx);
@@ -1057,27 +1098,62 @@ void InlineRepl::drain_notices() {
     if ( lines.empty())
         return;
     erase_live();
-    // Every speaker block is preceded by exactly one blank line — including a
-    // tool-notice (⚙) group that starts before any reply text has been printed.
-    // If assistant text just printed, insert the same single separator before
-    // the tool group; repeated notice batches stay visually grouped.
-    if ( _turn_running && !_notice_gap_done ) {
-        wr("\n");
-        _notice_gap_done = true;
-    } else if ( _turn_running && _reply_has_content && !_last_output_was_notice ) {
-        wr("\n");
-    }
     bool ring = false;
     for ( const auto& n : lines ) {
         std::string text = sanitize_control(n.text);
-        if ( n.bell ) {
-            wr(_theme.accent + "● " + text + Theme::reset + "\r\n");
-            ring = true;
+        bool is_tool = ( text.rfind("⚙", 0) == 0 );
+
+        if ( !is_tool ) {
+            // Steering update, queued command, workflow completion, or interactive notice.
+            // Ensure exactly one blank line precedes it during an active turn.
+            if ( _turn_running ) {
+                wr("\n");
+                _notice_gap_done = true;
+            }
+            if ( n.bell ) {
+                wr(_theme.accent + "● " + text + Theme::reset + "\r\n");
+                ring = true;
+            } else if ( text.rfind("●", 0) == 0 ) {
+                std::string body = text;
+                if ( body.rfind("● ", 0) == 0 )
+                    body = body.substr(4);
+                else if ( body.rfind("●", 0) == 0 )
+                    body = body.substr(3);
+
+                size_t colon = body.find(": ");
+                if ( colon != std::string::npos ) {
+                    std::string prefix = body.substr(0, colon + 2);
+                    std::string rest = body.substr(colon + 2);
+                    wr(_theme.warn + "● " + "\033[1m" + prefix + "\033[0m" + rest + Theme::reset + "\r\n");
+                } else {
+                    wr(_theme.warn + "● " + "\033[1m" + body + "\033[0m" + Theme::reset + "\r\n");
+                }
+            } else if ( text.rfind("@", 0) == 0 ) {
+                wr(_theme.dim + text + Theme::reset + "\r\n");
+            } else {
+                wr(_theme.warn + text + Theme::reset + "\r\n");
+            }
+            _last_output_was_steer = true;
+            _last_output_was_notice = false;
         } else {
+            // Tool notice (⚙).
+            // Preceded by a blank line if first notice of turn, after assistant text, or after a steer notice;
+            // consecutive tool notices stay visually grouped together.
+            if ( _turn_running ) {
+                if ( !_notice_gap_done ) {
+                    wr("\n");
+                    _notice_gap_done = true;
+                } else if ( _last_output_was_steer ) {
+                    wr("\n");
+                } else if ( _reply_has_content && !_last_output_was_notice ) {
+                    wr("\n");
+                }
+            }
             wr(_theme.dim + text + Theme::reset + "\r\n");
+            _last_output_was_notice = true;
+            _last_output_was_steer = false;
         }
     }
-    _last_output_was_notice = true;
     if ( ring && bell_level(_config.bell) >= 3 ) // a notice (workflow done) is "attention"
         wr("\a"); // bell: the user may be looking elsewhere
     draw_live();
@@ -1973,13 +2049,13 @@ void InlineRepl::on_enter() {
                         }
                         agent::turn_steer_interrupt.store(true, std::memory_order_relaxed);
                         agent::turn_abort.store(true, std::memory_order_relaxed);
-                        notify_quiet("● immediate steering applied — redirecting active turn: " + prompt);
+                        notify_quiet("● immediate steering applied — redirecting active turn");
                     }
                 } else {
                     std::lock_guard<std::mutex> lk(_mx);
                     _live_updates.push_back(trimmed);
-                    _notices.push({ is_steer ? "● steering update queued for the next checkpoint (use /steer! to redirect immediately)"
-                                             : "● btw update queued for the next checkpoint", false });
+                    _notices.push({ is_steer ? "● steering update queued for next checkpoint (use /steer! to redirect immediately)"
+                                             : "● btw update queued for next checkpoint", false });
                 }
             } else {
                 enqueue_pending(trimmed, kind);
@@ -2026,7 +2102,7 @@ void InlineRepl::on_enter() {
             }
             agent::turn_steer_interrupt.store(true, std::memory_order_relaxed);
             agent::turn_abort.store(true, std::memory_order_relaxed);
-            notify_quiet("● immediate steering applied — redirecting active turn: " + line);
+            notify_quiet("● immediate steering applied — redirecting active turn");
             drain_notices();
             { std::lock_guard<std::mutex> lk(_mx); _auto_since_user = 0; }
             _input.clear();
@@ -2041,7 +2117,7 @@ void InlineRepl::on_enter() {
                 std::lock_guard<std::mutex> lk(_mx);
                 _live_updates.push_back("/steer " + line);
             }
-            notify_quiet("● steering update queued for next checkpoint: " + line);
+            notify_quiet("● steering update queued for next checkpoint (use /steer! to redirect immediately)");
             drain_notices();
             { std::lock_guard<std::mutex> lk(_mx); _auto_since_user = 0; }
             _input.clear();
@@ -2224,6 +2300,8 @@ void InlineRepl::poll_worker() {
     // over it. The chunks stay buffered and flush when it closes.
     if ( _in_settings || _in_list || _asking )
         return;
+
+    drain_delivered_user_messages();
 
     std::vector<std::string> chunks;
     bool done = false;
@@ -2928,7 +3006,7 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
             }
             agent::turn_steer_interrupt.store(true, std::memory_order_relaxed);
             agent::turn_abort.store(true, std::memory_order_relaxed);
-            notify_quiet("● immediate steering applied — redirecting active turn: " + prompt);
+            notify_quiet("● immediate steering applied — redirecting active turn");
             drain_notices();
             tcflush(STDIN_FILENO, TCIFLUSH);
             draw_live();
@@ -2954,7 +3032,7 @@ void InlineRepl::run_command_line(const std::string& trimmed) {
                 }
                 agent::turn_steer_interrupt.store(true, std::memory_order_relaxed);
                 agent::turn_abort.store(true, std::memory_order_relaxed);
-                notify_quiet("● interrupt with steering applied — redirecting active turn: " + prompt);
+                notify_quiet("● interrupt with steering applied — redirecting active turn");
                 drain_notices();
                 tcflush(STDIN_FILENO, TCIFLUSH);
                 draw_live();

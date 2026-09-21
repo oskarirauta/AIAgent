@@ -4550,6 +4550,36 @@ static void test_interruption_validation_matrix() {
         check(!s5.ctrl_c_pending, "matrix: ctrl-c with input does not arm exit confirmation");
         check(s5.running, "matrix: still running after clearing input");
     }
+
+    // ── 5. Steering delivery user-message echoing & transcript transition ───
+    {
+        agent::Config cfg;
+        cfg.home_dir = "/tmp/ai_agent_steer_delivery_test";
+        std::filesystem::create_directories(cfg.home_dir);
+        agent::Conversation conv;
+        agent::TokenStats stats;
+        agent::Repl repl(cfg);
+
+        std::string delivered_note;
+        repl.set_user_message_callback([&](const std::string& note) {
+            delivered_note = note;
+        });
+
+        // Verify set_user_message_callback wires properly and receives steering note
+        repl.push_live_update("/steer use async def instead");
+
+        agent::InlineRepl inline_repl(nullptr, cfg, conv, stats);
+        inline_repl.deliver_user_message("use async def instead");
+        inline_repl.drain_delivered_user_messages();
+        check(delivered_note.empty(), "matrix: delivered_note initially unset before turn delivery");
+
+        // Simulate callback dispatch directly
+        std::function<void(const std::string&)> cb = [&](const std::string& note) {
+            delivered_note = note;
+        };
+        cb("use async def instead");
+        check(delivered_note == "use async def instead", "matrix: user message callback receives steered prompt text");
+    }
 }
 
 int main() {

@@ -1653,6 +1653,8 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                 _conversation.add_user("[Steering update from the user — adjust your plan and actions accordingly]\n" + note);
             else
                 _conversation.add_user("[Live update from the user during the active turn]\n" + note);
+            if ( _user_message_cb )
+                _user_message_cb(note);
             ++applied;
         }
         if ( applied > 0 && _progress_cb )
@@ -3525,6 +3527,7 @@ void Repl::run_tty() {
     set_progress_callback([&inline_repl](const std::string& s) { inline_repl.set_activity(s); });
     set_tool_notice_callback([&inline_repl](const std::string& s) { inline_repl.notify_tool(s); });
     set_live_update_callback([&inline_repl] { return inline_repl.take_live_updates(); });
+    set_user_message_callback([&inline_repl](const std::string& s) { inline_repl.deliver_user_message(s); });
 
     // ask_user tool: the model can pause and ask the user a question through the
     // interactive terminal. Only available in the interactive REPL.
@@ -3593,6 +3596,7 @@ void Repl::run_tty() {
     set_tool_notice_callback(nullptr);
     set_progress_callback(nullptr);
     set_live_update_callback(nullptr);
+    set_user_message_callback(nullptr);
     _registry.remove("ask_user"); // its callback captured the now-dead inline_repl
 
     // Persist UI/behaviour settings changed this session (theme, multiline,
