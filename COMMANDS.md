@@ -2,6 +2,8 @@
 
 Slash commands available in the interactive REPL. In-app, `/help` lists these and `/help <command>` shows the detail for one. This file is generated from the same catalogue (`src/commands.cpp`).
 
+While a model turn is running, safe local/status/settings commands run immediately instead of waiting in the turn queue. This includes `/help`, `/about`, `/info`, `/settings`, `/history`, `/context`, `/cost`, `/stats`, `/diagnose`, `/status`, `/jobs`, `/queue`, `/limits`, `/tasks`, `/trust`, `/changes`, `/pins`, `/skills`, `/memories`, `/roadmap`, `/theme`, `/raw`, plus next-request settings such as `/thinking`, `/stream`, `/model`, `/profile`, `/tools`, `/strict`, `/advisor`, `/workflow`, `/autoresume`, and `/bell`. Conversation-mutating commands (for example `/clear`, `/compact`, `/undo`, `/retry`, `/btw`, `/note`, `/steer`, `/pin`, `/unpin`, `!shell`) are queued until the current turn reaches a safe point.
+
 ## Conversation
 
 ### `/retry`

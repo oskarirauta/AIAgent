@@ -46,9 +46,9 @@ static int bell_level(const std::string& mode) {
     return 3; // attention (default)
 }
 
-// Local/display-only slash commands: safe to run mid-turn because they only read
-// state or change the UI — they never touch the running conversation, the model,
-// or the provider. Anything not listed here queues while a turn is streaming.
+// Commands in this allow-list jump the queue while a turn is streaming.
+// Keep this list limited to local display/settings commands whose effects are
+// either UI-only or apply to subsequent requests.
 static bool command_runs_immediately(const std::string& trimmed) {
     std::string cmd = trimmed;
     size_t sp = cmd.find_first_of(" \t");
@@ -67,7 +67,8 @@ static bool command_runs_immediately(const std::string& trimmed) {
         // updates local state (last value wins: /effort medium then /effort max
         // leaves only max, a natural dedup), applied before the next prompt. They
         // don't change the running turn's tool gating or rebuild the conversation.
-        "/effort", "/thinking", "/stream", "/model", "/autoresume", "/bell"
+        "/effort", "/thinking", "/stream", "/model", "/profile", "/tools",
+        "/strict", "/advisor", "/workflow", "/autoresume", "/bell"
     };
     return immediate.count(cmd) > 0;
 }
@@ -1907,11 +1908,10 @@ void InlineRepl::on_enter() {
             return;
         }
 
-        // Local/display-only commands (menus, readers, UI settings) don't touch
-        // the running conversation, model or provider, so they run NOW even
-        // mid-turn — like /queue. Everything that mutates the conversation or
-        // starts work (clear, undo, compact, model/provider switch, …) queues so
-        // it runs when the turn finishes, instead of interleaving with the output.
+        // Allowed local/status/settings commands run NOW even mid-turn. Keep
+        // everything that mutates the conversation, swaps provider/client, or
+        // starts new model work queued so it runs after the current turn instead
+        // of interleaving with streaming output.
         if ( _turn_running && !command_runs_immediately(trimmed)) {
             bool is_steer = trimmed.rfind("/steer", 0) == 0;
             PendingKind kind = ( is_steer || trimmed.rfind("/btw", 0) == 0 || trimmed.rfind("/note", 0) == 0 )
