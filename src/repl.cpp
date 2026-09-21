@@ -2808,6 +2808,9 @@ std::string Repl::handle_command(const std::string& line) {
                "  capabilities:   " + caps + "\n"
                "  tools:          " + tools + "\n"
                "  tool profile:   " + _registry.active_profile() + "\n"
+               "  plan mode:      " + std::string(_config.plan_mode ? "on" : "off") + "\n"
+               "  steering mode:  " + _config.steering_mode + "\n"
+               "  steering:       " + ( _config.steering.empty() ? "(none)" : _config.steering ) + "\n"
                "  tool budget:    " + ( _config.tool_call_limit == 0 ? std::string("unlimited") : std::to_string(_config.tool_call_limit) ) + " per turn\n"
                "  last context:   " + ( _stats.context_is_reported.load()
                    ? ( std::to_string(_stats.context_tokens.load()) + " tokens\n" )

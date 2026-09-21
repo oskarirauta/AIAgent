@@ -912,8 +912,10 @@ std::string InlineRepl::status_line() const {
                         : (_config.confirm_tools ? "tools: confirm" : "tools: auto");
     if ( !_config.tool_profile.empty() && _config.tool_profile != "code" )
         tools += " [" + _config.tool_profile + "]";
-    else if ( _config.plan_mode )
+    if ( _config.plan_mode )
         tools += " · plan";
+    if ( _config.steering_mode != "next_turn" )
+        tools += " · steer:" + _config.steering_mode;
 
     std::string s = _config.provider + " · " + _config.model + " · " + cwd;
     // A named parallel session is shown so two windows on the same project are
