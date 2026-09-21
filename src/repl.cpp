@@ -1110,6 +1110,8 @@ std::string Repl::compact_history(size_t keep_tail) {
             throws << "summarisation failed: " << sr.message << std::endl;
         summary = agent::normalize_text(sr.message);
     } else {
+        if ( _progress_cb )
+            _progress_cb("compacting " + bar(5) + " ~5%");
         std::string body = req.dump_minified();
         std::string resp_str = _client.post(_provider->endpoint(), _provider->auth_header(),
                                             _provider->auth_value(), _provider->extra_headers(), body,
@@ -1120,6 +1122,8 @@ std::string Repl::compact_history(size_t keep_tail) {
         if ( !resp.success )
             throws << "summarisation failed: " << resp.message << std::endl;
         summary = agent::normalize_text(resp.message);
+        if ( _progress_cb )
+            _progress_cb("compacting " + bar(100) + " ~100%");
     }
     if ( summary.empty())
         throws << "summarisation returned no content" << std::endl;
