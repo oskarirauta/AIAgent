@@ -55,7 +55,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
     if ( sp != std::string::npos ) cmd = cmd.substr(0, sp);
     static const std::set<std::string> immediate = {
         // read-only displays / menus
-        "/about", "/info", "/status", "/stats", "/diagnose", "/stop", "/interrupt", "/help", "/theme", "/settings", "/workflows",
+        "/about", "/info", "/status", "/stats", "/diagnose", "/stop", "/interrupt", "/steer!", "/help", "/theme", "/settings", "/workflows",
         "/trust", "/history", "/memories", "/roadmap", "/tasks", "/skills", "/pins",
         "/context", "/cost", "/changes", "/mcp", "/paste", "/raw", "/limits", "/jobs",
         "/sessions",
@@ -1953,14 +1953,32 @@ void InlineRepl::on_enter() {
                 draw_live();
                 return;
             }
-            bool is_steer = trimmed.rfind("/steer", 0) == 0;
+            bool is_steer_bang = ( trimmed == "/steer!" || trimmed.rfind("/steer! ", 0) == 0 );
+            bool is_steer = ( trimmed.rfind("/steer", 0) == 0 );
             PendingKind kind = ( is_steer || trimmed.rfind("/btw", 0) == 0 || trimmed.rfind("/note", 0) == 0 )
                 ? PendingKind::LiveNote : ( trimmed[0] == '!' ? PendingKind::Shell : PendingKind::Command );
             if ( kind == PendingKind::LiveNote ) {
-                std::lock_guard<std::mutex> lk(_mx);
-                _live_updates.push_back(trimmed);
-                _notices.push({ is_steer ? "● steering update queued for the next checkpoint"
-                                         : "● btw update queued for the next checkpoint", false });
+                if ( is_steer_bang || ( is_steer && _config.steering_mode == "immediate" ) ) {
+                    std::string prompt;
+                    if ( is_steer_bang ) prompt = trimmed.size() > 7 ? common::trim_ws(trimmed.substr(7)) : "";
+                    else prompt = trimmed.size() > 6 ? common::trim_ws(trimmed.substr(6)) : "";
+                    if ( prompt.empty()) {
+                        notify_quiet("usage: /steer! <prompt>  — interrupt active request and redirect immediately");
+                    } else {
+                        {
+                            std::lock_guard<std::mutex> lk(_mx);
+                            _live_updates.push_back("/steer " + prompt);
+                        }
+                        agent::turn_steer_interrupt.store(true, std::memory_order_relaxed);
+                        agent::turn_abort.store(true, std::memory_order_relaxed);
+                        notify_quiet("● immediate steering applied — redirecting active turn: " + prompt);
+                    }
+                } else {
+                    std::lock_guard<std::mutex> lk(_mx);
+                    _live_updates.push_back(trimmed);
+                    _notices.push({ is_steer ? "● steering update queued for the next checkpoint (use /steer! to redirect immediately)"
+                                             : "● btw update queued for the next checkpoint", false });
+                }
             } else {
                 enqueue_pending(trimmed, kind);
                 std::string label = ( kind == PendingKind::Shell ? "● shell command queued for next turn: " : "● command queued for next turn: " );
@@ -1972,10 +1990,12 @@ void InlineRepl::on_enter() {
             return;
         }
         if ( trimmed.rfind("/steer", 0) == 0 ) {
-            std::string prompt = common::trim_ws(trimmed.substr(6));
+            bool is_bang = ( trimmed.rfind("/steer!", 0) == 0 );
+            std::string prompt = common::trim_ws(trimmed.substr(is_bang ? 7 : 6));
             if ( prompt.empty()) {
                 echo_user(trimmed);
-                wr(_theme.warn + "usage: /steer <prompt>  — steer active work at the next checkpoint, or send as a prompt\n" + Theme::reset);
+                wr(_theme.warn + "usage: " + (is_bang ? "/steer! <prompt>" : "/steer <prompt>") +
+                   "  — steer active work, or send as a prompt\n" + Theme::reset);
                 _input.clear(); _cursor = 0; _input_window_start = 0;
                 draw_live();
                 return;
@@ -1997,9 +2017,28 @@ void InlineRepl::on_enter() {
     _stashed_input.clear();
 
     if ( _turn_running ) {
+        if ( _config.steering_mode == "immediate" ) {
+            {
+                std::lock_guard<std::mutex> lk(_mx);
+                _live_updates.push_back("/steer " + line);
+            }
+            agent::turn_steer_interrupt.store(true, std::memory_order_relaxed);
+            agent::turn_abort.store(true, std::memory_order_relaxed);
+            notify_quiet("● immediate steering applied — redirecting active turn: " + line);
+            drain_notices();
+            { std::lock_guard<std::mutex> lk(_mx); _auto_since_user = 0; }
+            _input.clear();
+            _cursor = 0;
+            _input_window_start = 0;
+            for ( auto& p : _pastes ) _sent_pastes.push_back(p);
+            _pastes.clear();
+            draw_live();
+            return;
+        }
+
         // A turn is in flight — queue this one to auto-send when it finishes.
         enqueue_pending(line, PendingKind::Message);
-        notify_quiet("● message queued for next turn");
+        notify_quiet("● message queued for next turn (use /steer! to redirect immediately)");
         drain_notices();
         { std::lock_guard<std::mutex> lk(_mx); _auto_since_user = 0; } // real user input resets the auto-resume guard
         _input.clear();
@@ -2857,6 +2896,56 @@ void InlineRepl::shell_command() {
 void InlineRepl::run_command_line(const std::string& trimmed) {
     // Always called when idle (no turn running) — except the commands marked
     // "immediate" (see command_runs_immediately), which may arrive mid-turn.
+    if ( trimmed == "/steer!" || trimmed.rfind("/steer! ", 0) == 0 ) {
+        std::string prompt = trimmed.size() > 7 ? common::trim_ws(trimmed.substr(7)) : "";
+        if ( prompt.empty()) {
+            render_command(trimmed, "usage: /steer! <prompt>  — interrupt active request and redirect immediately");
+            return;
+        }
+        if ( _turn_running ) {
+            {
+                std::lock_guard<std::mutex> lk(_mx);
+                _live_updates.push_back("/steer " + prompt);
+            }
+            agent::turn_steer_interrupt.store(true, std::memory_order_relaxed);
+            agent::turn_abort.store(true, std::memory_order_relaxed);
+            notify_quiet("● immediate steering applied — redirecting active turn: " + prompt);
+            drain_notices();
+            tcflush(STDIN_FILENO, TCIFLUSH);
+            draw_live();
+            return;
+        } else {
+            _prompt_history.push_back(trimmed);
+            _history_index = _prompt_history.size();
+            _stashed_input.clear();
+            _input.clear(); _cursor = 0; _input_window_start = 0;
+            echo_user(prompt);
+            start_turn(prompt, prompt, /*already_echoed=*/true);
+            return;
+        }
+    }
+    if ( trimmed.rfind("/stop ", 0) == 0 || trimmed.rfind("/interrupt ", 0) == 0 ) {
+        size_t sp = trimmed.find(' ');
+        std::string prompt = ( sp != std::string::npos ) ? common::trim_ws(trimmed.substr(sp + 1)) : "";
+        if ( !prompt.empty()) {
+            if ( _turn_running ) {
+                {
+                    std::lock_guard<std::mutex> lk(_mx);
+                    _live_updates.push_back("/steer " + prompt);
+                }
+                agent::turn_steer_interrupt.store(true, std::memory_order_relaxed);
+                agent::turn_abort.store(true, std::memory_order_relaxed);
+                notify_quiet("● interrupt with steering applied — redirecting active turn: " + prompt);
+                drain_notices();
+                tcflush(STDIN_FILENO, TCIFLUSH);
+                draw_live();
+                return;
+            } else {
+                render_command(trimmed, "no active turn to interrupt");
+                return;
+            }
+        }
+    }
     if ( trimmed == "/shell" ) {
         shell_command();
         return;
@@ -3466,8 +3555,8 @@ void InlineRepl::open_settings_menu() {
         "read-only mode: inspect and propose plans without mutating files or running commands",
         { "off", "on" });
     add("steering_mode", "steering mode", _config.steering_mode.empty() ? "checkpoint" : _config.steering_mode, TOOLS,
-        "how steering updates are applied: checkpoint (at tool boundaries) · next_turn (after turn)",
-        { "checkpoint", "next_turn" });
+        "how steering updates are applied: checkpoint (at tool boundaries) · immediate (interrupt in-flight) · next_turn (after turn)",
+        { "checkpoint", "immediate", "next_turn" });
     add("steer", "steering", _config.steering.empty() ? "(none)" : _config.steering, TOOLS,
         "persistent steering guidance for the model (Enter to edit, or /steer clear to reset)");
     add("strict", "strict",

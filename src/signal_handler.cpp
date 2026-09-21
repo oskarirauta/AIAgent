@@ -11,6 +11,7 @@ std::atomic<bool> running{true};
 std::atomic<int> sigint_count{0};
 std::atomic<bool> turn_active{false};
 std::atomic<bool> turn_abort{false};
+std::atomic<bool> turn_steer_interrupt{false};
 std::atomic<bool> winch_pending{false};
 
 static void winch_handler(int) {

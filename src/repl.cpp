@@ -1608,9 +1608,19 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
     } turn_finalizer{ _stats, cur_turn, turn_start };
 
     auto apply_live_updates = [&]() {
-        if ( !_live_update_cb ) return;
+        std::vector<std::string> updates;
+        if ( _live_update_cb ) {
+            auto from_cb = _live_update_cb();
+            updates.insert(updates.end(), from_cb.begin(), from_cb.end());
+        }
+        {
+            std::lock_guard<std::mutex> lk(_pending_live_updates_mx);
+            updates.insert(updates.end(), _pending_live_updates.begin(), _pending_live_updates.end());
+            _pending_live_updates.clear();
+        }
+        if ( updates.empty()) return;
         size_t applied = 0;
-        for ( const std::string& command : _live_update_cb() ) {
+        for ( const std::string& command : updates ) {
             std::string note = command;
             bool is_steer = false;
             if ( note.rfind("/steer", 0) == 0 ) { note.erase(0, 6); is_steer = true; }
@@ -1637,9 +1647,21 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         apply_live_updates();
 
         if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
-            _conversation.undo_last(); // drop the interrupted exchange from history
+            if ( agent::turn_steer_interrupt.load(std::memory_order_relaxed)) {
+                agent::turn_steer_interrupt.store(false, std::memory_order_relaxed);
+                abort_flag->store(false, std::memory_order_relaxed);
+                if ( showing_thinking ) {
+                    if ( stream_cb ) stream_cb("\n\x02\n\n");
+                    showing_thinking = false;
+                }
+                if ( stream_cb )
+                    stream_cb("\n\n● steering applied — redirecting model...\n\n");
+                apply_live_updates();
+                save_conversation();
+                continue;
+            }
             save_conversation();
-            return "";
+            return "(interrupted — output so far is kept; send a message to continue)";
         }
 
         _provider->prepare_request(_client);
@@ -1661,6 +1683,7 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         // a mid-stream failure never double-renders. `produced` tracks that.
         bool produced = false;
         bool failed_over = false;
+        bool steered_restart = false;
         bool reauthed = false; // one silent credential refresh per request on a 401
         size_t estimated_request_tokens = 0;
         for ( int attempt = 0; ; ++attempt ) {
@@ -1719,9 +1742,22 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                         stream_cb(tail);
 
                     if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
-                        _conversation.undo_last();
+                        if ( agent::turn_steer_interrupt.load(std::memory_order_relaxed)) {
+                            agent::turn_steer_interrupt.store(false, std::memory_order_relaxed);
+                            abort_flag->store(false, std::memory_order_relaxed);
+                            if ( showing_thinking ) {
+                                if ( stream_cb ) stream_cb("\n\x02\n\n");
+                                showing_thinking = false;
+                            }
+                            if ( stream_cb )
+                                stream_cb("\n\n● steering applied — redirecting model...\n\n");
+                            apply_live_updates();
+                            save_conversation();
+                            steered_restart = true;
+                            break;
+                        }
                         save_conversation();
-                        return "";
+                        return "(interrupted — output so far is kept; send a message to continue)";
                     }
                     resp = _provider->stream_result();
                     _last_response = raw_response_dump(resp); // for /raw (assembled from the stream)
@@ -1731,9 +1767,22 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                     estimated_request_tokens = _provider ? _provider->estimate_tokens(body) : (body.size() / 4);
                     std::string response_str = _client.post(_provider->endpoint(), _provider->auth_header(), _provider->auth_value(), headers, body, abort_flag);
                     if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
-                        _conversation.undo_last();
+                        if ( agent::turn_steer_interrupt.load(std::memory_order_relaxed)) {
+                            agent::turn_steer_interrupt.store(false, std::memory_order_relaxed);
+                            abort_flag->store(false, std::memory_order_relaxed);
+                            if ( showing_thinking ) {
+                                if ( stream_cb ) stream_cb("\n\x02\n\n");
+                                showing_thinking = false;
+                            }
+                            if ( stream_cb )
+                                stream_cb("\n\n● steering applied — redirecting model...\n\n");
+                            apply_live_updates();
+                            save_conversation();
+                            steered_restart = true;
+                            break;
+                        }
                         save_conversation();
-                        return "";
+                        return "(interrupted — output so far is kept; send a message to continue)";
                     }
                     _last_response = response_str; // for /raw (the raw JSON body)
                     resp = _provider->parse_response(JSON::parse(response_str));
@@ -1789,16 +1838,31 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                 if ( _progress_cb )
                     _progress_cb("provider busy — retrying in " + std::to_string(ms / 1000.0).substr(0, 3) + "s");
                 for ( long slept = 0; slept < ms; slept += 100 ) {
-                    if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) { _conversation.undo_last(); save_conversation(); return ""; }
+                    if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
+                        if ( agent::turn_steer_interrupt.load(std::memory_order_relaxed)) {
+                            agent::turn_steer_interrupt.store(false, std::memory_order_relaxed);
+                            abort_flag->store(false, std::memory_order_relaxed);
+                            if ( stream_cb )
+                                stream_cb("\n\n● steering applied — redirecting model...\n\n");
+                            apply_live_updates();
+                            save_conversation();
+                            steered_restart = true;
+                            break;
+                        }
+                        save_conversation();
+                        return "(interrupted — output so far is kept; send a message to continue)";
+                    }
                     struct timespec ts { 0, 100L * 1000 * 1000 };
                     nanosleep(&ts, nullptr);
                 }
+                if ( steered_restart )
+                    break;
             }
         }
 
-        // Failed over to another provider — retry the same turn from the top, so the
-        // request/headers/tools are rebuilt for the new provider.
-        if ( failed_over )
+        // Steered restart or failed over to another provider — retry the same turn from the top, so the
+        // request/headers/tools are rebuilt for the new provider or updated guidance.
+        if ( steered_restart || failed_over )
             continue;
 
         bool reported = (resp.input_tokens > 0);
@@ -2082,8 +2146,19 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
         // the tool results — the command's partial output is already captured, so
         // it stays in context and a follow-up message can reason over it, instead
         // of undoing the whole exchange and throwing that log away.
-        if ( abort_flag && abort_flag->load(std::memory_order_relaxed))
-            return "(interrupted — output so far is kept; send a message to continue)";
+        if ( abort_flag && abort_flag->load(std::memory_order_relaxed)) {
+            if ( agent::turn_steer_interrupt.load(std::memory_order_relaxed)) {
+                agent::turn_steer_interrupt.store(false, std::memory_order_relaxed);
+                abort_flag->store(false, std::memory_order_relaxed);
+                if ( stream_cb )
+                    stream_cb("\n\n● steering applied — continuing turn with instructions...\n\n");
+                apply_live_updates();
+                save_conversation();
+            } else {
+                save_conversation();
+                return "(interrupted — output so far is kept; send a message to continue)";
+            }
+        }
 
         // Per-turn tool-call budget: a runaway-loop guard so `/tools auto` can be
         // left unattended. After every `tool_call_limit` calls, ask whether to
@@ -2474,6 +2549,7 @@ std::string Repl::handle_command(const std::string& line) {
         else return "usage: /plan [on|off]";
         _registry.set_plan_mode(_config.plan_mode);
         _conversation.set_system(base_system_prompt()); // the model learns the mode
+        _config.save_settings(_config.home_dir);
         return _config.plan_mode
              ? "plan mode ON — read-only tools only; I'll investigate and propose a plan, "
                "no changes until you /plan off"
@@ -2527,19 +2603,39 @@ std::string Repl::handle_command(const std::string& line) {
         return "noted — added to the context (no reply); the model will see it on your next message";
     }
 
+    if ( cmd == "/steer!" ) {
+        std::string trimmed_args = common::trim_ws(args);
+        if ( trimmed_args.empty())
+            return "usage: /steer! <prompt>  — interrupt active request and redirect immediately";
+        if ( agent::turn_active.load(std::memory_order_relaxed)) {
+            push_live_update("/steer " + trimmed_args);
+            agent::turn_steer_interrupt.store(true, std::memory_order_relaxed);
+            agent::turn_abort.store(true, std::memory_order_relaxed);
+            return "immediate steering applied — redirecting active turn: " + trimmed_args;
+        }
+        return handle_command("/steer " + trimmed_args);
+    }
+
     if ( cmd == "/steer" ) {
         std::string trimmed_args = common::trim_ws(args);
         if ( trimmed_args.empty()) {
             std::string cur = _config.steering.empty() ? "(none)" : _config.steering;
             return "current steering guidance: " + cur + "\nsteering mode: " + _config.steering_mode +
-                   "\n\nusage: /steer <prompt>  — steer active work at the next checkpoint, or send as a prompt\n"
-                   "       /steer clear     — clear persistent steering guidance";
+                   "\n\nusage: /steer <prompt>   — steer active work at the next checkpoint, or send as a prompt\n"
+                   "       /steer! <prompt>  — interrupt active request and redirect immediately\n"
+                   "       /steer clear      — clear persistent steering guidance";
         }
         if ( trimmed_args == "clear" || trimmed_args == "off" || trimmed_args == "reset" || trimmed_args == "none" ) {
             _config.steering.clear();
             _config.save_settings(_config.home_dir);
             _conversation.set_system(base_system_prompt());
             return "steering guidance cleared";
+        }
+        if ( agent::turn_active.load(std::memory_order_relaxed) && _config.steering_mode == "immediate" ) {
+            push_live_update("/steer " + trimmed_args);
+            agent::turn_steer_interrupt.store(true, std::memory_order_relaxed);
+            agent::turn_abort.store(true, std::memory_order_relaxed);
+            return "immediate steering applied — redirecting active turn: " + trimmed_args;
         }
         _config.steering = trimmed_args;
         _config.save_settings(_config.home_dir);
@@ -2728,11 +2824,17 @@ std::string Repl::handle_command(const std::string& line) {
     }
 
     if ( cmd == "/stop" || cmd == "/interrupt" ) {
-        if ( !args.empty()) return "usage: " + cmd;
         if ( !agent::turn_active.load(std::memory_order_relaxed))
-            return "no active turn";
+            return "no active turn to interrupt";
+        if ( !args.empty()) {
+            std::string prompt = common::trim_ws(args);
+            push_live_update("/steer " + prompt);
+            agent::turn_steer_interrupt.store(true, std::memory_order_relaxed);
+            agent::turn_abort.store(true, std::memory_order_relaxed);
+            return "interrupt and steer requested — redirecting model with: " + prompt;
+        }
         agent::turn_abort.store(true, std::memory_order_relaxed);
-        return "interrupt requested — finishing the current tool call safely";
+        return "interrupt requested — finishing the current operation safely";
     }
 
     if ( cmd == "/info" || cmd == "/about" ) {
@@ -2775,13 +2877,14 @@ std::string Repl::handle_command(const std::string& line) {
             }
             if ( key == "steering_mode" ) {
                 std::string v = common::to_lower(val);
-                if ( v == "checkpoint" || v == "turn" || v == "next_turn" ) {
-                    _config.steering_mode = ( v == "checkpoint" ? "checkpoint" : "next_turn" );
+                if ( v == "checkpoint" || v == "turn" || v == "next_turn" || v == "immediate" ) {
+                    _config.steering_mode = ( v == "immediate" ? "immediate" : ( v == "checkpoint" ? "checkpoint" : "next_turn" ) );
                     _config.save_settings(_config.home_dir);
                     return "steering mode: " + _config.steering_mode +
-                           ( _config.steering_mode == "checkpoint" ? " (applied at tool boundaries)" : " (applied at turn boundaries)" );
+                           ( _config.steering_mode == "immediate" ? " (interrupts in-flight generation immediately)" :
+                             ( _config.steering_mode == "checkpoint" ? " (applied at tool boundaries)" : " (applied at turn boundaries)" ) );
                 }
-                return "usage: /settings steering_mode <checkpoint|next_turn>";
+                return "usage: /settings steering_mode <checkpoint|immediate|next_turn>";
             }
             if ( key == "thinking" || key == "effort" ) return handle_command("/thinking " + val);
             if ( key == "bell" ) return handle_command("/bell " + val);

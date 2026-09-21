@@ -11,6 +11,9 @@ extern std::atomic<int> sigint_count;
 // (via turn_abort) instead of quitting the program.
 extern std::atomic<bool> turn_active;
 extern std::atomic<bool> turn_abort;
+// When true alongside turn_abort, indicates immediate hard steering was requested
+// to safely interrupt in-flight generation, inject user steering, and continue generation.
+extern std::atomic<bool> turn_steer_interrupt;
 
 // Set by the SIGWINCH handler when the terminal is resized; the REPL loop clears
 // it and redraws the live block at the new width.

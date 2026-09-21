@@ -114,13 +114,18 @@ private:
     // /compact can show a live progress bar while it summarises.
     std::function<void(const std::string&)> _progress_cb;
     // One compact transcript line per executed tool call (e.g. "⚙ read_file
-    // src/x.cpp · 0.3s"). May be called from worker/pool threads.
     std::function<void(const std::string&)> _tool_notice_cb;
     std::function<std::vector<std::string>()> _live_update_cb;
+    std::vector<std::string> _pending_live_updates;
+    std::mutex _pending_live_updates_mx;
 public:
     void set_progress_callback(std::function<void(const std::string&)> cb) { _progress_cb = std::move(cb); }
     void set_tool_notice_callback(std::function<void(const std::string&)> cb) { _tool_notice_cb = std::move(cb); }
     void set_live_update_callback(std::function<std::vector<std::string>()> cb) { _live_update_cb = std::move(cb); }
+    void push_live_update(const std::string& update) {
+        std::lock_guard<std::mutex> lk(_pending_live_updates_mx);
+        _pending_live_updates.push_back(update);
+    }
 private:
     // Switch the active provider mid-session, carrying the current conversation
     // over (re-auth non-interactively). Returns text to display.

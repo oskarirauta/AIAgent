@@ -48,10 +48,10 @@ public:
     bool insecure = false;      // run every tool without asking (implies no danger warnings)
     bool tool_mode_explicit = false; // a CLI flag (-T/-Y/-I) set the mode; don't let saved state override it
     bool strict = false;        // in confirm mode, ignore the safe-command allowlist
-    bool plan_mode = false;     // read-only planning: mutating tools are blocked (session-only)
+    bool plan_mode = false;     // read-only planning: mutating tools are blocked
     std::string tool_profile = "code"; // active tool profile: full|code|research|review|minimal (default: code)
     std::string steering;       // persistent steering guidance for the model (empty = none)
-    std::string steering_mode = "checkpoint"; // steering behavior: checkpoint|next_turn
+    std::string steering_mode = "checkpoint"; // steering behavior: checkpoint|immediate|next_turn
     bool steal_lock = false;    // --steal-lock: take over a session locked by a live agent (session-only)
     // Named session within this project: several conversations can live side by
     // side in one directory (e.g. one building, one reviewing), each with its own
@@ -176,6 +176,7 @@ public:
         size_t tool_call_limit = 100;
         size_t max_tokens = 64000;
         std::string tool_profile = "code";
+        bool plan_mode = false;
         std::string steering;
         std::string steering_mode = "checkpoint";
     };

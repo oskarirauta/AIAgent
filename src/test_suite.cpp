@@ -2341,6 +2341,7 @@ static void test_settings_persistence() {
     c.advisor = true; c.advisor_model = "claude-sonnet-4-6";
     c.steering = "focus on tests";
     c.steering_mode = "next_turn";
+    c.plan_mode = true;
     c.save_settings(home);
 
     auto last = agent::Config::load_last_used(home);
@@ -2360,6 +2361,7 @@ static void test_settings_persistence() {
     check(last.advisor_model == "claude-sonnet-4-6", "advisor_model persisted");
     check(last.steering == "focus on tests", "steering persisted");
     check(last.steering_mode == "next_turn", "steering_mode persisted");
+    check(last.plan_mode == true, "plan_mode persisted");
 
     agent::Config c2;
     c2.apply_settings(last);
@@ -2369,6 +2371,7 @@ static void test_settings_persistence() {
     check(c2.auto_compact, "apply_settings restores auto_compact");
     check(c2.advisor && c2.advisor_model == "claude-sonnet-4-6", "apply_settings restores advisor + model");
     check(c2.steering == "focus on tests" && c2.steering_mode == "next_turn", "apply_settings restores steering + steering_mode");
+    check(c2.plan_mode == true, "apply_settings restores plan_mode");
 
     std::filesystem::remove_all(home);
 }
@@ -4189,6 +4192,36 @@ static void test_settings_commands_and_emergency_compact() {
     check(repl.config().steering_mode == "next_turn", "/settings steering_mode next_turn works");
     repl.handle_command("/settings steering_mode checkpoint");
     check(repl.config().steering_mode == "checkpoint", "/settings steering_mode checkpoint works");
+    repl.handle_command("/settings steering_mode immediate");
+    check(repl.config().steering_mode == "immediate", "/settings steering_mode immediate works");
+
+    // Test /steer! usage when idle
+    std::string steer_out = repl.handle_command("/steer!");
+    check(steer_out.find("usage:") != std::string::npos, "/steer! without args reports usage");
+
+    // Test /interrupt and /stop with prompt when turn is active vs idle
+    agent::turn_active.store(false);
+    std::string stop_idle = repl.handle_command("/stop something");
+    check(stop_idle.find("no active turn") != std::string::npos, "/stop idle reports no active turn");
+
+    agent::turn_active.store(true);
+    agent::turn_steer_interrupt.store(false);
+    agent::turn_abort.store(false);
+    std::string stop_active = repl.handle_command("/stop change direction");
+    check(stop_active.find("interrupt and steer requested") != std::string::npos, "/stop with prompt requests steer interrupt");
+    check(agent::turn_steer_interrupt.load(), "turn_steer_interrupt set by /stop prompt");
+    check(agent::turn_abort.load(), "turn_abort set by /stop prompt");
+
+    agent::turn_steer_interrupt.store(false);
+    agent::turn_abort.store(false);
+    std::string steer_bang = repl.handle_command("/steer! urgent fix");
+    check(steer_bang.find("immediate steering applied") != std::string::npos, "/steer! requests immediate steering");
+    check(agent::turn_steer_interrupt.load(), "turn_steer_interrupt set by /steer!");
+    check(agent::turn_abort.load(), "turn_abort set by /steer!");
+
+    agent::turn_steer_interrupt.store(false);
+    agent::turn_abort.store(false);
+    agent::turn_active.store(false);
 
     // Test /settings steer <prompt>
     repl.handle_command("/settings steer focus on accuracy");
