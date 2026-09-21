@@ -422,7 +422,7 @@ If you launch without `-p`, the last provider is reused; without `-m`, that prov
 - **Enter** sends; **Ctrl-J** (or Alt+Enter) inserts a newline for multi-line prompts (shown inline as a `↵` glyph).
 - **Paste** (bracketed): small pastes are inserted inline; large ones collapse into an atomic `[paste #N: L lines]` box in the input, and expand into a framed block in the transcript. Boxes and newline glyphs behave as single units for cursor movement and deletion.
 - Messages are marked so speakers are easy to tell apart: `›` (you), `●` (AI), `⚙` (a command).
-- **Ctrl-C** interrupts the current turn (or quits when idle); **Ctrl-D** or `/exit` / `/quit` leaves.
+- **Ctrl-C** interrupts the current turn (or exits when pressed twice when idle); **Ctrl-D** or `/exit` / `/quit` leaves.
 
 Slash commands run locally (never sent to the model):
 

@@ -284,6 +284,8 @@ private:
     size_t _cursor = 0;                 // byte offset of the cursor within _input
     size_t _input_window_start = 0;     // horizontal scroll offset (display cells) for the prompt
     bool _esc_pending = false;          // a lone ESC seen; the next key is its (possibly delayed) follow-up
+    bool _ctrl_c_pending = false;       // Ctrl-C pressed once when idle; second press exits
+    std::chrono::steady_clock::time_point _ctrl_c_time{};
     std::vector<PasteItem> _pastes;     // large pastes referenced by inline placeholders
     std::vector<PasteItem> _sent_pastes; // pastes from sent messages, for /paste <n>
     size_t _paste_counter = 0;

@@ -1728,7 +1728,7 @@ void InlineRepl::run() {
     wr("\033[H\033[2J\033[3J");
 
     wr("\033[1magent\033[0m — " + _config.provider + " · " + _config.model + "\n");
-    wr(_theme.dim + "Type your message. /exit or /quit to leave, Ctrl-C to interrupt." + Theme::reset + "\n");
+    wr(_theme.dim + "Type your message. /exit or /quit to leave, Ctrl-C twice to exit." + Theme::reset + "\n");
 
     // Show the previous session's last exchange (if this directory has one) so a
     // resumed conversation opens where it left off instead of on a blank screen.
@@ -2856,6 +2856,7 @@ void InlineRepl::commit_confirm(tools::Decision d, const std::string& label) {
     _confirming = false;
     _confirm_note_mode = false;
     _confirm_note_buf.clear();
+    _ctrl_c_pending = false;
     draw_live();
 }
 
@@ -3751,6 +3752,7 @@ void InlineRepl::close_settings_menu() {
     _settings_menu_lines = 0;
     _in_settings = false;
     _settings_editing = false;
+    _ctrl_c_pending = false;
     // Anything queued while the menu was up resumes now — but ONLY if no turn is
     // in flight. If the menu was opened mid-turn, draining here would start a
     // second turn on top of the running one (reassigning the live worker thread →
@@ -4178,6 +4180,7 @@ void InlineRepl::close_list_menu() {
     _in_list = false;
     _list_detail = false;
     _wf_active = false;
+    _ctrl_c_pending = false;
     bool has_pending;
     {
         std::lock_guard<std::mutex> lk(_mx);
@@ -4372,6 +4375,10 @@ void InlineRepl::handle_confirm_key(int c) {
 }
 
 void InlineRepl::handle_byte(int c) {
+    if ( c != 0x03 && _ctrl_c_pending ) {
+        _ctrl_c_pending = false;
+    }
+
     // Follow-up to a lone ESC whose next byte was delayed past the peek window:
     // ESC then Enter inserts a newline (Alt+Enter typed as two keys); any other
     // key means the ESC was standalone, so fall through and handle this key.
@@ -4395,16 +4402,30 @@ void InlineRepl::handle_byte(int c) {
             return;
         case 0x03: // Ctrl-C
             if ( _turn_running ) {
+                _ctrl_c_pending = false;
                 // Interrupt the in-flight turn (works even if the request hangs).
                 agent::turn_abort.store(true, std::memory_order_relaxed);
             } else if ( !_input.empty()) {
+                _ctrl_c_pending = false;
                 _input.clear();
                 _cursor = 0;
                 _input_window_start = 0;
                 _pastes.clear();
                 draw_live();
             } else {
-                agent::running.store(false, std::memory_order_relaxed);
+                auto now = std::chrono::steady_clock::now();
+                if ( _ctrl_c_pending &&
+                     std::chrono::duration_cast<std::chrono::milliseconds>(now - _ctrl_c_time).count() <= 2500 ) {
+                    _ctrl_c_pending = false;
+                    agent::running.store(false, std::memory_order_relaxed);
+                } else {
+                    _ctrl_c_pending = true;
+                    _ctrl_c_time = now;
+                    notify_quiet("● Press Ctrl-C again to exit");
+                    drain_notices();
+                    tcflush(STDIN_FILENO, TCIFLUSH);
+                    draw_live();
+                }
             }
             return;
         case 0x04: // Ctrl-D
@@ -4691,6 +4712,7 @@ void InlineRepl::commit_ask(const std::string& answer) {
     }
     _cv.notify_all();
     _asking = false;
+    _ctrl_c_pending = false;
     draw_live();
 }
 

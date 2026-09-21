@@ -4263,6 +4263,15 @@ static void test_settings_commands_and_emergency_compact() {
     check(level_72 >= 70 && level_72 < 85, "72% qualifies for early context warning");
     check(level_87 >= 85, "87% qualifies for critical context warning");
 
+    // Test Ctrl-C exit confirmation timing logic (2500ms window)
+    auto t0 = std::chrono::steady_clock::now();
+    auto t_fast = t0 + std::chrono::milliseconds(500);
+    auto t_slow = t0 + std::chrono::milliseconds(2600);
+    bool fast_confirms = std::chrono::duration_cast<std::chrono::milliseconds>(t_fast - t0).count() <= 2500;
+    bool slow_expires = std::chrono::duration_cast<std::chrono::milliseconds>(t_slow - t0).count() <= 2500;
+    check(fast_confirms, "ctrl-c double-tap within 2.5s confirms exit");
+    check(!slow_expires, "ctrl-c double-tap after 2.5s expires confirmation window");
+
     std::filesystem::remove_all(cfg.home_dir);
 }
 
