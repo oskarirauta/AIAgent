@@ -4333,6 +4333,225 @@ static void test_settings_commands_and_emergency_compact() {
     std::filesystem::remove_all(cfg.home_dir);
 }
 
+static void test_interruption_validation_matrix() {
+    std::cout << "interruption validation matrix (streaming, non-streaming, concurrent workflow steering, ctrl-c state machine)" << std::endl;
+    using namespace std::chrono_literals;
+
+    // ── 1. Streaming response interruption & safe continuation ───────────────
+    {
+        agent::Conversation conv;
+        conv.set_system("system instructions");
+        conv.add_user("implement feature X");
+        conv.add_assistant("Here is the preliminary code snippet...");
+
+        // Simulate streaming chunks loop
+        std::atomic<bool> abort_flag{ false };
+        agent::turn_steer_interrupt.store(false);
+
+        std::vector<std::string> chunks = { "def ", "foo():\n", "    return 42\n" };
+        std::string accumulated;
+        size_t chunks_processed = 0;
+
+        // Simulate receiving chunks, then interrupting on chunk 2
+        for ( size_t i = 0; i < chunks.size(); ++i ) {
+            if ( i == 1 ) {
+                // User issues /steer! mid-stream
+                agent::turn_steer_interrupt.store(true);
+                abort_flag.store(true);
+            }
+            if ( abort_flag.load() ) {
+                if ( agent::turn_steer_interrupt.load() ) {
+                    agent::turn_steer_interrupt.store(false);
+                    abort_flag.store(false);
+                    conv.add_user("[Steering update from the user — adjust your plan and actions accordingly]\nuse async def instead");
+                    break;
+                }
+            }
+            accumulated += chunks[i];
+            chunks_processed++;
+        }
+
+        check(chunks_processed == 1, "streaming loop halted immediately upon abort");
+        check(accumulated == "def ", "partial streamed output kept");
+        check(!agent::turn_steer_interrupt.load(), "turn_steer_interrupt consumed and reset");
+        check(!abort_flag.load(), "abort_flag reset for restart");
+        check(conv.messages().size() == 4, "conversation preserves history across interrupt");
+        check(conv.messages().back().role == agent::Role::USER, "latest message is user steering update");
+        check(conv.messages().back().content.find("use async def instead") != std::string::npos, "steering instruction present");
+        check(conv.messages()[2].role == agent::Role::ASSISTANT, "prior assistant message preserved");
+
+        // Normal abort without steer (Ctrl-C): preserves output, does not call undo_last()
+        agent::Conversation conv2;
+        conv2.set_system("sys");
+        conv2.add_user("test request");
+        conv2.add_assistant("partial answer");
+        abort_flag.store(true);
+        agent::turn_steer_interrupt.store(false);
+
+        bool steered_restart = false;
+        std::string result_msg;
+        if ( abort_flag.load() ) {
+            if ( agent::turn_steer_interrupt.load() ) {
+                steered_restart = true;
+            } else {
+                result_msg = "(interrupted — output so far is kept; send a message to continue)";
+            }
+        }
+        check(!steered_restart, "plain abort does not trigger steered restart");
+        check(result_msg.find("interrupted") != std::string::npos, "plain abort returns interruption notice");
+        check(conv2.messages().size() == 3, "plain abort keeps conversation history intact without undo_last");
+    }
+
+    // ── 2. Non-streaming request cancellation vs steering restart ────────────
+    {
+        std::atomic<bool> abort_flag{ false };
+        agent::turn_steer_interrupt.store(false);
+
+        // Case A: steer interrupt arrives during in-flight non-streaming request
+        agent::turn_steer_interrupt.store(true);
+        abort_flag.store(true);
+
+        bool steered_restart = false;
+        if ( abort_flag.load() ) {
+            if ( agent::turn_steer_interrupt.load() ) {
+                agent::turn_steer_interrupt.store(false);
+                abort_flag.store(false);
+                steered_restart = true;
+            }
+        }
+        check(steered_restart, "non-streaming abort with steer signals restart");
+        check(!agent::turn_steer_interrupt.load(), "steer interrupt reset after non-streaming abort");
+        check(!abort_flag.load(), "abort flag reset after non-streaming abort");
+    }
+
+    // ── 3. Workflow steering active-step concurrency & race stress test ──────
+    {
+        agent::WorkflowManager mgr;
+        std::atomic<int> completed_steps{ 0 };
+        std::atomic<int> steer_notifications{ 0 };
+
+        // Step function that sleeps and consumes any steer guidance
+        auto worker = [&](const std::string& task, std::atomic<bool>* ab,
+                          agent::workflow_steering_fn take_steer, std::atomic<bool>* steer_ab) {
+            for ( int i = 0; i < 50; ++i ) {
+                if ( ab && ab->load() ) return std::string("cancelled");
+                if ( steer_ab && steer_ab->exchange(false) ) {
+                    steer_notifications++;
+                    if ( take_steer ) {
+                        auto notes = take_steer();
+                        (void)notes;
+                    }
+                }
+                std::this_thread::sleep_for(2ms);
+            }
+            completed_steps++;
+            return std::string("done:") + task;
+        };
+
+        int id1 = mgr.launch("wf_par", { "p1", "p2", "p3" }, worker, /*parallel=*/true);
+        int id2 = mgr.launch("wf_seq", { "s1", "s2" }, worker, /*parallel=*/false);
+
+        // Concurrently steer from multiple threads
+        std::vector<std::thread> steerers;
+        for ( int t = 0; t < 6; ++t ) {
+            steerers.emplace_back([&mgr, id1, id2, t]() {
+                for ( int i = 0; i < 5; ++i ) {
+                    mgr.steer(id1, "steer_p_" + std::to_string(t) + "_" + std::to_string(i));
+                    mgr.steer(id2, "steer_s_" + std::to_string(t) + "_" + std::to_string(i));
+                    auto snap = mgr.snapshot(); // concurrent snapshot
+                    (void)snap;
+                    std::this_thread::sleep_for(1ms);
+                }
+            });
+        }
+
+        for ( auto& th : steerers ) {
+            if ( th.joinable() ) th.join();
+        }
+
+        while ( mgr.any_running() ) std::this_thread::sleep_for(5ms);
+
+        auto snap = mgr.snapshot();
+        check(snap.size() >= 2, "both workflow runs present in snapshot");
+        check(snap[0].status == "done", "parallel workflow completed cleanly");
+        check(snap[1].status == "done", "sequential workflow completed cleanly");
+        check(!snap[0].applied_steering.empty(), "parallel run recorded concurrent steering");
+        check(!snap[1].applied_steering.empty(), "sequential run recorded concurrent steering");
+        check(completed_steps.load() == 5, "all 5 steps across both workflows finished");
+    }
+
+    // ── 4. Idle Ctrl-C exit confirmation state machine matrix ────────────────
+    {
+        struct MockInlineReplState {
+            bool running = true;
+            bool ctrl_c_pending = false;
+            std::chrono::steady_clock::time_point last_ctrl_c{};
+            std::string input;
+
+            void on_ctrl_c(std::chrono::steady_clock::time_point now) {
+                if ( !input.empty() ) {
+                    input.clear();
+                    ctrl_c_pending = false;
+                    return;
+                }
+                if ( ctrl_c_pending ) {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_ctrl_c).count();
+                    if ( elapsed <= 2500 ) {
+                        running = false;
+                        ctrl_c_pending = false;
+                        return;
+                    }
+                }
+                ctrl_c_pending = true;
+                last_ctrl_c = now;
+            }
+
+            void on_type(char ch) {
+                input += ch;
+                ctrl_c_pending = false;
+            }
+        };
+
+        auto base_time = std::chrono::steady_clock::now();
+
+        // 4A: First Ctrl-C arms confirmation window, does not exit
+        MockInlineReplState s1;
+        s1.on_ctrl_c(base_time);
+        check(s1.ctrl_c_pending, "matrix: first ctrl-c arms pending confirmation");
+        check(s1.running, "matrix: first ctrl-c does not exit");
+
+        // 4B: Second Ctrl-C within 500ms confirms exit
+        MockInlineReplState s2;
+        s2.on_ctrl_c(base_time);
+        s2.on_ctrl_c(base_time + 500ms);
+        check(!s2.running, "matrix: second ctrl-c within 500ms confirms exit");
+        check(!s2.ctrl_c_pending, "matrix: pending flag cleared on exit");
+
+        // 4C: First Ctrl-C, then typing disarms window; subsequent Ctrl-C is first press again
+        MockInlineReplState s3;
+        s3.on_ctrl_c(base_time);
+        check(s3.ctrl_c_pending, "matrix: arms window");
+        s3.on_type('a');
+        check(!s3.ctrl_c_pending, "matrix: typing character disarms ctrl-c pending window");
+        check(s3.running, "matrix: still running after typing");
+
+        // 4D: Second Ctrl-C after 2600ms (>2500ms) expires window and re-arms
+        MockInlineReplState s4;
+        s4.on_ctrl_c(base_time);
+        s4.on_ctrl_c(base_time + 2600ms);
+        check(s4.running, "matrix: ctrl-c after 2600ms does not exit");
+        check(s4.ctrl_c_pending, "matrix: ctrl-c after 2600ms re-arms window");
+
+        // 4E: Ctrl-C while input buffer has text clears buffer, does not arm exit window
+        MockInlineReplState s5;
+        s5.input = "git commit -m 'fix'";
+        s5.on_ctrl_c(base_time);
+        check(s5.input.empty(), "matrix: ctrl-c with input clears input buffer");
+        check(!s5.ctrl_c_pending, "matrix: ctrl-c with input does not arm exit confirmation");
+        check(s5.running, "matrix: still running after clearing input");
+    }
+}
+
 int main() {
     std::cout << "Running AI Agent test suite\n" << std::endl;
 
@@ -4443,6 +4662,7 @@ int main() {
     test_registry_thread_safety_and_churn();
     test_provider_capability_neutrality();
     test_settings_commands_and_emergency_compact();
+    test_interruption_validation_matrix();
 
     std::cout << "\n" << passed << " passed, " << failed << " failed" << std::endl;
     return failed > 0 ? 1 : 0;

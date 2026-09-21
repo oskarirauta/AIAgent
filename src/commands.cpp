@@ -32,9 +32,14 @@ const std::vector<CommandDoc>& command_catalog() {
       "Injects a note as a user message without triggering a model turn — for facts "
       "or constraints you want in context before your next real prompt." },
     { "/steer", "", "<prompt>", "Conversation", "steer active work at the next checkpoint",
-      "When a turn is running, queues a steering prompt to guide the model at the next "
-      "tool boundary/checkpoint without interrupting the turn. When idle, sends the "
-      "prompt immediately." },
+      "Guides the active turn without interrupting immediately. In `checkpoint` mode, "
+      "guidance is delivered at the next tool boundary before the model begins its next action. "
+      "When idle, queues guidance for the next turn. For background sub-agents, use "
+      "`/steer workflow <id> <prompt>`. (For persistent guidance across all sessions, "
+      "use `/settings steer <prompt>`)." },
+    { "/steer!", "", "<prompt>", "Conversation", "interrupt and redirect active turn immediately",
+      "Immediately aborts the active in-flight model request/stream, injects your guidance "
+      "as a user turn, and restarts generation right now. Output generated so far is kept." },
     { "/pin", "/pins, /unpin", "[text]", "Conversation", "keep a note in context through /compact",
       "`/pin <text>` (or `/pin` alone to pin the last reply) keeps a note in the "
       "system prompt so it survives /compact and auto-compact. `/pins` lists them, "
@@ -176,8 +181,8 @@ const std::vector<CommandDoc>& command_catalog() {
     // ── Session & UI ─────────────────────────────────────────────────────
     { "/settings", "", "[<key> <value>]", "Session & UI", "open or set settings",
       "With no argument opens the interactive settings menu. With `<key> <value>` "
-      "sets one directly (model, tools, thinking, theme, context, multiline, "
-      "auto_compact, autoresume, redact_secrets, max_tokens, tool_call_limit, …)." },
+      "sets one directly (profile, plan, steering_mode, steer, model, tools, thinking, "
+      "context, auto_compact, autoresume, redact_secrets, max_tokens, tool_call_limit, …)." },
     { "/bell", "", "[never|ask_user|question|attention|always]", "Session & UI",
       "when the terminal bell rings",
       "Controls the terminal bell. always: on every answer plus anything needing you. "

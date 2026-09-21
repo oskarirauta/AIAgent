@@ -2645,11 +2645,17 @@ std::string Repl::handle_command(const std::string& line) {
         std::string trimmed_args = common::trim_ws(args);
         if ( trimmed_args.empty()) {
             std::string cur = _config.steering.empty() ? "(none)" : _config.steering;
-            return "current steering guidance: " + cur + "\nsteering mode: " + _config.steering_mode +
-                   "\n\nusage: /steer <prompt>   — steer active work at the next checkpoint, or send as a prompt\n"
-                   "       /steer! <prompt>  — interrupt active request and redirect immediately\n"
-                   "       /steer workflow <id> <prompt> — steer an active background workflow\n"
-                   "       /steer clear      — clear persistent steering guidance";
+            return "current steering mode: " + _config.steering_mode +
+                   ( _config.steering_mode == "immediate" ? " (immediate: interrupts in-flight)" :
+                     ( _config.steering_mode == "checkpoint" ? " (checkpoint: waits for tool call)" : " (next_turn: waits for turn)" ) ) +
+                   "\npersistent steering:   " + cur + "\n\n"
+                   "Active Turn (Transient):\n"
+                   "  /steer <prompt>               — steer active work at next checkpoint, or send as a prompt\n"
+                   "  /steer! <prompt>              — interrupt active request and redirect immediately\n"
+                   "  /steer workflow <id> <prompt> — steer an active background workflow\n\n"
+                   "Persistent Guidance (Saved Across All Turns):\n"
+                   "  /settings steer <prompt>      — set persistent guidance in system prompt\n"
+                   "  /settings steer clear         — clear persistent guidance";
         }
         if ( trimmed_args.rfind("workflow ", 0) == 0 )
             return handle_command("/workflows steer " + trimmed_args.substr(9));
@@ -2659,7 +2665,7 @@ std::string Repl::handle_command(const std::string& line) {
             _config.steering.clear();
             _config.save_settings(_config.home_dir);
             _conversation.set_system(base_system_prompt());
-            return "steering guidance cleared";
+            return "persistent steering guidance cleared";
         }
         if ( agent::turn_active.load(std::memory_order_relaxed) && _config.steering_mode == "immediate" ) {
             push_live_update("/steer " + trimmed_args);
@@ -2667,12 +2673,13 @@ std::string Repl::handle_command(const std::string& line) {
             agent::turn_abort.store(true, std::memory_order_relaxed);
             return "immediate steering applied — redirecting active turn: " + trimmed_args;
         }
-        _config.steering = trimmed_args;
-        _config.save_settings(_config.home_dir);
-        _conversation.set_system(base_system_prompt());
+        if ( agent::turn_active.load(std::memory_order_relaxed)) {
+            push_live_update("/steer " + trimmed_args);
+            return "steering update queued for next checkpoint (tool boundary): " + trimmed_args;
+        }
         _conversation.add_user("[Steering update from the user — adjust your plan and actions accordingly]\n" + trimmed_args);
         save_conversation();
-        return "noted — steering prompt set (" + _config.steering_mode + " mode); will guide the model on the next turn";
+        return "noted — steering prompt queued for next turn: " + trimmed_args;
     }
 
     if ( cmd == "/provider" ) {
@@ -2906,7 +2913,17 @@ std::string Repl::handle_command(const std::string& line) {
             if ( key == "strict" ) return handle_command("/strict " + val);
             if ( key == "steer" || key == "steering" ) {
                 if ( val.empty() ) return handle_command("/steer");
-                return handle_command("/steer " + val);
+                std::string v = common::trim_ws(val);
+                if ( v == "clear" || v == "off" || v == "reset" || v == "none" ) {
+                    _config.steering.clear();
+                    _config.save_settings(_config.home_dir);
+                    _conversation.set_system(base_system_prompt());
+                    return "persistent steering guidance cleared";
+                }
+                _config.steering = v;
+                _config.save_settings(_config.home_dir);
+                _conversation.set_system(base_system_prompt());
+                return "persistent steering guidance set (injected into system prompt on every turn): " + v;
             }
             if ( key == "steering_mode" ) {
                 std::string v = common::to_lower(val);
@@ -2914,10 +2931,16 @@ std::string Repl::handle_command(const std::string& line) {
                     _config.steering_mode = ( v == "immediate" ? "immediate" : ( v == "checkpoint" ? "checkpoint" : "next_turn" ) );
                     _config.save_settings(_config.home_dir);
                     return "steering mode: " + _config.steering_mode +
-                           ( _config.steering_mode == "immediate" ? " (interrupts in-flight generation immediately)" :
-                             ( _config.steering_mode == "checkpoint" ? " (applied at tool boundaries)" : " (applied at turn boundaries)" ) );
+                           ( _config.steering_mode == "immediate"
+                               ? " (immediate: interrupts in-flight request/stream right away and restarts with new guidance)"
+                               : ( _config.steering_mode == "checkpoint"
+                                   ? " (checkpoint: waits for current tool/step to finish, injecting guidance before next request)"
+                                   : " (next_turn: delivers guidance only after the active turn completely finishes)" ) );
                 }
-                return "usage: /settings steering_mode <checkpoint|immediate|next_turn>";
+                return "usage: /settings steering_mode <checkpoint|immediate|next_turn>\n"
+                       "  immediate   — interrupts in-flight generation right away and restarts with new guidance\n"
+                       "  checkpoint  — waits for current tool call to finish; applies before next request\n"
+                       "  next_turn   — delivers guidance only after the current turn ends";
             }
             if ( key == "thinking" || key == "effort" ) return handle_command("/thinking " + val);
             if ( key == "bell" ) return handle_command("/bell " + val);

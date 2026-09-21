@@ -30,7 +30,11 @@ Injects a note as a user message without triggering a model turn — for facts o
 
 ### `/steer <prompt>`
 
-When a turn is running, queues a steering prompt to guide the model at the next tool boundary/checkpoint without interrupting the turn. When idle, sends the prompt immediately.
+Guides the active turn without interrupting immediately. In `checkpoint` mode, guidance is delivered at the next tool boundary before the model begins its next action. When idle, queues guidance for the next turn. For background sub-agents, use `/steer workflow <id> <prompt>`. (For persistent guidance across all sessions, use `/settings steer <prompt>`).
+
+### `/steer! <prompt>`
+
+Immediately aborts the active in-flight model request/stream, injects your guidance as a user turn, and restarts generation right now. Output generated so far is kept.
 
 ### `/pin [text]`  — alias `/pins, /unpin`
 
@@ -191,7 +195,7 @@ Lists background workflow runs the model started (via run_workflow). With an id,
 
 ### `/settings [<key> <value>]`
 
-With no argument opens the interactive settings menu. With `<key> <value>` sets one directly (model, tools, thinking, theme, context, multiline, auto_compact, autoresume, redact_secrets, max_tokens, tool_call_limit, …).
+With no argument opens the interactive settings menu. With `<key> <value>` sets one directly (profile, plan, steering_mode, steer, model, tools, thinking, context, auto_compact, autoresume, redact_secrets, max_tokens, tool_call_limit, …).
 
 ### `/bell [never|ask_user|question|attention|always]`
 

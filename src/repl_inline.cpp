@@ -3574,10 +3574,10 @@ void InlineRepl::open_settings_menu() {
         "read-only mode: inspect and propose plans without mutating files or running commands",
         { "off", "on" });
     add("steering_mode", "steering mode", _config.steering_mode.empty() ? "checkpoint" : _config.steering_mode, TOOLS,
-        "how steering updates are applied: checkpoint (at tool boundaries) · immediate (interrupt in-flight) · next_turn (after turn)",
+        "timing for mid-turn steering: checkpoint (at tool boundary) · immediate (interrupts now) · next_turn (after turn ends)",
         { "checkpoint", "immediate", "next_turn" });
-    add("steer", "steering", _config.steering.empty() ? "(none)" : _config.steering, TOOLS,
-        "persistent steering guidance for the model (Enter to edit, or /steer clear to reset)");
+    add("steer", "persistent steer", _config.steering.empty() ? "(none)" : _config.steering, TOOLS,
+        "persistent guidance injected into the system prompt on every turn (Enter to edit, /settings steer clear to reset)");
     add("strict", "strict",
         cur["tools"].find("(strict)") != std::string::npos ? "on" : "off", TOOLS,
         "in confirm mode, also confirm safe read-only shell commands", { "off", "on" });
