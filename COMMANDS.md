@@ -182,9 +182,9 @@ Lists skills discovered in <home>/skills and ./.agent/skills, with an active (â—
 
 When a background workflow finishes, automatically resume the conversation so the model reads its results and continues â€” instead of the results only folding in on your next message. Bounded to 2 auto-turns per real message. Also the "workflow resume" row in /settings.
 
-### `/workflows [id | cancel <id> | retry <id>]`
+### `/workflows [id | cancel <id> | retry <id> | steer <id> <prompt>]`
 
-Lists background workflow runs the model started (via run_workflow). With an id, shows its steps; `cancel <id>` stops a run, `retry <id>` relaunches a finished one keeping succeeded steps.
+Lists background workflow runs the model started (via run_workflow). With an id, shows its steps; `cancel <id>` stops a run, `retry <id>` relaunches a finished one keeping succeeded steps, and `steer <id> <prompt>` injects guidance.
 
 
 ## Session & UI

@@ -4070,7 +4070,7 @@ void InlineRepl::build_workflow_level(bool redraw) {
         if ( !run ) { _wf_level = 0; _wf_run_id = -1; _list_top = 0; _list_sel = 0; } // run went away — fall back to the list (reset scroll like a normal transition)
         else {
             m.title = "workflows › #" + std::to_string(run->id) + " " + wf_flat(run->name, 40);
-            m.hint = "↑↓ move · ⏎ open step · esc back";
+            m.hint = "↑↓ move · ⏎ open step · s steer · esc back";
             for ( size_t i = 0; i < run->steps.size(); ++i ) {
                 const auto& st = run->steps[i];
                 m.rows.push_back(wf_glyph(st.status) + " " + wf_flat(st.task, 56) + "  [" + st.status + "]");
@@ -4080,7 +4080,7 @@ void InlineRepl::build_workflow_level(bool redraw) {
     }
     if ( _wf_level == 0 ) {
         m.title = "workflows";
-        m.hint = "↑↓ move · ⏎ open · c cancel · r retry · esc close";
+        m.hint = "↑↓ move · ⏎ open · c cancel · r retry · s steer · esc close";
         for ( const auto& r : runs ) {
             int done = 0;
             for ( const auto& st : r.steps )
@@ -4094,6 +4094,7 @@ void InlineRepl::build_workflow_level(bool redraw) {
         }
         m.actions.push_back({ 'c', "", "cancel" });
         m.actions.push_back({ 'r', "", "retry" });
+        m.actions.push_back({ 's', "", "steer" });
     }
     _list = std::move(m);
     int rows = static_cast<int>(_list.rows.size());
@@ -4179,6 +4180,21 @@ void InlineRepl::handle_workflow_key(int c) {
     if ( _list_detail )
         return; // only scroll / esc in the content view
     if ( c == '\r' || c == '\n' ) { workflow_enter(); return; }
+    if ( ( _wf_level == 0 || _wf_level == 1 ) && c == 's' ) {
+        std::string id;
+        if ( _wf_level == 0 && _list_sel < static_cast<int>(_list.keys.size()) && !_list.keys[_list_sel].empty()) {
+            id = _list.keys[_list_sel];
+        } else if ( _wf_level == 1 && _wf_run_id >= 0 ) {
+            id = std::to_string(_wf_run_id);
+        }
+        if ( !id.empty()) {
+            _input = "/steer workflow " + id + " ";
+            _cursor = _input.size();
+            _input_window_start = 0;
+            close_list_menu();
+            return;
+        }
+    }
     // Actions at the runs level: c cancel, r retry (routed through the text command).
     if ( _wf_level == 0 && ( c == 'c' || c == 'r' )) {
         if ( _list_sel < static_cast<int>(_list.keys.size()) && !_list.keys[_list_sel].empty() && _command_cb ) {

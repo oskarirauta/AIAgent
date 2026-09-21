@@ -1,6 +1,8 @@
 #include "agent/workflow.hpp"
 
 #include <ctime>
+#include <chrono>
+#include "common.hpp"
 #include "json.hpp"
 #include "agent/api/client.hpp"
 #include "agent/conversation.hpp"
@@ -22,22 +24,44 @@ static long now_seconds() {
 // Repl::process_turn so a sub-agent can run with its own provider/client/tools.
 static std::string headless_loop(providers::Provider& provider, api::Client& client,
                                  tools::Registry& registry, Conversation& conv,
-                                 std::atomic<bool>* abort) {
+                                 std::atomic<bool>* abort,
+                                 workflow_steering_fn take_steering = nullptr,
+                                 std::atomic<bool>* steer_abort = nullptr) {
     const int max_iterations = 24; // safety cap against a runaway tool loop
     for ( int iter = 0; iter < max_iterations; ++iter ) {
         if ( abort && abort->load(std::memory_order_relaxed))
             return "cancelled";
 
+        if ( take_steering ) {
+            auto updates = take_steering();
+            for ( const auto& note : updates ) {
+                conv.add_user("[Steering update for this sub-agent task — adjust your actions accordingly]\n" + note);
+            }
+        }
+
         JSON tools = registry.schema();
         JSON request = provider.build_request(conv, tools);
         std::string body = request.dump_minified();
+
+        std::atomic<bool> req_abort{ false };
+        std::atomic<bool> watching{ true };
+        std::thread watcher([&]() {
+            while ( watching.load(std::memory_order_relaxed)) {
+                if ( (abort && abort->load(std::memory_order_relaxed)) ||
+                     (steer_abort && steer_abort->load(std::memory_order_relaxed)) ) {
+                    req_abort.store(true, std::memory_order_relaxed);
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            }
+        });
 
         // Post request with 401 retry handling for sub-agent workflows
         std::string resp_str;
         try {
             resp_str = client.post(provider.endpoint(), provider.auth_header(),
                                    provider.auth_value(), provider.extra_headers(),
-                                   body, abort);
+                                   body, &req_abort);
         } catch ( const std::exception& e ) {
             std::string err = e.what();
             // If 401 Unauthorized occurs mid-workflow, attempt silent token refresh and retry once
@@ -45,14 +69,31 @@ static std::string headless_loop(providers::Provider& provider, api::Client& cli
                 try {
                     resp_str = client.post(provider.endpoint(), provider.auth_header(),
                                            provider.auth_value(), provider.extra_headers(),
-                                           body, abort);
+                                           body, &req_abort);
                 } catch ( const std::exception& ex ) {
+                    watching.store(false, std::memory_order_relaxed);
+                    if ( watcher.joinable()) watcher.join();
                     return std::string("error: ") + ex.what();
                 }
             } else {
+                watching.store(false, std::memory_order_relaxed);
+                if ( watcher.joinable()) watcher.join();
                 return std::string("error: ") + err;
             }
         }
+        watching.store(false, std::memory_order_relaxed);
+        if ( watcher.joinable()) watcher.join();
+
+        if ( steer_abort && steer_abort->exchange(false, std::memory_order_relaxed)) {
+            if ( take_steering ) {
+                auto updates = take_steering();
+                for ( const auto& note : updates ) {
+                    conv.add_user("[Steering update for this sub-agent task — adjust your actions accordingly]\n" + note);
+                }
+            }
+            continue;
+        }
+
         if ( abort && abort->load(std::memory_order_relaxed))
             return "cancelled";
         if ( resp_str.empty())
@@ -87,12 +128,23 @@ static std::string headless_loop(providers::Provider& provider, api::Client& cli
             }
             conv.add_tool_result(tc.id, tc.name, result);
         }
+
+        if ( steer_abort && steer_abort->exchange(false, std::memory_order_relaxed)) {
+            if ( take_steering ) {
+                auto updates = take_steering();
+                for ( const auto& note : updates ) {
+                    conv.add_user("[Steering update for this sub-agent task — adjust your actions accordingly]\n" + note);
+                }
+            }
+        }
     }
     return "error: workflow step exceeded the tool-iteration limit";
 }
 
 std::string run_workflow_step(const Config& cfg, const std::string& task,
-                              std::atomic<bool>* abort) {
+                              std::atomic<bool>* abort,
+                              workflow_steering_fn take_steering,
+                              std::atomic<bool>* steer_abort) {
     api::Client client;
     auto provider = providers::create(cfg);
     if ( !provider )
@@ -121,7 +173,7 @@ std::string run_workflow_step(const Config& cfg, const std::string& task,
         "key file paths and facts the main agent will need.");
     conv.add_user(task);
 
-    return headless_loop(*provider, client, registry, conv, abort);
+    return headless_loop(*provider, client, registry, conv, abort, take_steering, steer_abort);
 }
 
 // ── WorkflowManager ──────────────────────────────────────────────────────
@@ -192,8 +244,14 @@ void WorkflowManager::run_entry(Entry* e, runner_fn runner) {
         }
         std::string result;
         bool step_error = false;
+        auto take_steer = [e]() -> std::vector<std::string> {
+            std::lock_guard<std::mutex> lk(e->steer_mx);
+            std::vector<std::string> out = std::move(e->pending_steer);
+            e->pending_steer.clear();
+            return out;
+        };
         try {
-            result = runner(task, &e->abort);
+            result = runner(task, &e->abort, take_steer, &e->steer_abort);
         } catch ( const std::exception& ex ) {
             result = std::string("error: ") + ex.what();
             step_error = true;
@@ -252,6 +310,14 @@ void WorkflowManager::run_entry(Entry* e, runner_fn runner) {
     }
 }
 
+int WorkflowManager::launch(const std::string& name, const std::vector<std::string>& steps,
+                            simple_runner_fn runner, bool parallel) {
+    return launch(name, steps, [runner](const std::string& task, std::atomic<bool>* abort,
+                                        workflow_steering_fn, std::atomic<bool>*) {
+        return runner(task, abort);
+    }, parallel);
+}
+
 bool WorkflowManager::cancel(int id) {
     std::lock_guard<std::mutex> lk(_mx);
     for ( auto& e : _entries ) {
@@ -263,6 +329,39 @@ bool WorkflowManager::cancel(int id) {
         return true;
     }
     return false;
+}
+
+bool WorkflowManager::steer(int id, const std::string& guidance) {
+    std::string trimmed = common::trim_ws(guidance);
+    if ( trimmed.empty())
+        return false;
+    Entry* target = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(_mx);
+        for ( auto& e : _entries ) {
+            if ( e->run.id == id && e->run.status == "running" ) {
+                target = e.get();
+                target->run.applied_steering.push_back(trimmed);
+                break;
+            }
+        }
+    }
+    if ( !target )
+        return false;
+
+    {
+        std::lock_guard<std::mutex> lk(target->steer_mx);
+        target->pending_steer.push_back(trimmed);
+    }
+    target->steer_abort.store(true, std::memory_order_relaxed);
+    return true;
+}
+
+int WorkflowManager::retry(int id, simple_runner_fn runner) {
+    return retry(id, [runner](const std::string& task, std::atomic<bool>* abort,
+                              workflow_steering_fn, std::atomic<bool>*) {
+        return runner(task, abort);
+    });
 }
 
 int WorkflowManager::retry(int id, runner_fn runner) {

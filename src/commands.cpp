@@ -167,11 +167,11 @@ const std::vector<CommandDoc>& command_catalog() {
       "the model reads its results and continues — instead of the results only folding "
       "in on your next message. Bounded to 2 auto-turns per real message. Also the "
       "\"workflow resume\" row in /settings." },
-    { "/workflows", "", "[id | cancel <id> | retry <id>]", "Skills & workflows",
+    { "/workflows", "", "[id | cancel <id> | retry <id> | steer <id> <prompt>]", "Skills & workflows",
       "(claude) background workflow runs",
       "Lists background workflow runs the model started (via run_workflow). With an "
       "id, shows its steps; `cancel <id>` stops a run, `retry <id>` relaunches a "
-      "finished one keeping succeeded steps." },
+      "finished one keeping succeeded steps, and `steer <id> <prompt>` injects guidance." },
 
     // ── Session & UI ─────────────────────────────────────────────────────
     { "/settings", "", "[<key> <value>]", "Session & UI", "open or set settings",

@@ -629,8 +629,9 @@ void Repl::sync_workflow_tool() {
             [this](const std::string& name, const std::vector<std::string>& steps, bool parallel) {
                 Config cfg = _config; // snapshot: sub-agents must not read live config
                 int id = _workflows.launch(name, steps,
-                    [cfg](const std::string& task, std::atomic<bool>* abort) {
-                        return run_workflow_step(cfg, task, abort);
+                    [cfg](const std::string& task, std::atomic<bool>* abort,
+                          workflow_steering_fn take_steer, std::atomic<bool>* steer_abort) {
+                        return run_workflow_step(cfg, task, abort, take_steer, steer_abort);
                     }, parallel);
                 return "started workflow #" + std::to_string(id) + " (" +
                        std::to_string(steps.size()) + " step(s), " +
@@ -655,26 +656,40 @@ std::string Repl::workflows_command(const std::string& args) {
     };
 
     // Subcommands: cancel <id> stops a running workflow, retry <id> relaunches a
-    // finished one (already-succeeded steps keep their results and are skipped).
+    // finished one (already-succeeded steps keep their results and are skipped),
+    // steer <id> <prompt> steers an active running workflow.
     {
         std::istringstream iss(a);
-        std::string sub, rest;
-        iss >> sub >> rest;
+        std::string sub, id_str;
+        iss >> sub >> id_str;
         std::string lsub = common::to_lower(sub);
-        if ( lsub == "cancel" || lsub == "retry" ) {
+        if ( lsub == "cancel" || lsub == "retry" || lsub == "steer" ) {
             int id = 0;
-            try { id = std::stoi(rest); } catch ( ... ) { return "usage: /workflows " + lsub + " <id>"; }
+            try { id = std::stoi(id_str); } catch ( ... ) {
+                return "usage: /workflows " + lsub + " <id>" + (lsub == "steer" ? " <prompt>" : "");
+            }
             if ( lsub == "cancel" )
                 return _workflows.cancel(id)
-                     ? "cancelling workflow #" + rest + " (its running step is aborted)"
-                     : "no running workflow #" + rest;
+                     ? "cancelling workflow #" + id_str + " (its running step is aborted)"
+                     : "no running workflow #" + id_str;
+            if ( lsub == "steer" ) {
+                std::string guidance;
+                std::getline(iss, guidance);
+                guidance = common::trim_ws(guidance);
+                if ( guidance.empty())
+                    return "usage: /workflows steer <id> <prompt>";
+                return _workflows.steer(id, guidance)
+                     ? "steering guidance sent to workflow #" + id_str + ": " + guidance
+                     : "cannot steer workflow #" + id_str + " (unknown or not running)";
+            }
             Config cfg = _config;
-            int nid = _workflows.retry(id, [cfg](const std::string& task, std::atomic<bool>* abort) {
-                return run_workflow_step(cfg, task, abort);
+            int nid = _workflows.retry(id, [cfg](const std::string& task, std::atomic<bool>* abort,
+                                                 workflow_steering_fn take_steer, std::atomic<bool>* steer_abort) {
+                return run_workflow_step(cfg, task, abort, take_steer, steer_abort);
             });
             if ( nid < 0 )
-                return "cannot retry #" + rest + " (unknown, still running, or every step succeeded)";
-            return "retrying workflow #" + rest + " as #" + std::to_string(nid) +
+                return "cannot retry #" + id_str + " (unknown, still running, or every step succeeded)";
+            return "retrying workflow #" + id_str + " as #" + std::to_string(nid) +
                    " — steps that already succeeded are kept";
         }
     }
@@ -682,11 +697,16 @@ std::string Repl::workflows_command(const std::string& args) {
     if ( !a.empty()) {
         // Detail view for one run.
         int want = 0;
-        try { want = std::stoi(a); } catch ( ... ) { return "usage: /workflows [id|cancel <id>|retry <id>]"; }
+        try { want = std::stoi(a); } catch ( ... ) { return "usage: /workflows [id|cancel <id>|retry <id>|steer <id> <prompt>]"; }
         for ( const auto& r : runs ) {
             if ( r.id != want ) continue;
             std::string s = "workflow #" + std::to_string(r.id) + "  " + r.name +
                             "  [" + r.status + "]" + ( r.parallel ? "  (parallel)" : "" ) + "\n";
+            if ( !r.applied_steering.empty()) {
+                s += "\nsteering guidance applied:\n";
+                for ( const auto& st : r.applied_steering )
+                    s += "  • " + st + "\n";
+            }
             for ( size_t i = 0; i < r.steps.size(); ++i ) {
                 const auto& st = r.steps[i];
                 s += "\n" + step_glyph(st.status) + " step " + std::to_string(i + 1) +
@@ -711,7 +731,7 @@ std::string Repl::workflows_command(const std::string& args) {
              "  [" + r.status + "]" + ( r.parallel ? " (parallel)" : "" ) + "  " +
              std::to_string(done) + "/" + std::to_string(r.steps.size()) + " steps";
     }
-    s += "\n\nuse /workflows <id> for details, cancel <id> / retry <id> to manage";
+    s += "\n\nuse /workflows <id> for details, cancel <id> / retry <id> / steer <id> <prompt> to manage";
     return s;
 }
 
@@ -2608,6 +2628,10 @@ std::string Repl::handle_command(const std::string& line) {
         std::string trimmed_args = common::trim_ws(args);
         if ( trimmed_args.empty())
             return "usage: /steer! <prompt>  — interrupt active request and redirect immediately";
+        if ( trimmed_args.rfind("workflow ", 0) == 0 )
+            return handle_command("/workflows steer " + trimmed_args.substr(9));
+        if ( trimmed_args.rfind("wf ", 0) == 0 )
+            return handle_command("/workflows steer " + trimmed_args.substr(3));
         if ( agent::turn_active.load(std::memory_order_relaxed)) {
             push_live_update("/steer " + trimmed_args);
             agent::turn_steer_interrupt.store(true, std::memory_order_relaxed);
@@ -2624,8 +2648,13 @@ std::string Repl::handle_command(const std::string& line) {
             return "current steering guidance: " + cur + "\nsteering mode: " + _config.steering_mode +
                    "\n\nusage: /steer <prompt>   — steer active work at the next checkpoint, or send as a prompt\n"
                    "       /steer! <prompt>  — interrupt active request and redirect immediately\n"
+                   "       /steer workflow <id> <prompt> — steer an active background workflow\n"
                    "       /steer clear      — clear persistent steering guidance";
         }
+        if ( trimmed_args.rfind("workflow ", 0) == 0 )
+            return handle_command("/workflows steer " + trimmed_args.substr(9));
+        if ( trimmed_args.rfind("wf ", 0) == 0 )
+            return handle_command("/workflows steer " + trimmed_args.substr(3));
         if ( trimmed_args == "clear" || trimmed_args == "off" || trimmed_args == "reset" || trimmed_args == "none" ) {
             _config.steering.clear();
             _config.save_settings(_config.home_dir);

@@ -1794,6 +1794,43 @@ static void test_workflow_parallel_cancel_retry() {
         check(fired.load() && got == "done", "on_finish fired with final status");
         mgr.set_on_finish(nullptr);
     }
+
+    // Steer: running workflow step observes steer_abort and consumes guidance.
+    {
+        agent::WorkflowManager mgr;
+        std::atomic<bool> in_step{ false };
+        std::atomic<bool> saw_steer{ false };
+        std::string received_guidance;
+        int id = mgr.launch("steerme", { "step1" },
+            [&](const std::string&, std::atomic<bool>* ab,
+                agent::workflow_steering_fn take_steer, std::atomic<bool>* steer_ab) {
+                in_step.store(true);
+                for ( int i = 0; i < 200; ++i ) {
+                    if ( ab && ab->load()) return std::string("cancelled");
+                    if ( steer_ab && steer_ab->load()) {
+                        saw_steer.store(true);
+                        if ( take_steer ) {
+                            auto notes = take_steer();
+                            if ( !notes.empty()) received_guidance = notes[0];
+                        }
+                        steer_ab->store(false);
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+                return std::string("done_with_steering");
+            });
+        for ( int i = 0; i < 200 && !in_step.load(); ++i ) std::this_thread::sleep_for(5ms);
+        check(mgr.steer(id, "focus on auth bugs"), "steer accepts running workflow id");
+        while ( mgr.any_running()) std::this_thread::sleep_for(5ms);
+        check(saw_steer.load(), "step observed steer_abort signal");
+        check(received_guidance == "focus on auth bugs", "step received steering guidance");
+        auto runs = mgr.snapshot();
+        check(!runs.empty() && runs.back().applied_steering.size() == 1, "applied_steering recorded");
+        check(runs.back().applied_steering[0] == "focus on auth bugs", "applied_steering contains guidance");
+        check(!mgr.steer(id, "late guidance"), "steer refuses finished workflow id");
+        check(!mgr.steer(999, "unknown"), "steer refuses unknown workflow id");
+    }
 }
 
 static void test_provider_options_config() {
@@ -4231,6 +4268,27 @@ static void test_settings_commands_and_emergency_compact() {
     // Test /settings steer clear
     repl.handle_command("/settings steer clear");
     check(repl.config().steering.empty(), "/settings steer clear empties steering guidance");
+
+    // Test /workflows steer provider check
+    std::string wf_unsupported = repl.handle_command("/workflows steer");
+    check(wf_unsupported.find("only available with the claude provider") != std::string::npos, "/workflows steer checked provider");
+    std::string steer_wf_unsupported = repl.handle_command("/steer workflow 999 refocus");
+    check(steer_wf_unsupported.find("only available with the claude provider") != std::string::npos, "/steer workflow checked provider");
+
+    // Test /workflows steer error handling and /steer workflow routing with claude provider
+    agent::Config claude_cfg = cfg;
+    claude_cfg.provider = "claude";
+    agent::Repl claude_repl(claude_cfg);
+    std::string wf_steer_noargs = claude_repl.handle_command("/workflows steer");
+    check(wf_steer_noargs.find("usage:") != std::string::npos, "/workflows steer without args reports usage");
+    std::string wf_steer_unknown = claude_repl.handle_command("/workflows steer 999 refocus");
+    check(wf_steer_unknown.find("cannot steer workflow #999") != std::string::npos, "/workflows steer 999 unknown reports error");
+    std::string steer_wf_route = claude_repl.handle_command("/steer workflow 999 refocus");
+    check(steer_wf_route.find("cannot steer workflow #999") != std::string::npos, "/steer workflow 999 routes to workflows steer");
+    std::string steer_wf_alias = claude_repl.handle_command("/steer wf 999 refocus");
+    check(steer_wf_alias.find("cannot steer workflow #999") != std::string::npos, "/steer wf 999 routes to workflows steer");
+    std::string steer_bang_wf = claude_repl.handle_command("/steer! workflow 999 refocus");
+    check(steer_bang_wf.find("cannot steer workflow #999") != std::string::npos, "/steer! workflow 999 routes to workflows steer");
 
     // Test /settings output includes new fields
     std::string out = repl.handle_command("/settings");
