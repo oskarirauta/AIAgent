@@ -299,8 +299,15 @@ StreamChunk Codex::parse_stream(const std::string& chunk, std::string& buffer, b
                 _s_reasoning += delta;
             } else if ( type == "response.output_item.done" && e.contains("item")) {
                 JSON item = e["item"];
-                // Text was already accumulated via deltas; only capture calls.
-                if ( item.contains("type") && item["type"].to_string() == "function_call" ) capture_output_item(item);
+                if ( item.contains("type") && item["type"].to_string() == "function_call" ) {
+                    capture_output_item(item);
+                } else if ( _s_content.empty() ) {
+                    // Some Codex/ChatGPT streaming responses provide the final
+                    // message only as a completed output item, without earlier
+                    // output_text.delta events. Capture that item as a fallback;
+                    // if deltas were present, avoid duplicating the text.
+                    capture_output_item(item);
+                }
             } else if ( type == "response.completed" && e.contains("response")) {
                 JSON r = e["response"];
                 if ( r.contains("usage") && r["usage"] == JSON::TYPE::OBJECT ) {
