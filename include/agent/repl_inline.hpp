@@ -193,6 +193,7 @@ private:
                              const std::string& echo_label = ""); // run a slow command off-thread
     std::string budget_warning(); // one-shot warning text when the session nears its cost/token budget
     std::string disk_space_warning(); // one-shot warning when the data dir's disk is nearly full
+    std::string context_warning();    // warning when auto_compact is off and context approaches capacity
     void shell_command();             // /shell: hand the terminal to $SHELL, restore on exit
     void poll_worker();
     void finish_turn();
@@ -417,6 +418,10 @@ private:
     int _spin = 0;
     int _budget_notified = 0; // highest budget threshold already warned (0 / 80 / 100)
     int _disk_notified = 0;   // highest disk-space warning level already shown (0 / 1 / 2)
+    int _context_notified = 0; // highest context threshold warned when auto_compact is off (0 / 70 / 85)
+    std::string _pending_profile;
+    std::string _pending_tools_mode;
+    int _pending_plan_mode = -1; // -1 = none, 0 = off, 1 = on
     std::chrono::steady_clock::time_point _turn_start;
     std::atomic<int> _turn_tool_count{ 0 }; // tools run this turn (for the digest)
     bool _confirm_belled = false;           // a blocking-confirm bell already rang this turn

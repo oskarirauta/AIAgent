@@ -746,6 +746,8 @@ void Config::load(const std::string& path) {
         else if ( key == "prompt_cache" ) prompt_cache = parse_bool(value);
         else if ( key == "parallel_tools" ) parallel_tools = parse_bool(value);
         else if ( key == "tool_profile" || key == "profile" ) tool_profile = common::to_lower(trim(value));
+        else if ( key == "steering" ) steering = trim(value);
+        else if ( key == "steering_mode" ) steering_mode = common::to_lower(trim(value));
         else if ( key == "mcp_config" ) mcp_config = expand_tilde(value);
         else if ( key == "budget_usd" ) {
             try { budget_usd = std::stod(common::trim_ws(value)); }
@@ -933,6 +935,10 @@ Config::LastUsed Config::load_last_used(const std::string& home_dir) {
                 last.max_tokens = static_cast<size_t>(static_cast<long long>(s["max_tokens"]));
             if ( s.contains("tool_profile") && s["tool_profile"] == JSON::TYPE::STRING )
                 last.tool_profile = s["tool_profile"].to_string();
+            if ( s.contains("steering") && s["steering"] == JSON::TYPE::STRING )
+                last.steering = s["steering"].to_string();
+            if ( s.contains("steering_mode") && s["steering_mode"] == JSON::TYPE::STRING )
+                last.steering_mode = s["steering_mode"].to_string();
 
             // Migrate a settings block written before context_auto/auto_compact
             // defaulted to on. Applied here, on the loaded state itself, so that
@@ -989,7 +995,9 @@ static void write_state(const std::string& home_dir, const Config::LastUsed& las
             { "paste_preview", static_cast<long long>(last.paste_preview) },
             { "tool_call_limit", static_cast<long long>(last.tool_call_limit) },
             { "max_tokens", static_cast<long long>(last.max_tokens) },
-            { "tool_profile", last.tool_profile }
+            { "tool_profile", last.tool_profile },
+            { "steering", last.steering },
+            { "steering_mode", last.steering_mode }
         };
     }
 
@@ -1049,6 +1057,8 @@ void Config::save_settings(const std::string& home_dir) const {
     last.tool_call_limit = tool_call_limit;
     last.max_tokens = max_tokens;
     last.tool_profile = tool_profile;
+    last.steering = steering;
+    last.steering_mode = steering_mode;
     write_state(home_dir, last);
 }
 
@@ -1073,6 +1083,10 @@ void Config::apply_settings(const LastUsed& last) {
     }
     if ( !last.tool_profile.empty() )
         tool_profile = last.tool_profile;
+    if ( !last.steering.empty() )
+        steering = last.steering;
+    if ( !last.steering_mode.empty() )
+        steering_mode = last.steering_mode;
     bell = last.bell;
     advisor = last.advisor;
     if ( !last.advisor_model.empty())

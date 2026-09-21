@@ -843,6 +843,9 @@ std::string Repl::base_system_prompt() const {
                   "commands (those tools are disabled and will refuse). Wait for the user "
                   "to review and turn plan mode off before you make any changes.";
 
+    if ( !_config.steering.empty())
+        system += "\n\n## Steering guidance (from the user)\n\n" + _config.steering;
+
     system += "\n\n## Project search guidance\n\nWhen you are orienting yourself in a "
               "codebase, start with `project_map` once, then use `find_symbol` and "
               "`find_references` for definitions and uses, and `outline_file` for a "
@@ -2525,11 +2528,25 @@ std::string Repl::handle_command(const std::string& line) {
     }
 
     if ( cmd == "/steer" ) {
-        if ( args.empty())
-            return "usage: /steer <prompt>  — steer active work at the next checkpoint, or send as a prompt";
-        _conversation.add_user(args);
+        std::string trimmed_args = common::trim_ws(args);
+        if ( trimmed_args.empty()) {
+            std::string cur = _config.steering.empty() ? "(none)" : _config.steering;
+            return "current steering guidance: " + cur + "\nsteering mode: " + _config.steering_mode +
+                   "\n\nusage: /steer <prompt>  — steer active work at the next checkpoint, or send as a prompt\n"
+                   "       /steer clear     — clear persistent steering guidance";
+        }
+        if ( trimmed_args == "clear" || trimmed_args == "off" || trimmed_args == "reset" || trimmed_args == "none" ) {
+            _config.steering.clear();
+            _config.save_settings(_config.home_dir);
+            _conversation.set_system(base_system_prompt());
+            return "steering guidance cleared";
+        }
+        _config.steering = trimmed_args;
+        _config.save_settings(_config.home_dir);
+        _conversation.set_system(base_system_prompt());
+        _conversation.add_user("[Steering update from the user — adjust your plan and actions accordingly]\n" + trimmed_args);
         save_conversation();
-        return "noted — steering prompt added to context; will guide the model on the next turn";
+        return "noted — steering prompt set (" + _config.steering_mode + " mode); will guide the model on the next turn";
     }
 
     if ( cmd == "/provider" ) {
@@ -2748,8 +2765,24 @@ std::string Repl::handle_command(const std::string& line) {
             val = common::trim_ws(val);
             key = common::to_lower(key);
             if ( key == "model" ) return handle_command("/model " + val);
+            if ( key == "profile" || key == "tool_profile" ) return handle_command("/profile " + val);
+            if ( key == "plan" || key == "plan_mode" ) return handle_command("/plan " + val);
             if ( key == "tools" ) return handle_command("/tools " + val);
             if ( key == "strict" ) return handle_command("/strict " + val);
+            if ( key == "steer" || key == "steering" ) {
+                if ( val.empty() ) return handle_command("/steer");
+                return handle_command("/steer " + val);
+            }
+            if ( key == "steering_mode" ) {
+                std::string v = common::to_lower(val);
+                if ( v == "checkpoint" || v == "turn" || v == "next_turn" ) {
+                    _config.steering_mode = ( v == "checkpoint" ? "checkpoint" : "next_turn" );
+                    _config.save_settings(_config.home_dir);
+                    return "steering mode: " + _config.steering_mode +
+                           ( _config.steering_mode == "checkpoint" ? " (applied at tool boundaries)" : " (applied at turn boundaries)" );
+                }
+                return "usage: /settings steering_mode <checkpoint|next_turn>";
+            }
             if ( key == "thinking" || key == "effort" ) return handle_command("/thinking " + val);
             if ( key == "bell" ) return handle_command("/bell " + val);
             if ( key == "context" || key == "context_limit" ) {
@@ -2883,17 +2916,21 @@ std::string Repl::handle_command(const std::string& line) {
                 _config.auto_compact_max_tokens = m;
                 return "auto-compact max tokens: " + (m ? std::to_string(m) : "none (full window)");
             }
-            return "unknown setting: " + key + "  (model, tools, strict, thinking, thinking_stream, paste_preview, context, auto_compact, auto_compact_max, advisor, web_search, multiline; theme via /theme)";
+            return "unknown setting: " + key + "  (model, profile, plan, tools, strict, steering, steering_mode, thinking, thinking_stream, paste_preview, context, auto_compact, auto_compact_max, advisor, web_search, multiline; theme via /theme)";
         }
 
         std::string tools = !_config.tools_enabled ? "off"
                           : ( _config.insecure ? "insecure"
                           : ( _config.confirm_tools ? "confirm" : "auto" ));
         std::string s;
-        s += "provider:  " + _config.provider + "\n";
-        s += "model:     " + _config.model + "\n";
-        s += "tools:     " + tools + ( _config.strict ? " (strict)" : "" ) + "\n";
-        s += "thinking:  " + ( _config.thinking.empty() ? std::string("(provider default)") : _config.thinking ) +
+        s += "provider:      " + _config.provider + "\n";
+        s += "model:         " + _config.model + "\n";
+        s += "tools:         " + tools + ( _config.strict ? " (strict)" : "" ) + "\n";
+        s += "tool profile:  " + _registry.active_profile() + "\n";
+        s += "plan mode:     " + std::string(_config.plan_mode ? "on" : "off") + "\n";
+        s += "steering:      " + ( _config.steering.empty() ? "(none)" : _config.steering ) + "\n";
+        s += "steering mode: " + _config.steering_mode + "\n";
+        s += "thinking:      " + ( _config.thinking.empty() ? std::string("(provider default)") : _config.thinking ) +
              "  (stream: " + ( !_config.thinking_stream ? "off" : ( _config.thinking_collapse ? "collapse" : "on" )) + ")\n";
         std::string ctx;
         if ( _config.context_auto ) {
@@ -2902,20 +2939,20 @@ std::string Repl::handle_command(const std::string& line) {
         } else {
             ctx = _config.context_limit == 0 ? "unlimited" : std::to_string(_config.context_limit) + " tokens";
         }
-        s += "context:   " + ctx + "\n";
-        s += "auto_compact: " + std::string( _config.auto_compact ? "on" : "off" ) +
+        s += "context:       " + ctx + "\n";
+        s += "auto_compact:  " + std::string( _config.auto_compact ? "on" : "off" ) +
              ( _config.auto_compact ? "  (at " + std::to_string(_config.auto_compact_pct) + "%" +
                ( _config.auto_compact_max_tokens > 0 ? ", max " + std::to_string(_config.auto_compact_max_tokens) + " tokens" : "" ) + ")" : "" ) + "\n";
         if ( provider_supports("advisor"))
-            s += "advisor:   " + std::string( _config.advisor ? "on" : "off" ) +
+            s += "advisor:       " + std::string( _config.advisor ? "on" : "off" ) +
                  "  (model: " + _config.advisor_model + ")\n";
-        s += "multiline: " + std::string( _config.multiline ? "on" : "off" ) + "\n";
-        s += "web_search: " + std::string( _config.web_search ? "on" : "off" ) + "\n";
-        s += "preview:   " + ( _config.paste_preview == 0
+        s += "multiline:     " + std::string( _config.multiline ? "on" : "off" ) + "\n";
+        s += "web_search:    " + std::string( _config.web_search ? "on" : "off" ) + "\n";
+        s += "preview:       " + ( _config.paste_preview == 0
                  ? std::string("all lines")
                  : "first " + std::to_string(_config.paste_preview) + " lines" ) + "\n";
-        s += "home:      " + _config.home_dir + "\n";
-        s += "tokens:    ctx " + std::to_string(_stats.context_tokens.load()) +
+        s += "home:          " + _config.home_dir + "\n";
+        s += "tokens:        ctx " + std::to_string(_stats.context_tokens.load()) +
              ", session " + std::to_string(_stats.session_total());
         return s;
     }

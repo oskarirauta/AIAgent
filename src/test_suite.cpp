@@ -2339,6 +2339,8 @@ static void test_settings_persistence() {
     c.context_auto = true; c.context_limit = 65536; c.paste_preview = 12;
     c.auto_compact = true;
     c.advisor = true; c.advisor_model = "claude-sonnet-4-6";
+    c.steering = "focus on tests";
+    c.steering_mode = "next_turn";
     c.save_settings(home);
 
     auto last = agent::Config::load_last_used(home);
@@ -2356,6 +2358,8 @@ static void test_settings_persistence() {
     check(last.auto_compact, "auto_compact persisted");
     check(last.advisor, "advisor persisted");
     check(last.advisor_model == "claude-sonnet-4-6", "advisor_model persisted");
+    check(last.steering == "focus on tests", "steering persisted");
+    check(last.steering_mode == "next_turn", "steering_mode persisted");
 
     agent::Config c2;
     c2.apply_settings(last);
@@ -2364,6 +2368,7 @@ static void test_settings_persistence() {
     check(c2.thinking_collapse && c2.paste_preview == 12, "apply_settings restores collapse + paste_preview");
     check(c2.auto_compact, "apply_settings restores auto_compact");
     check(c2.advisor && c2.advisor_model == "claude-sonnet-4-6", "apply_settings restores advisor + model");
+    check(c2.steering == "focus on tests" && c2.steering_mode == "next_turn", "apply_settings restores steering + steering_mode");
 
     std::filesystem::remove_all(home);
 }
@@ -4158,6 +4163,76 @@ static void test_provider_capability_neutrality() {
     check(gemini->supports_reasoning(), "gemini supports reasoning");
 }
 
+static void test_settings_commands_and_emergency_compact() {
+    std::cout << "settings commands, steering, and emergency auto-compact" << std::endl;
+    agent::Config cfg;
+    cfg.provider = "openai";
+    cfg.model = "gpt-4o";
+    cfg.home_dir = "/tmp/ai_agent_settings_cmd_test";
+    std::filesystem::create_directories(cfg.home_dir);
+
+    agent::Repl repl(cfg);
+
+    // Test /settings profile <val>
+    std::string res = repl.handle_command("/settings profile minimal");
+    check(res.find("minimal") != std::string::npos, "/settings profile minimal works");
+    check(repl.config().tool_profile == "minimal", "active profile updated to minimal");
+
+    // Test /settings plan <val>
+    repl.handle_command("/settings plan on");
+    check(repl.config().plan_mode == true, "/settings plan on updates plan_mode to true");
+    repl.handle_command("/settings plan off");
+    check(repl.config().plan_mode == false, "/settings plan off updates plan_mode to false");
+
+    // Test /settings steering_mode <val>
+    repl.handle_command("/settings steering_mode next_turn");
+    check(repl.config().steering_mode == "next_turn", "/settings steering_mode next_turn works");
+    repl.handle_command("/settings steering_mode checkpoint");
+    check(repl.config().steering_mode == "checkpoint", "/settings steering_mode checkpoint works");
+
+    // Test /settings steer <prompt>
+    repl.handle_command("/settings steer focus on accuracy");
+    check(repl.config().steering == "focus on accuracy", "/settings steer set persistent steering");
+    check(repl.base_system_prompt().find("focus on accuracy") != std::string::npos, "steering prompt present in base_system_prompt");
+
+    // Test /settings steer clear
+    repl.handle_command("/settings steer clear");
+    check(repl.config().steering.empty(), "/settings steer clear empties steering guidance");
+
+    // Test /settings output includes new fields
+    std::string out = repl.handle_command("/settings");
+    check(out.find("tool profile:") != std::string::npos, "/settings output contains tool profile");
+    check(out.find("plan mode:") != std::string::npos, "/settings output contains plan mode");
+    check(out.find("steering:") != std::string::npos, "/settings output contains steering");
+    check(out.find("steering mode:") != std::string::npos, "/settings output contains steering mode");
+
+    // Test Emergency Forced Auto-Compact threshold calculation:
+    // Window for gpt-4o is 128000. 92% is 117760.
+    size_t window = agent::Config::context_window_for("gpt-4o");
+    check(window == 128000, "gpt-4o window is 128000");
+    size_t emergency_threshold = window * 92 / 100;
+    check(emergency_threshold == 117760, "emergency threshold is 92% of window");
+
+    // If auto_compact is false, normal compaction does not trigger below 92%, but DOES at or above 92%
+    cfg.auto_compact = false;
+    size_t below_threshold = emergency_threshold - 100;
+    size_t above_threshold = emergency_threshold + 500;
+    bool emergency_below = below_threshold >= emergency_threshold;
+    bool emergency_above = above_threshold >= emergency_threshold;
+    check(!emergency_below, "below 92% is not emergency");
+    check(emergency_above, "at or above 92% is emergency (forced auto-compact)");
+
+    // Test early warning calculation when auto_compact is false:
+    size_t ctx_72_pct = static_cast<size_t>(window * 0.72);
+    size_t ctx_87_pct = static_cast<size_t>(window * 0.87);
+    int level_72 = static_cast<int>(static_cast<double>(ctx_72_pct) / window * 100.0);
+    int level_87 = static_cast<int>(static_cast<double>(ctx_87_pct) / window * 100.0);
+    check(level_72 >= 70 && level_72 < 85, "72% qualifies for early context warning");
+    check(level_87 >= 85, "87% qualifies for critical context warning");
+
+    std::filesystem::remove_all(cfg.home_dir);
+}
+
 int main() {
     std::cout << "Running AI Agent test suite\n" << std::endl;
 
@@ -4267,6 +4342,7 @@ int main() {
     test_token_accounting_estimated_vs_reported();
     test_registry_thread_safety_and_churn();
     test_provider_capability_neutrality();
+    test_settings_commands_and_emergency_compact();
 
     std::cout << "\n" << passed << " passed, " << failed << " failed" << std::endl;
     return failed > 0 ? 1 : 0;

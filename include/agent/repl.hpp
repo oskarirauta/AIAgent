@@ -39,6 +39,14 @@ public:
 
     static std::string format_turn_usage(const TurnUsage& tu);
 
+    // Handle a slash command (e.g. /settings, /model). Returns text to display.
+    std::string handle_command(const std::string& line);
+
+    // Rebuild the system prompt (config + current date + memories).
+    std::string base_system_prompt() const;
+
+    const Config& config() const { return _config; }
+
 private:
     void run_tty();
     void run_plain();
@@ -56,15 +64,9 @@ private:
     void release_session_lock();
     std::string _lock_path;      // owned lock file ("" = none)
 
-    // Handle a slash command (e.g. /settings, /model). Returns text to display.
-    std::string handle_command(const std::string& line);
-
     // Format a background job (status + recent output), optionally stopping it.
     // Shared by the check_job tool and the /jobs command.
     std::string describe_job(int id, size_t tail_lines, bool do_stop);
-
-    // Rebuild the system prompt (config + current date + memories).
-    std::string base_system_prompt() const;
 
     // Pinned context: user-flagged notes kept verbatim in the system prompt, so
     // they survive /compact and auto-compact (which rebuild the system prompt).

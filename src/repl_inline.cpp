@@ -67,7 +67,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
         // updates local state (last value wins: /effort medium then /effort max
         // leaves only max, a natural dedup), applied before the next prompt. They
         // don't change the running turn's tool gating or rebuild the conversation.
-        "/effort", "/thinking", "/stream", "/model", "/profile", "/tools",
+        "/effort", "/thinking", "/stream", "/model",
         "/strict", "/advisor", "/workflow", "/autoresume", "/bell"
     };
     return immediate.count(cmd) > 0;
@@ -1913,17 +1913,60 @@ void InlineRepl::on_enter() {
         // starts new model work queued so it runs after the current turn instead
         // of interleaving with streaming output.
         if ( _turn_running && !command_runs_immediately(trimmed)) {
+            if ( trimmed == "/profile" || trimmed.rfind("/profile ", 0) == 0 ) {
+                std::string arg = trimmed.size() > 8 ? common::trim_ws(trimmed.substr(8)) : "";
+                if ( arg.empty()) {
+                    notify_quiet("tool profile picker unavailable mid-turn; use /profile <name> or wait for turn to finish");
+                } else {
+                    _pending_profile = arg;
+                    notify_quiet("● tool profile set to '" + arg + "' (pending for next turn)");
+                }
+                drain_notices();
+                tcflush(STDIN_FILENO, TCIFLUSH);
+                draw_live();
+                return;
+            }
+            if ( trimmed == "/tools" || trimmed.rfind("/tools ", 0) == 0 ) {
+                std::string arg = trimmed.size() > 6 ? common::trim_ws(trimmed.substr(6)) : "";
+                if ( arg.empty()) {
+                    notify_quiet("tool mode picker unavailable mid-turn; use /tools <auto|confirm|off|insecure> or wait for turn to finish");
+                } else {
+                    _pending_tools_mode = arg;
+                    notify_quiet("● tool confirmation mode set to '" + arg + "' (pending for next turn)");
+                }
+                drain_notices();
+                tcflush(STDIN_FILENO, TCIFLUSH);
+                draw_live();
+                return;
+            }
+            if ( trimmed == "/plan" || trimmed.rfind("/plan ", 0) == 0 ) {
+                std::string arg = trimmed.size() > 5 ? common::trim_ws(trimmed.substr(5)) : "";
+                if ( arg.empty()) {
+                    _pending_plan_mode = _config.plan_mode ? 0 : 1;
+                } else {
+                    std::string a = common::to_lower(arg);
+                    _pending_plan_mode = ( a == "on" || a == "1" || a == "true" ) ? 1 : 0;
+                }
+                notify_quiet(std::string("● plan mode ") + ( _pending_plan_mode == 1 ? "enabled" : "disabled" ) + " (pending for next turn)");
+                drain_notices();
+                tcflush(STDIN_FILENO, TCIFLUSH);
+                draw_live();
+                return;
+            }
             bool is_steer = trimmed.rfind("/steer", 0) == 0;
             PendingKind kind = ( is_steer || trimmed.rfind("/btw", 0) == 0 || trimmed.rfind("/note", 0) == 0 )
                 ? PendingKind::LiveNote : ( trimmed[0] == '!' ? PendingKind::Shell : PendingKind::Command );
             if ( kind == PendingKind::LiveNote ) {
                 std::lock_guard<std::mutex> lk(_mx);
                 _live_updates.push_back(trimmed);
-                _notices.push({ is_steer ? "steering update queued for the next checkpoint"
-                                         : "btw update queued for the next checkpoint", false });
+                _notices.push({ is_steer ? "● steering update queued for the next checkpoint"
+                                         : "● btw update queued for the next checkpoint", false });
             } else {
                 enqueue_pending(trimmed, kind);
+                std::string label = ( kind == PendingKind::Shell ? "● shell command queued for next turn: " : "● command queued for next turn: " );
+                notify_quiet(label + trimmed);
             }
+            drain_notices();
             tcflush(STDIN_FILENO, TCIFLUSH);
             draw_live();
             return;
@@ -1956,6 +1999,8 @@ void InlineRepl::on_enter() {
     if ( _turn_running ) {
         // A turn is in flight — queue this one to auto-send when it finishes.
         enqueue_pending(line, PendingKind::Message);
+        notify_quiet("● message queued for next turn");
+        drain_notices();
         { std::lock_guard<std::mutex> lk(_mx); _auto_since_user = 0; } // real user input resets the auto-resume guard
         _input.clear();
         _cursor = 0;
@@ -2261,6 +2306,28 @@ void InlineRepl::finish_turn() {
     if ( !dwarn.empty())
         wr("\n" + _theme.warn + "⚠ " + dwarn + Theme::reset + "\n");
 
+    // Warn when auto_compact is off and context approaches capacity.
+    std::string cwarn = context_warning();
+    if ( !cwarn.empty())
+        wr("\n" + _theme.warn + "⚠ " + cwarn + Theme::reset + "\n");
+
+    // Apply pending settings staged mid-turn before the next turn runs
+    if ( !_pending_profile.empty()) {
+        std::string p = _pending_profile;
+        _pending_profile.clear();
+        if ( _command_cb ) _command_cb("/profile " + p);
+    }
+    if ( !_pending_tools_mode.empty()) {
+        std::string m = _pending_tools_mode;
+        _pending_tools_mode.clear();
+        if ( _command_cb ) _command_cb("/tools " + m);
+    }
+    if ( _pending_plan_mode != -1 ) {
+        int pl = _pending_plan_mode;
+        _pending_plan_mode = -1;
+        if ( _command_cb ) _command_cb(std::string("/plan ") + ( pl == 1 ? "on" : "off" ));
+    }
+
     // If the context is now near its budget, summarise it before anything else
     // (so queued messages run against the smaller history). The async compaction
     // drains the pending queue itself when it finishes.
@@ -2337,13 +2404,52 @@ std::string InlineRepl::budget_warning() {
            " (" + std::to_string(static_cast<int>(frac * 100)) + "%)";
 }
 
-bool InlineRepl::maybe_auto_compact() {
-    if ( !_config.auto_compact )
-        return false;
+std::string InlineRepl::context_warning() {
+    if ( _config.auto_compact ) {
+        _context_notified = 0;
+        return "";
+    }
     size_t budget = _config.compaction_budget();
-    if ( budget == 0 ) {
+    size_t window = agent::Config::context_window_for(_config.model);
+    size_t ceiling = ( window > 0 ) ? window : budget;
+    if ( ceiling == 0 ) {
         if ( _config.auto_compact_max_tokens > 0 )
-            budget = _config.auto_compact_max_tokens;
+            ceiling = _config.auto_compact_max_tokens;
+        else
+            return ""; // unknown model window
+    }
+    long ctx = _stats.context_tokens.load(std::memory_order_relaxed);
+    if ( ctx <= 0 )
+        ctx = static_cast<long>(_conversation.estimate_tokens(_config.provider));
+    if ( ctx <= 0 )
+        return "";
+
+    double frac = static_cast<double>(ctx) / static_cast<double>(ceiling);
+    int pct = static_cast<int>(frac * 100.0);
+
+    if ( pct < 60 ) {
+        _context_notified = 0; // recovered/compacted — re-arm
+        return "";
+    }
+
+    int level = pct >= 85 ? 85 : ( pct >= 70 ? 70 : 0 );
+    if ( level <= _context_notified )
+        return "";
+    _context_notified = level;
+
+    std::string tok_str = std::to_string(ctx) + " / " + std::to_string(ceiling) + " tokens (" + std::to_string(pct) + "%)";
+    if ( level >= 85 )
+        return "context capacity critical: " + tok_str + " — auto-compact is disabled; /compact is urgently needed before limit is reached";
+    return "approaching context capacity: " + tok_str + " — auto-compact is disabled; consider running /compact soon";
+}
+
+bool InlineRepl::maybe_auto_compact() {
+    size_t budget = _config.compaction_budget();
+    size_t window = agent::Config::context_window_for(_config.model);
+    size_t ceiling = ( window > 0 ) ? window : budget;
+    if ( ceiling == 0 ) {
+        if ( _config.auto_compact_max_tokens > 0 )
+            ceiling = _config.auto_compact_max_tokens;
         else
             return false; // unknown model window — nothing reliable to measure against
     }
@@ -2352,13 +2458,27 @@ bool InlineRepl::maybe_auto_compact() {
         ctx = static_cast<long>(_conversation.estimate_tokens(_config.provider));
     if ( ctx <= 0 )
         return false; // no usage reported yet
+
+    // Emergency forced auto-compact threshold: >= 92% of model window/ceiling.
+    // Triggers REGARDLESS of _config.auto_compact to prevent unrecoverable context overflow.
+    size_t emergency_target = ceiling * 92 / 100;
+    bool emergency = static_cast<size_t>(ctx) >= emergency_target;
+
+    if ( !emergency && !_config.auto_compact )
+        return false;
+
+    if ( budget == 0 )
+        budget = ceiling;
+
     size_t pct = ( _config.auto_compact_pct >= 10 && _config.auto_compact_pct <= 100 )
                ? _config.auto_compact_pct : 80;
     size_t target = budget * pct / 100;
     if ( _config.auto_compact_max_tokens > 0 && target > _config.auto_compact_max_tokens )
         target = _config.auto_compact_max_tokens;
-    if ( static_cast<size_t>(ctx) < target )
+
+    if ( !emergency && static_cast<size_t>(ctx) < target )
         return false;
+
     // Need at least a couple of exchanges to be worth summarising; compact_history
     // itself declines a near-empty history, but avoid the spinner flash for it.
     int non_system = 0;
@@ -2366,6 +2486,13 @@ bool InlineRepl::maybe_auto_compact() {
         if ( m.role != Role::SYSTEM ) ++non_system;
     if ( non_system < 4 )
         return false;
+
+    if ( emergency ) {
+        int used = static_cast<int>(static_cast<long long>(ctx) * 100 / static_cast<long long>(ceiling));
+        start_async_command("/compact", "emergency auto-compacting",
+                            "emergency auto-compact (context at " + std::to_string(used) + "% of model limit; compact forced to prevent overflow)");
+        return true;
+    }
 
     int used = static_cast<int>(static_cast<long long>(ctx) * 100 / static_cast<long long>(target));
     start_async_command("/compact", "auto-compacting",
@@ -3332,6 +3459,17 @@ void InlineRepl::open_settings_menu() {
     add("tools", "tools", first_word(cur["tools"]), TOOLS,
         "confirm: ask before edits/commands · auto: run freely · insecure: never ask",
         { "confirm", "auto", "insecure" });
+    add("profile", "profile", cur.count("tool profile") ? cur["tool profile"] : ( _config.tool_profile.empty() ? "code" : _config.tool_profile ), TOOLS,
+        "active tool profile: code (default), full, research, review, minimal",
+        { "code", "full", "research", "review", "minimal" });
+    add("plan", "plan mode", _config.plan_mode ? "on" : "off", TOOLS,
+        "read-only mode: inspect and propose plans without mutating files or running commands",
+        { "off", "on" });
+    add("steering_mode", "steering mode", _config.steering_mode.empty() ? "checkpoint" : _config.steering_mode, TOOLS,
+        "how steering updates are applied: checkpoint (at tool boundaries) · next_turn (after turn)",
+        { "checkpoint", "next_turn" });
+    add("steer", "steering", _config.steering.empty() ? "(none)" : _config.steering, TOOLS,
+        "persistent steering guidance for the model (Enter to edit, or /steer clear to reset)");
     add("strict", "strict",
         cur["tools"].find("(strict)") != std::string::npos ? "on" : "off", TOOLS,
         "in confirm mode, also confirm safe read-only shell commands", { "off", "on" });
@@ -3966,7 +4104,10 @@ void InlineRepl::apply_settings_edit() {
     SettingRow& row = _settings_rows[_settings_selection];
     std::string val = common::trim_ws(_settings_edit_buf);
     _settings_editing = false;
-    if ( !val.empty()) {
+    if ( row.key == "steer" && val.empty()) {
+        if ( _command_cb ) _command_cb("/settings steer clear");
+        row.value = "(none)";
+    } else if ( !val.empty()) {
         if ( _command_cb )
             _command_cb("/settings " + row.key + " " + val);
         row.value = val;
