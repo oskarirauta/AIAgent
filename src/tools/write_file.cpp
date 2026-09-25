@@ -62,7 +62,7 @@ std::string WriteFile::execute(const JSON& args) {
     }
 
     if ( _tracker )
-        _tracker->note(path); // stamp the new version so the next write compares to it
+        _tracker->note_content(path, content); // stamp exactly what this session wrote
     return std::string("ok: wrote ") + std::to_string(content.size()) + " bytes";
 }
 

@@ -17,8 +17,9 @@ public:
     std::string description() const override {
         return "Make a targeted edit to an existing file by replacing an exact snippet. "
                "Provide `old_string` (the exact text to replace, with enough surrounding "
-               "context to be unique) and `new_string`. `old_string` must match exactly, "
-               "including whitespace and indentation, and appear exactly once unless "
+               "context to be unique) and `new_string`. `old_string` should match exactly; "
+               "for multi-line snippets, simple indentation/blank-line whitespace mismatches "
+               "are recovered only when the normalized match is unique. It must appear exactly once unless "
                "`replace_all` is true. Prefer this over write_file for edits. The file must "
                "already exist (use write_file to create a new one). To make several changes "
                "at once, pass an `edits` array — they apply in order, atomically (if any fails "

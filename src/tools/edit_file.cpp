@@ -142,6 +142,58 @@ std::string near_miss_hint(const std::string& content, const std::string& old_s)
     return hint;
 }
 
+struct WindowHit {
+    size_t start = 0;
+    size_t len = 0;
+};
+
+std::vector<WindowHit> whitespace_line_hits(const std::string& content, const std::string& old_s) {
+    // Conservative auto-recovery for the common failure mode: the model copied a
+    // multi-line snippet with different indentation/blank-line whitespace. Only
+    // line-oriented multi-line snippets are accepted; single-line fuzzy edits are
+    // too easy to apply to the wrong substring.
+    if ( old_s.find('\n') == std::string::npos )
+        return {};
+
+    std::vector<std::string> want_lines;
+    {
+        std::istringstream is(old_s);
+        std::string l;
+        while ( std::getline(is, l))
+            want_lines.push_back(l);
+    }
+    if ( want_lines.size() < 2 )
+        return {};
+
+    std::vector<size_t> starts;
+    starts.push_back(0);
+    for ( size_t i = 0; i < content.size(); ++i )
+        if ( content[i] == '\n' && i + 1 < content.size())
+            starts.push_back(i + 1);
+    if ( starts.size() < want_lines.size())
+        return {};
+
+    auto line_end = [&](size_t line) {
+        size_t e = content.find('\n', starts[line]);
+        return e == std::string::npos ? content.size() : e;
+    };
+
+    std::string want_sq = squash_ws(old_s);
+    bool wants_trailing_nl = !old_s.empty() && old_s.back() == '\n';
+    std::vector<WindowHit> hits;
+    size_t n = want_lines.size();
+    for ( size_t at = 0; at + n <= starts.size(); ++at ) {
+        size_t s = starts[at];
+        size_t e = line_end(at + n - 1);
+        if ( wants_trailing_nl && e < content.size() && content[e] == '\n' )
+            ++e;
+        std::string cand = content.substr(s, e - s);
+        if ( squash_ws(cand) == want_sq )
+            hits.push_back({ s, e - s });
+    }
+    return hits;
+}
+
 // Apply one old->new replacement to `content` (sequential — later edits see the
 // result of earlier ones). Enforces a unique match unless replace_all.
 EditResult apply_one(const std::string& content, const std::string& old_s,
@@ -181,6 +233,26 @@ EditResult apply_one(const std::string& content, const std::string& old_s,
             result += content.substr(rawpos);
             return { true, "", result, reps, first_hit == std::string::npos ? 0 : first_hit, new_s.size() };
         }
+
+        auto ws_hits = whitespace_line_hits(content, old_s);
+        if ( ws_hits.size() > 1 && !replace_all )
+            return { false, "old_string whitespace-normalized match appears " + std::to_string(ws_hits.size()) +
+                            " times; add surrounding context to make it unique, or set replace_all=true", {}, 0 };
+        if ( !ws_hits.empty()) {
+            std::string result;
+            size_t rawpos = 0, first_hit = std::string::npos, reps = 0;
+            for ( const auto& h : ws_hits ) {
+                result += content.substr(rawpos, h.start - rawpos);
+                if ( first_hit == std::string::npos ) first_hit = result.size();
+                result += new_s;
+                rawpos = h.start + h.len;
+                ++reps;
+                if ( !replace_all ) break;
+            }
+            result += content.substr(rawpos);
+            return { true, "", result, reps, first_hit == std::string::npos ? 0 : first_hit, new_s.size() };
+        }
+
         std::string err = "old_string not found (it must match exactly, including whitespace)";
         std::string hint = near_miss_hint(content, old_s);
         if ( !hint.empty())
@@ -353,7 +425,7 @@ std::string EditFile::execute(const JSON& args) {
     }
 
     if ( _tracker )
-        _tracker->note(path); // stamp the edited version for the next lost-update check
+        _tracker->note_content(path, result); // stamp exactly what this session wrote
 
     std::string summary = edit_count > 1
         ? "ok: edited " + path + " (" + std::to_string(edit_count) + " edits, " +

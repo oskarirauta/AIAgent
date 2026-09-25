@@ -3140,11 +3140,30 @@ static void test_edit_file() {
     check(atom.find("edit #2") != std::string::npos && atom.find("left unchanged") != std::string::npos, "multi-edit reports which edit failed");
     check(read() == "keep me\n", "a failed multi-edit leaves the file unchanged (atomic)");
 
-    // Near-miss diagnosis: a whitespace mismatch points at the real region.
+    // Whitespace-tolerant recovery: a unique multi-line snippet with different
+    // indentation can be applied directly, avoiding a read_file -> retry loop.
+    write("int main() {\n    do_thing(a, b);\n    return 0;\n}\n");
+    std::string ws = ef.execute(JSON::Object{
+        { "path", path },
+        { "old_string", "int main() {\n  do_thing(a, b);\n  return 0;\n}" }, // 2-space indent vs 4
+        { "new_string", "int main() {\n    do_other(a, b);\n    return 0;\n}" } });
+    check(ws.rfind("ok:", 0) == 0, "unique multi-line whitespace mismatch is recovered");
+    check(read() == "int main() {\n    do_other(a, b);\n    return 0;\n}\n", "whitespace-recovered edit applied to the on-disk region");
+
+    // Ambiguous whitespace-normalised matches are still refused.
+    write("if (x) {\n    foo();\n}\nif (x) {\n        foo();\n}\n");
+    std::string wamb = ef.execute(JSON::Object{
+        { "path", path },
+        { "old_string", "if (x) {\n  foo();\n}" },
+        { "new_string", "Z" } });
+    check(wamb.find("whitespace-normalized match appears") != std::string::npos,
+          "ambiguous whitespace recovery does not silently edit");
+
+    // Near-miss diagnosis: unrelated text still points at the real region when close enough.
     write("int main() {\n    do_thing(a, b);\n    return 0;\n}\n");
     std::string miss = ef.execute(JSON::Object{
         { "path", path },
-        { "old_string", "int main() {\n  do_thing(a, b);\n  return 0;\n}" }, // 2-space indent vs 4
+        { "old_string", "int main() {\n    do_thang(a, b);\n    return 0;\n}" },
         { "new_string", "X" } });
     check(miss.find("closest on-disk region is lines 1-4") != std::string::npos,
           "near-miss reports the region's line span");
@@ -3977,6 +3996,24 @@ static void test_stale_read_guard() {
     reg.execute("read_file", JSON::Object{ { "path", path } });
     check(reg.execute("write_file", JSON::Object{ { "path", path }, { "content", "ok now" } }).rfind("ok:", 0) == 0,
           "write succeeds after a fresh read");
+
+    // Repeated session-owned edits to the same file should not trip the stale guard.
+    // The tracker records the exact content written by write_file/edit_file, so the
+    // next edit is based on the current session version without forcing a re-read.
+    reg.execute("read_file", JSON::Object{ { "path", path } });
+    check(reg.execute("edit_file", JSON::Object{ { "path", path }, { "old_string", "ok now" }, { "new_string", "first edit" } }).rfind("ok:", 0) == 0,
+          "first session edit succeeds");
+    check(reg.execute("edit_file", JSON::Object{ { "path", path }, { "old_string", "first edit" }, { "new_string", "second edit" } }).rfind("ok:", 0) == 0,
+          "second session edit succeeds without re-read");
+
+    // If only metadata/mtime changes but the content remains exactly what this
+    // session wrote, tolerate it. This avoids false positives from atomic renames,
+    // coarse timestamp resolution, or local filesystem noise.
+    std::error_code tec;
+    auto now = std::filesystem::file_time_type::clock::now();
+    std::filesystem::last_write_time(path, now + std::chrono::seconds(2), tec);
+    check(reg.execute("edit_file", JSON::Object{ { "path", path }, { "old_string", "second edit" }, { "new_string", "third edit" } }).rfind("ok:", 0) == 0,
+          "mtime-only change after session edit is tolerated");
     std::filesystem::remove(path);
     std::filesystem::remove(neww);
 }
