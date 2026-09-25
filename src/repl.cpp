@@ -2118,9 +2118,10 @@ std::string Repl::process_turn(const std::string& prompt, std::function<void(con
                                    ( hint.empty() ? "" : " " + hint ) +
                                    ( rhint.empty() ? "" : " · " + rhint ) + " · " + dur;
                 if ( results[i].rfind("error:", 0) == 0 ) {
-                    std::string err = results[i].substr(0, 80);
+                    std::string err = results[i].substr(0, 96);
                     size_t nl = err.find('\n');
                     if ( nl != std::string::npos ) err.resize(nl);
+                    err = common::trim_ws(err);
                     line += " · " + err;
                 }
                 _tool_notice_cb(line);
@@ -2909,9 +2910,9 @@ std::string Repl::handle_command(const std::string& line) {
             val = common::trim_ws(val);
             key = common::to_lower(key);
             if ( key == "model" ) return handle_command("/model " + val);
-            if ( key == "profile" || key == "tool_profile" ) return handle_command("/profile " + val);
             if ( key == "plan" || key == "plan_mode" ) return handle_command("/plan " + val);
             if ( key == "tools" ) return handle_command("/tools " + val);
+            if ( key == "profile" || key == "tool_profile" ) return handle_command("/profile " + val);
             if ( key == "strict" ) return handle_command("/strict " + val);
             if ( key == "steer" || key == "steering" ) {
                 if ( val.empty() ) return handle_command("/steer");

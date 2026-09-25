@@ -68,6 +68,7 @@ static bool command_runs_immediately(const std::string& trimmed) {
         // leaves only max, a natural dedup), applied before the next prompt. They
         // don't change the running turn's tool gating or rebuild the conversation.
         "/effort", "/thinking", "/stream", "/model",
+        "/profile", "/tools", "/plan",
         "/strict", "/advisor", "/workflow", "/autoresume", "/bell"
     };
     return immediate.count(cmd) > 0;
@@ -154,6 +155,22 @@ static std::vector<std::string> word_wrap(const std::string& line, int width) {
         cur_w += ww;
     }
     out.push_back(cur);
+    return out;
+}
+
+static std::string clip_cells_ellipsis(const std::string& s, int width) {
+    if ( width <= 0 )
+        return "";
+    auto cells = split_cells(s);
+    if ( static_cast<int>(cells.size()) <= width )
+        return s;
+    if ( width <= 3 )
+        return std::string(static_cast<size_t>(width), '.');
+    std::string out;
+    int keep = width - 3;
+    for ( int i = 0; i < keep; ++i )
+        out += cells[static_cast<size_t>(i)];
+    out += "...";
     return out;
 }
 
@@ -1149,7 +1166,9 @@ void InlineRepl::drain_notices() {
                     wr("\n");
                 }
             }
-            wr(_theme.dim + text + Theme::reset + "\r\n");
+            int width = term_cols() - 2;
+            if ( width < 8 ) width = 8;
+            wr(_theme.dim + clip_cells_ellipsis(text, width) + Theme::reset + "\r\n");
             _last_output_was_notice = true;
             _last_output_was_steer = false;
         }
@@ -1385,16 +1404,8 @@ void InlineRepl::draw_live() {
     // the last column blank and dimmed below.
     std::string status = status_line();
     bool status_prestyled = _turn_running;
-    if ( !status_prestyled ) {
-        std::vector<std::string> scells = split_cells(status);
-        int limit = cols - 1;
-        if ( limit > 0 && static_cast<int>(scells.size()) > limit ) {
-            std::string clipped;
-            for ( int i = 0; i < limit; ++i )
-                clipped += scells[i];
-            status = clipped;
-        }
-    }
+    if ( !status_prestyled )
+        status = clip_cells_ellipsis(status, cols - 1);
 
     std::string sep;
     for ( int i = 0; i < cols; ++i )
@@ -3645,7 +3656,7 @@ void InlineRepl::open_settings_menu() {
     add("tools", "tools", first_word(cur["tools"]), TOOLS,
         "confirm: ask before edits/commands · auto: run freely · insecure: never ask",
         { "confirm", "auto", "insecure" });
-    add("profile", "profile", cur.count("tool profile") ? cur["tool profile"] : ( _config.tool_profile.empty() ? "code" : _config.tool_profile ), TOOLS,
+    add("profile", "profile", cur.count("tool profile") ? cur["tool profile"] : ( cur.count("profile") ? cur["profile"] : ( _config.tool_profile.empty() ? "code" : _config.tool_profile ) ), TOOLS,
         "active tool profile: code (default), full, research, review, minimal",
         { "code", "full", "research", "review", "minimal" });
     add("plan", "plan mode", _config.plan_mode ? "on" : "off", TOOLS,
